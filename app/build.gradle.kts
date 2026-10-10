@@ -13,19 +13,13 @@ android {
         applicationId = "me.rerere.awara"
         minSdk = 26
         targetSdk = 33
-        versionCode = 9
-        versionName = "1.0.8"
+        // 版本元数据与目标 APK 1.1.3 对齐。
+        versionCode = 14
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary = true
-        }
-        ndk {
-            abiFilters.addAll(listOf(
-                "arm64-v8a",
-                "x86_64",
-            ))
-        }
+        vectorDrawables { useSupportLibrary = true }
+        ndk { abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")) }
     }
 
     buildTypes {
@@ -34,7 +28,7 @@ android {
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
         }
     }
@@ -44,25 +38,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     // 配置 Kotlin 编译目标字节码版本为 17
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
     // 配置 Kotlin JVM 工具链版本为 17
-    kotlin {
-        jvmToolchain(17)
-    }
+    kotlin { jvmToolchain(17) }
     buildFeatures {
         compose = true
         buildConfig = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.4.5"
-    }
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
-    }
+    composeOptions { kotlinCompilerExtensionVersion = "1.4.5" }
+    packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
 dependencies {
@@ -76,13 +60,14 @@ dependencies {
 
     // Compose
     // implementation(platform("androidx.compose:compose-bom:2023.01.00"))
-    implementation("androidx.compose.ui:ui:1.4.2")
-    implementation("androidx.compose.ui:ui-graphics:1.4.2")
-    implementation("androidx.compose.ui:ui-tooling-preview:1.4.2")
-    implementation("androidx.compose.ui:ui-util:1.4.2")
+    // 依据 APK 内嵌 META-INF version 文件统一升级 Compose 构件。
+    implementation("androidx.compose.ui:ui:1.4.3")
+    implementation("androidx.compose.ui:ui-graphics:1.4.3")
+    implementation("androidx.compose.ui:ui-tooling-preview:1.4.3")
+    implementation("androidx.compose.ui:ui-util:1.4.3")
     implementation("androidx.compose.material3:material3:1.1.0-rc01")
     implementation("androidx.compose.material3:material3-window-size-class:1.1.0-rc01")
-    implementation("androidx.compose.material:material-icons-extended:1.4.2")
+    implementation("androidx.compose.material:material-icons-extended:1.4.3")
 
     // Media
     implementation("com.google.android.exoplayer:exoplayer:2.18.6")
@@ -97,8 +82,8 @@ dependencies {
     ksp("androidx.room:room-compiler:2.5.1")
 
     // Paging3
-    implementation("androidx.paging:paging-runtime:3.1.1")
-    implementation("androidx.paging:paging-compose:1.0.0-alpha18")
+    implementation("androidx.paging:paging-runtime:3.2.0-alpha05")
+    implementation("androidx.paging:paging-compose:1.0.0-alpha19")
 
     // Accompanist
     implementation("com.google.accompanist:accompanist-navigation-animation:0.29.2-rc")
@@ -137,7 +122,7 @@ dependencies {
     implementation("io.coil-kt:coil-svg:2.3.0")
 
     // Profile Installer
-    implementation("androidx.profileinstaller:profileinstaller:1.3.0")
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 
     // Leak Canary
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.10")
@@ -161,11 +146,10 @@ tasks {
             freeCompilerArgs += "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
             freeCompilerArgs += "-opt-in=com.google.accompanist.pager.ExperimentalPagerApi"
             freeCompilerArgs += "-opt-in=coil.annotation.ExperimentalCoilApi"
-            freeCompilerArgs += "-opt-in=androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi"
+            freeCompilerArgs +=
+                "-opt-in=androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi"
         }
     }
 }
 
-ksp {
-    arg("room.schemaLocation", "$projectDir/schemas".toString())
-}
+ksp { arg("room.schemaLocation", "$projectDir/schemas".toString()) }

@@ -53,12 +53,9 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
     suspend fun sendMessage(conversationId: String, body: String) =
         iwaraAPI.sendMessage(conversationId, MessageCreationDto(body))
 
-    suspend fun createConversation(
-        userId: String,
-        title: String,
-        body: String,
-        recipientId: String,
-    ) = iwaraAPI.createConversation(userId, ConversationCreationDto(title, body, recipientId))
+    /** 新建会话的路径参数和请求体 user 均为收件人 ID。 */
+    suspend fun createConversation(title: String, body: String, recipientId: String) =
+        iwaraAPI.createConversation(recipientId, ConversationCreationDto(title, body, recipientId))
 
     suspend fun getFriendRequests(userId: String, page: Int) =
         iwaraAPI.getUserFriendRequests(userId, mapOf("page" to page.toString()))

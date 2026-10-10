@@ -94,15 +94,15 @@ private fun NotificationCard(notification: Notification) {
     ) {
         ListItem(
             headlineContent = { Text(headline) },
-            supportingContent = { Text(notification.createdAt.toLocalDateTimeString()) },
-            leadingContent = {
+            overlineContent = { Text(notification.createdAt.toLocalDateTimeString()) },
+            supportingContent = {
                 Text(
                     notification.comment?.body ?: "--",
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
             },
-            trailingContent = { Icon(icon, null) },
+            leadingContent = { Icon(icon, null) },
         )
     }
 }

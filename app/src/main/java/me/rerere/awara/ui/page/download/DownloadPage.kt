@@ -54,7 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.paging.compose.collectAsLazyPagingItems
-import androidx.paging.compose.items
+import androidx.paging.compose.itemKey
 import coil.compose.AsyncImage
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
@@ -188,7 +188,9 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                         .nestedScroll(appBarScrollBehavior.nestedScrollConnection),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(items, key = { item -> item.id }) { item ->
+                // 使用标准 LazyList 分页索引与稳定键，跟随 Paging alpha19 的接口升级。
+                items(count = items.itemCount, key = items.itemKey { item -> item.id }) { index ->
+                    val item = items[index]
                     if (item != null) {
                         DownloadItem(item = item, onDelete = { vm.delete(item) }) {
                             when (internalPlayer) {

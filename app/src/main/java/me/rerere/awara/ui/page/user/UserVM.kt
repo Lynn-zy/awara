@@ -281,11 +281,10 @@ class UserVM(
     /**
      * 向主页用户发起新会话（发送私信）。
      *
-     * @param currentUserId 当前登录用户的 ID
      * @param title 会话标题
      * @param body 首条消息正文
      */
-    fun createConversation(currentUserId: String, title: String, body: String) {
+    fun createConversation(title: String, body: String) {
         if (state.conversationCreating) return
         val recipientId = state.profile?.user?.id ?: return
         state = state.copy(conversationCreating = true)
@@ -293,7 +292,6 @@ class UserVM(
             try {
                 runAPICatching {
                         userRepo.createConversation(
-                            userId = currentUserId,
                             title = title,
                             body = body,
                             recipientId = recipientId,

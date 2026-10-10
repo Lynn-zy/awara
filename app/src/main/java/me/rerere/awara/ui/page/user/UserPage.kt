@@ -170,9 +170,8 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                                     }
                                     return@TextButton
                                 }
-                                val currentUid = dialogUserId ?: return@TextButton
+                                if (dialogUserId == null) return@TextButton
                                 vm.createConversation(
-                                    currentUserId = currentUid,
                                     title = titleDraft.trim(),
                                     body = bodyDraft.trim(),
                                 )

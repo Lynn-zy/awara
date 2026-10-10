@@ -30,6 +30,8 @@ import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.stores.LocalUserStore
+import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.toLocalDateTimeString
 import org.koin.androidx.compose.koinViewModel
 
@@ -82,6 +84,11 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
 /** 展示会话参与者、未读标识与最后一条消息摘要。 */
 @Composable
 private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
+    val selfId = LocalUserStore.current.collectAsState().user?.id
+    // 会话头像优先显示对方；多人会话或只有自身时保留首位回退。
+    val participant =
+        conversation.participants.firstOrNull { it.id != selfId }
+            ?: conversation.participants.firstOrNull()
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -92,9 +99,7 @@ private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                conversation.participants.firstOrNull()?.let {
-                    Avatar(user = it, modifier = Modifier.size(48.dp))
-                }
+                participant?.let { Avatar(user = it, modifier = Modifier.size(48.dp)) }
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(

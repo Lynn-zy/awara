@@ -1,10 +1,10 @@
 # 1.1.3 移植进度
 
-> 执行规则：每个批次都必须在本文档记录进度；批次完成后先提交代码，再开始下一批次，直到全部批次完成。
+> 执行规则：每个批次都必须在本文档记录进度；按“记录进度 → 完成移植 → 格式化与构建校验 → 本地提交 → 下一批次”执行，直到全部批次完成。校验失败时先修复，不提交未通过的批次；未经授权不推送。
 
 ## 基线
 
-- 当前源码基线：`1.0.8`，`versionCode=9`。
+- 初始源码基线：`1.0.8`，`versionCode=9`。
 - 目标 APK：`1.1.3`，`versionCode=14`。
 - 分析依据：APKTool 资源与 Smali、JADX 反编译结果；不直接复制 JADX 生成的 Kotlin/Java 代码。
 - 构建环境：JDK 17、compile/target SDK 33。
@@ -30,15 +30,16 @@
 - [x] 将评论成功、失败提示迁移到字符串资源。
 - [x] 完成必要的 Kotlin 编译校验。
 
-## 后续批次
+## 批次总览
 
-| 批次 | 范围                                    | 状态   |
-| ---- | --------------------------------------- | ------ |
-| 2    | 会话列表、消息发送与消息页面            | 已完成 |
-| 3    | 通知中心与通知计数                      | 已完成 |
-| 4    | 用户资料评论与新建会话                  | 已完成 |
-| 5    | 下载外部播放、FileProvider 与播放器      | 已完成         |
-| 6    | 版本元数据、依赖与最终发布配置对齐      | 未开始 |
+| 批次 | 范围                                | 状态   |
+| ---- | ----------------------------------- | ------ |
+| 1    | 标签翻译与评论提示文本              | 已完成 |
+| 2    | 会话列表、消息发送与消息页面        | 已完成 |
+| 3    | 通知中心与通知计数                  | 已完成 |
+| 4    | 用户资料评论与新建会话              | 已完成 |
+| 5    | 下载外部播放、FileProvider 与播放器 | 已完成 |
+| 6    | 版本元数据、依赖与最终发布配置对齐  | 已完成 |
 
 ## 批次 2：会话列表与消息
 
@@ -76,7 +77,7 @@
 - 接入契约：
   - `@GET("/profile/{id}/comments") suspend fun getProfileComments(@Path("id") id: String, @QueryMap params: Map<String, String>): Pager<Comment>`
   - `@POST("/profile/{id}/comments") suspend fun postProfileComment(@Path("id") id: String, @Body dto: CommentCreationDto): Comment`
-  - `UserRepo.createConversation(userId: String, title: String, body: String, recipientId: String): ConversationCreatedDto`
+  - `UserRepo.createConversation(title: String, body: String, recipientId: String): ConversationCreatedDto`，路径与请求体的 `user` 均使用收件人 ID，登录身份由现有认证链路携带。
 - 关键逻辑与架构：
   - 严格核实实体结构：通过 APK 反编译及实体比对，确认主页评论接口与私信收件人均使用主页用户的真实 `ProfileDto.user.id`，未误用 `username` 或不存在的 `profile.id`。
   - `CommentRepo` 扩充 `getProfileComments` 与 `postProfileComment` 仓库方法，支持多级回复与分页参数映射。
@@ -92,6 +93,8 @@
 ## 批次 5：下载外部播放、FileProvider 与播放器
 
 状态：已完成
+
+本地提交：`60cb03a`（移植下载外部播放与全屏控制）。
 
 - 范围调整：本批次范围为“下载外部播放、FileProvider 与播放器”，不包含 ACTION_SEND 分享能力。
 - 接入契约：
@@ -109,14 +112,34 @@
   - ktfmt 格式化、`git diff --check`、`:app:compileDebugKotlin` 均通过；全屏系统栏 API 已添加局部 ExperimentalLayoutApi 声明；
   - 未运行 APK，未调用生产 API。
 
-## 验证限制与暂缓事项
+## 批次 6：版本配置与最终校验
 
-- 暂不修改 `versionName`、`versionCode`。
+状态：已完成；全部六个批次的移植与本地构建校验完成
+
+- 版本升级为 `1.1.3`、`versionCode=14`，min/target/compile SDK 保持 26/33/33。
+- 依据 APK 内嵌 META-INF 的 version 文件对齐：Compose UI 与图标 1.4.3、Paging Runtime 3.2.0-alpha05、Paging Compose 1.0.0-alpha19、ProfileInstaller 1.3.1。
+- Material3 1.1.0-rc01、ExoPlayer 2.18.6、Room 2.5.1、WorkManager 2.8.1 等维持现有版本，不猜测无法明确还原的依赖版本。
+- ABI 与 APK 对齐为 arm64-v8a、armeabi-v7a、x86、x86_64；保留本地 Java/Kotlin 17 工具链。
+- 最终检查修正三处证据差异：创建会话路径使用收件人 ID；会话头像优先选择对方；通知正文移至内容槽位，图标恢复到 leadingContent。
+- 不重写此前批次的提交；最终修正随本批次独立提交。
+- 下载列表同步升级至 Paging alpha19 的标准 `items(count, key = itemKey)` 接口，移除旧分页扩展调用。
+- 最终复核确认此前三处问题均已修复，未发现剩余高优先级缺陷；这不代替实机及服务端联调。
+
+## 验证限制
+
+- 发布签名证书、私钥及原工程不可还原的发布自动化配置不猜测、不新增。
 - FileProvider 已随批次 5 新增，路径安全收窄为 `Download/`。
-- 暂不调用生产 API 或运行 APK。
+- 不调用生产 API 或运行 APK；界面交互、服务端联调和第三方播放器兼容性仍需后续实机验证。
 
 ## 构建记录
 
 - 首批改动前编译校验：未执行。
 - 2026 年 10 月 10 日：`./gradlew :app:compileDebugKotlin` 编译通过。
 - 编译仅保留项目已有的 Compose/Accompanist opt-in 警告；本批次未引入新的编译错误。
+- 批次 2～5：每批均完成 ktfmt 格式化、`git diff --check`、`:app:compileDebugKotlin`，通过后独立提交。
+- 批次 6：`./gradlew :app:assembleDebug :app:assembleRelease --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs="-Xmx4096m -Dfile.encoding=UTF-8"` 通过，包含 Release R8、资源压缩与 lintVital 校验。
+- 构建环境限制：首次完整构建受 `_JAVA_OPTIONS=-Xmx512M` 覆盖影响，后续复用 2GB 守护进程在 R8 阶段内存不足；仅当前终端移除该变量并使用一次性 4GB 堆、新进程和单工作线程，未修改系统设置或项目堆配置。
+- 产物元数据核验：Debug 与 Release 均为 `versionName=1.1.3`、`versionCode=14`，包含 arm64-v8a、armeabi-v7a、x86、x86_64 四种 ABI。
+- Debug 产物：[app-debug.apk](../app/build/outputs/apk/debug/app-debug.apk)。
+- Release 产物：[app-release-unsigned.apk](../app/build/outputs/apk/release/app-release-unsigned.apk)，未签名，不可直接作为正式发布包。
+- 未新增或运行单元/仪器测试；未安装应用、运行 APK、调用生产 API、推送代码。
