@@ -102,6 +102,9 @@
     <string name="send_message">发送消息</string>
     <!-- 通知类型文案；未知类型保留服务端类型，便于反馈。 -->
     <string name="notifications">通知</string>
+    <string name="download_show_directory">查看下载目录</string>
+    <string name="download_delete">删除下载文件</string>
+    <string name="download_restore">恢复卡片</string>
     <string name="comment_load_failed">留言加载失败：%1$s</string>
     <string name="notification_new_reply">%1$s 回复了你的评论</string>
     <string name="notification_new_comment">%1$s 在你的主页留言</string>
@@ -115,4 +118,14 @@
     <string name="conversation_create_success">会话创建成功</string>
     <string name="conversation_title_empty">标题不能为空</string>
     <string name="conversation_body_empty">内容不能为空</string>
+    <!-- 下载播放器设置（setting.download_player_internal：内置 internal / 第三方 external）。 -->
+    <string name="setting_player_download_player_title">已下载视频的播放器</string>
+    <string name="setting_player_download_player_text">选择用来播放已下载视频的播放器</string>
+    <string name="setting_player_internal">内置</string>
+    <string name="setting_player_external">第三方</string>
+    <!-- 下载页目录提示与外部播放边界错误。 -->
+    <string name="download_directory_path">下载目录：%1$s</string>
+    <string name="download_file_missing">下载文件不存在或已被删除</string>
+    <string name="download_no_player">未找到可播放该视频的应用</string>
+    <string name="download_open_external_failed">打开外部播放器失败：%1$s</string>
 </resources>

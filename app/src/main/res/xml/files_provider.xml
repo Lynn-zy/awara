@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+        仅暴露外部私有目录下的 Download 子目录：
+        下载 Worker 落盘于 getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)（即 <external-files>/Download），
+        相比 APK 1.1.3 的 path="."，此处安全收窄，避免对外暴露其他外部私有数据。
+    -->
+    <external-files-path
+        name="download"
+        path="Download/" />
+</paths>

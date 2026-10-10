@@ -55,7 +55,7 @@ import me.rerere.compose_setting.preference.mmkvPreference
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
-fun  VideoPage(vm: VideoVM = koinViewModel()) {
+fun VideoPage(vm: VideoVM = koinViewModel()) {
     ForceSystemBarColor(appearanceLight = false)
 
     var requestOrientation by rememberRequestedScreenOrientation()
@@ -72,9 +72,7 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
 
     // Dlna
     val dlnaCastState = rememberDlnaCastState()
-    var dlnaCastSheetShow by remember {
-        mutableStateOf(false)
-    }
+    var dlnaCastSheetShow by remember { mutableStateOf(false) }
     DlnaSelector(
         show = dlnaCastSheetShow,
         onDismiss = { dlnaCastSheetShow = false },
@@ -83,29 +81,27 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
             state.pause()
             state.currentMediaItem?.let { mediaItem ->
                 scope.launch {
-                    kotlin.runCatching {
-                        dlnaCastState.playUrl(
-                            device = device,
-                            url = mediaItem.localConfiguration?.uri.toString()
-                        )
-                        message.success {
-                            Text("已发送到 ${device.friendlyName}")
+                    kotlin
+                        .runCatching {
+                            dlnaCastState.playUrl(
+                                device = device,
+                                url = mediaItem.localConfiguration?.uri.toString(),
+                            )
+                            message.success { Text("已发送到 ${device.friendlyName}") }
                         }
-                    }.onFailure {
-                        message.error {
-                            Text("发送失败: ${it.message ?: it.javaClass.simpleName}")
+                        .onFailure {
+                            message.error { Text("发送失败: ${it.message ?: it.javaClass.simpleName}") }
                         }
-                    }
                 }
             }
-        }
+        },
     )
 
     // Full Screen
     var fullscreen by remember { mutableStateOf(false) }
     fun enterFullScreen() {
-        if(state.videoSize == PlayerState.VideoSize.UNKNOWN) return
-        if(state.videoSize.width > state.videoSize.height) {
+        if (state.videoSize == PlayerState.VideoSize.UNKNOWN) return
+        if (state.videoSize.width > state.videoSize.height) {
             fullscreen = true
             requestOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         } else {
@@ -117,27 +113,24 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
         requestOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         fullscreen = false
     }
-    BackHandler(fullscreen) {
-        exitFullScreen()
-    }
+    BackHandler(fullscreen) { exitFullScreen() }
     fun applyUrls(urls: List<VideoFile>) {
         state.updatePlayerItems(
             urls.map {
                 PlayerState.PlayerItem(
                     quality = it.name,
-                    mediaItem = MediaItem.Builder()
-                        .setUri(it.src.view.fixUrl())
-                        .setMediaMetadata(
-                            MediaMetadata.Builder()
-                                .setTitle(vm.state.video?.title)
-                                .build()
-                        )
-                        .build()
+                    mediaItem =
+                        MediaItem.Builder()
+                            .setUri(it.src.view.fixUrl())
+                            .setMediaMetadata(
+                                MediaMetadata.Builder().setTitle(vm.state.video?.title).build()
+                            )
+                            .build(),
                 )
             }
         )
-        //state.updateCurrentQuality(urls.lastOrNull()?.name ?: "Source")
-        if(mmkvPreference.getBoolean("setting.auto_play", true)) {
+        // state.updateCurrentQuality(urls.lastOrNull()?.name ?: "Source")
+        if (mmkvPreference.getBoolean("setting.auto_play", true)) {
             state.prepare()
         }
     }
@@ -157,20 +150,20 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
                         Text(
                             composeStringResource(
                                 R.string.comment_failed,
-                                it.throwable.message ?: it.throwable.javaClass.simpleName
+                                it.throwable.message ?: it.throwable.javaClass.simpleName,
                             )
                         )
                     }
                 }
                 is VideoVM.VideoEvent.CommentPostFailed -> {
                     message.error {
-                        Text(composeStringResource(R.string.comment_failed, stringResource(it.error)))
+                        Text(
+                            composeStringResource(R.string.comment_failed, stringResource(it.error))
+                        )
                     }
                 }
                 VideoVM.VideoEvent.CommentPosted -> {
-                    message.success {
-                        Text(composeStringResource(R.string.comment_success))
-                    }
+                    message.success { Text(composeStringResource(R.string.comment_success)) }
                 }
             }
         }
@@ -183,10 +176,9 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
             player = {
                 Player(
                     state = state,
+                    fullscreen = fullscreen,
                     modifier = Modifier.fillMaxSize(),
-                    navigationIcon = {
-                        BackButton()
-                    },
+                    navigationIcon = { BackButton() },
                     actions = {
                         if (!fullscreen) {
                             IconButton(onClick = { dlnaCastSheetShow = !dlnaCastSheetShow }) {
@@ -197,7 +189,10 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
                             IconButton(
                                 onClick = {
                                     state.resizeMode =
-                                        if (state.resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT)
+                                        if (
+                                            state.resizeMode ==
+                                                AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                        )
                                             AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                                         else AspectRatioFrameLayout.RESIZE_MODE_FIT
                                 }
@@ -207,22 +202,13 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
                         }
 
                         Box {
-                            var expandedVideoQuality by remember {
-                                mutableStateOf(false)
-                            }
-                            TextButton(
-                                onClick = {
-                                    expandedVideoQuality = true
-                                }
-                            ) {
-                                Text(
-                                    text = state.currentQuality,
-                                    color = Color.White
-                                )
+                            var expandedVideoQuality by remember { mutableStateOf(false) }
+                            TextButton(onClick = { expandedVideoQuality = true }) {
+                                Text(text = state.currentQuality, color = Color.White)
                             }
                             DropdownMenu(
                                 expanded = expandedVideoQuality,
-                                onDismissRequest = { expandedVideoQuality = false }
+                                onDismissRequest = { expandedVideoQuality = false },
                             ) {
                                 vm.state.urls.forEach { url ->
                                     DropdownMenuItem(
@@ -230,9 +216,7 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
                                             expandedVideoQuality = false
                                             state.updateCurrentQuality(url.name)
                                         },
-                                        text = {
-                                            Text(url.name)
-                                        }
+                                        text = { Text(url.name) },
                                     )
                                 }
                             }
@@ -240,18 +224,17 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
                     },
                     controllerTrail = {
                         IconButton(
-                            onClick = {
-                                if (!fullscreen) enterFullScreen() else exitFullScreen()
-                            }
+                            onClick = { if (!fullscreen) enterFullScreen() else exitFullScreen() }
                         ) {
                             Icon(
-                                if (!fullscreen) Icons.Outlined.Fullscreen else Icons.Outlined.FullscreenExit,
-                                "Fullscreen"
+                                if (!fullscreen) Icons.Outlined.Fullscreen
+                                else Icons.Outlined.FullscreenExit,
+                                "Fullscreen",
                             )
                         }
-                    }
+                    },
                 )
-            }
+            },
         ) { player ->
             when (windowSize.widthSizeClass) {
                 WindowWidthSizeClass.Compact -> VideoPagePhoneLayout(vm, state, player)

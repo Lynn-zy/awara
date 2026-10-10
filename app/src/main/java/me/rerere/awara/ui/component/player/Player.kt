@@ -8,12 +8,16 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -49,33 +53,33 @@ private const val TAG = "Player"
 fun Player(
     modifier: Modifier,
     state: PlayerState,
+    fullscreen: Boolean,
     navigationIcon: @Composable (() -> Unit)? = null,
     controllerTrail: @Composable (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
-    Box(
-        modifier = modifier
-    ) {
-        PlayerBase(
-            state = state,
-            modifier = Modifier.matchParentSize()
-        )
+    Box(modifier = modifier) {
+        PlayerBase(state = state, modifier = Modifier.matchParentSize())
         CompositionLocalProvider(LocalContentColor provides Color.White) {
             PlayerController(
                 state = state,
+                fullscreen = fullscreen,
                 modifier = Modifier.matchParentSize(),
                 navigationIcon = navigationIcon,
                 actions = actions,
-                controllerTrail = controllerTrail
+                controllerTrail = controllerTrail,
             )
         }
     }
 }
 
+/** 全屏控制栏避开隐藏系统栏占用区域，手势区域保持完整尺寸。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PlayerController(
     modifier: Modifier,
     state: PlayerState,
+    fullscreen: Boolean,
     navigationIcon: @Composable (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     controllerTrail: @Composable (() -> Unit)? = null,
@@ -96,50 +100,40 @@ private fun PlayerController(
 
     // 拖动进度手势
     val density = LocalDensity.current
-    var dragTracker by remember {
-        mutableStateOf(0L)
-    }
-    var currentDragTime by remember {
-        mutableStateOf("00:00")
-    }
-    var dragging by remember {
-        mutableStateOf(false)
-    }
+    var dragTracker by remember { mutableStateOf(0L) }
+    var currentDragTime by remember { mutableStateOf("00:00") }
+    var dragging by remember { mutableStateOf(false) }
 
     Box(
-        modifier = Modifier
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onDoubleTap = {
-                        if (state.playing) state.pause() else state.play()
-                    },
-                    onTap = {
-                        lastInteract = System.currentTimeMillis()
-                        visible = !visible
-                    }
-                )
-            }
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = {
-                        dragTracker = state.player.currentPosition
-                        dragging = true
-                    },
-                    onHorizontalDrag = { _, dragAmount ->
-                        val dp = with(density) { dragAmount.toDp() }
-                        dragTracker += dp.value.toLong() * 300
-                        currentDragTime = dragTracker.toTime()
-                    },
-                    onDragEnd = {
-                        dragging = false
-                        state.seekTo(dragTracker)
-                    },
-                    onDragCancel = {
-                        dragging = false
-                    },
-                )
-            }
-            .fillMaxSize()
+        modifier =
+            Modifier.pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = { if (state.playing) state.pause() else state.play() },
+                        onTap = {
+                            lastInteract = System.currentTimeMillis()
+                            visible = !visible
+                        },
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            dragTracker = state.player.currentPosition
+                            dragging = true
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            val dp = with(density) { dragAmount.toDp() }
+                            dragTracker += dp.value.toLong() * 300
+                            currentDragTime = dragTracker.toTime()
+                        },
+                        onDragEnd = {
+                            dragging = false
+                            state.seekTo(dragTracker)
+                        },
+                        onDragCancel = { dragging = false },
+                    )
+                }
+                .fillMaxSize()
     ) {
         AnimatedVisibility(
             visible = visible,
@@ -148,22 +142,30 @@ private fun PlayerController(
             modifier = Modifier.fillMaxSize(),
         ) {
             Column(
-                modifier = modifier
-                    .padding(horizontal = 8.dp)
-                    .fillMaxSize()
+                modifier =
+                    modifier
+                        // 全屏时控制层避开系统栏区域，防止顶部/底部控件被状态栏或导航栏遮挡
+                        .then(
+                            if (fullscreen)
+                                Modifier.windowInsetsPadding(
+                                    WindowInsets.systemBarsIgnoringVisibility
+                                )
+                            else Modifier
+                        )
+                        .padding(horizontal = 8.dp)
+                        .fillMaxSize()
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     navigationIcon?.invoke()
 
                     Text(
-                        text = state.currentMediaItem?.mediaMetadata?.title?.toString()
-                            ?: "Player",
+                        text = state.currentMediaItem?.mediaMetadata?.title?.toString() ?: "Player",
                         maxLines = 1,
                         style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
                     )
 
                     actions()
@@ -174,11 +176,9 @@ private fun PlayerController(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    ProgressBar(state) {
-                        lastInteract = System.currentTimeMillis()
-                    }
+                    ProgressBar(state) { lastInteract = System.currentTimeMillis() }
 
                     controllerTrail?.invoke()
                 }
@@ -188,15 +188,13 @@ private fun PlayerController(
         Column(
             modifier = Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if(visible && state.loading) {
-                CircularProgressIndicator(
-                    color = Color.White
-                )
+            if (visible && state.loading) {
+                CircularProgressIndicator(color = Color.White)
             }
 
-            if(state.state == PlayerState.State.ENDED && state.duration > 0) {
+            if (state.state == PlayerState.State.ENDED && state.duration > 0) {
                 IconButton(
                     onClick = {
                         state.seekTo(0)
@@ -207,7 +205,7 @@ private fun PlayerController(
                 }
             }
 
-            if(dragging) {
+            if (dragging) {
                 Text(currentDragTime)
             }
         }
@@ -216,16 +214,17 @@ private fun PlayerController(
 
 @Composable
 private fun RowScope.ProgressBar(state: PlayerState, onTouch: () -> Unit) {
-    val currentProgress by produceState(
-        initialValue = 0L,
-        producer = {
-            value = state.player.currentPosition
-            while (true) {
-                delay(500)
+    val currentProgress by
+        produceState(
+            initialValue = 0L,
+            producer = {
                 value = state.player.currentPosition
-            }
-        }
-    )
+                while (true) {
+                    delay(500)
+                    value = state.player.currentPosition
+                }
+            },
+        )
     val percent by remember {
         derivedStateOf {
             if (state.duration == 0L) {
@@ -238,28 +237,14 @@ private fun RowScope.ProgressBar(state: PlayerState, onTouch: () -> Unit) {
 
     // Play/Pause button
     if (state.playing) {
-        IconButton(
-            onClick = {
-                state.pause()
-            }
-        ) {
-            Icon(Icons.Outlined.Pause, "Pause")
-        }
+        IconButton(onClick = { state.pause() }) { Icon(Icons.Outlined.Pause, "Pause") }
     } else {
-        IconButton(
-            onClick = {
-                state.play()
-            }
-        ) {
-            Icon(Icons.Outlined.PlayArrow, "Play")
-        }
+        IconButton(onClick = { state.play() }) { Icon(Icons.Outlined.PlayArrow, "Play") }
     }
 
     // Progress bar
     if (state.state == PlayerState.State.BUFFERING) {
-        LinearProgressIndicator(
-            modifier = Modifier.weight(1f),
-        )
+        LinearProgressIndicator(modifier = Modifier.weight(1f))
     } else {
         var sliding by remember { mutableStateOf(false) }
         var sliderValue by remember { mutableStateOf(percent) }

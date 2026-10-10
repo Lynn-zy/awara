@@ -18,6 +18,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.App.Starting"
         tools:targetApi="tiramisu">
+
+        <!-- 只读内容提供器：向第三方播放器授予下载视频的临时读取权限（仅暴露 Download/ 子目录） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/files_provider" />
+        </provider>
+
         <activity
             android:name=".ui.RouterActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode|smallestScreenSize|layoutDirection|fontScale|density|screenLayout|layoutDirection|locale|colorMode"

@@ -32,13 +32,13 @@
 
 ## 后续批次
 
-| 批次 | 范围                                    | 状态             |
-| ---- | --------------------------------------- | ---------------- |
-| 2    | 会话列表、消息发送与消息页面            | 已完成           |
-| 3    | 通知中心与通知计数                      | 已完成           |
-| 4    | 用户资料评论与新建会话                  | 已完成           |
-| 5    | 下载分享、FileProvider 与播放器相关能力 | 未开始           |
-| 6    | 版本元数据、依赖与最终发布配置对齐      | 未开始           |
+| 批次 | 范围                                    | 状态   |
+| ---- | --------------------------------------- | ------ |
+| 2    | 会话列表、消息发送与消息页面            | 已完成 |
+| 3    | 通知中心与通知计数                      | 已完成 |
+| 4    | 用户资料评论与新建会话                  | 已完成 |
+| 5    | 下载外部播放、FileProvider 与播放器      | 已完成         |
+| 6    | 版本元数据、依赖与最终发布配置对齐      | 未开始 |
 
 ## 批次 2：会话列表与消息
 
@@ -71,6 +71,8 @@
 
 状态：已完成
 
+本地提交：`d0c05f3`（移植用户资料评论与新建会话）。
+
 - 接入契约：
   - `@GET("/profile/{id}/comments") suspend fun getProfileComments(@Path("id") id: String, @QueryMap params: Map<String, String>): Pager<Comment>`
   - `@POST("/profile/{id}/comments") suspend fun postProfileComment(@Path("id") id: String, @Body dto: CommentCreationDto): Comment`
@@ -87,10 +89,30 @@
   - 留言加载失败可见，切换评论层级取消旧请求；发表评论和创建会话均具有 loading、防重复提交和 finally 清理；
   - 未运行 APK，未调用生产 API。
 
+## 批次 5：下载外部播放、FileProvider 与播放器
+
+状态：已完成
+
+- 范围调整：本批次范围为“下载外部播放、FileProvider 与播放器”，不包含 ACTION_SEND 分享能力。
+- 接入契约：
+  - FileProvider：`android:authorities="${applicationId}.provider"`，`exported=false`、`grantUriPermissions=true`，`FILE_PROVIDER_PATHS` 指向 `@xml/files_provider`。
+  - 路径安全收窄：APK 1.1.3 的 `external-files-path path="."` 覆盖整个外部私有目录，过于宽泛；本批次收窄为 `path="Download/"`，与下载 Worker 实际落盘目录 `getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)`（含 `VIDEO` 子目录）一致，不暴露其他外部私有数据。
+  - 设置项：MMKV preference key `setting.download_player_internal`，默认 `internal`，可选 `internal`（内置）/ `external`（第三方）。
+- 关键逻辑与架构：
+  - 下载列表点击按设置分流：内置播放器维持既有 ExoPlayer 全屏播放；外部播放器通过 `FileProvider.getUriForFile` 生成 content URI，`ACTION_VIEW` + `setDataAndType(uri, "video/*")`，仅授予 `FLAG_GRANT_READ_URI_PERMISSION` 并附带 `clipData` 便于授权，不申请写权限。
+  - 外部播放边界错误（`ActivityNotFoundException`、文件缺失、`IllegalArgumentException` 等）通过 `LocalMessageProvider.error` 可见。
+  - 下载卡片删除交互改为 Material3 `SwipeToDismiss` 滑动展开删除/恢复操作：滑动本身不删除，显式点击删除按钮才调用 `DownloadVM.delete`，原有删除行为保持不变。
+  - TopAppBar 问号按钮显示下载目录路径；卡片文件大小使用 `prettyFileSize`，文件 IO 在 `Dispatchers.IO` 中读取；分页逻辑与列表键（`item.id`）保持一致。
+  - 播放器 `Player` 接口新增必填 `fullscreen: Boolean`（不保留旧调用默认值），全屏时控制层应用 `WindowInsets.systemBarsIgnoringVisibility` 内边距；`DownloadPage`、`VideoPage` 全部调用点同步传参。
+  - 不添加清晰度 fallback：APK 1.1.3 明确不存在该逻辑；缓存行为与基线一致，本批次不改动。
+- 验证限制与暂缓事项：
+  - ktfmt 格式化、`git diff --check`、`:app:compileDebugKotlin` 均通过；全屏系统栏 API 已添加局部 ExperimentalLayoutApi 声明；
+  - 未运行 APK，未调用生产 API。
+
 ## 验证限制与暂缓事项
 
 - 暂不修改 `versionName`、`versionCode`。
-- 暂不新增 FileProvider。
+- FileProvider 已随批次 5 新增，路径安全收窄为 `Download/`。
 - 暂不调用生产 API 或运行 APK。
 
 ## 构建记录
