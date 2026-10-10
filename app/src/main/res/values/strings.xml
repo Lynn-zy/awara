@@ -100,4 +100,9 @@
     <string name="unread">未读</string>
     <string name="message_body">输入消息</string>
     <string name="send_message">发送消息</string>
+    <!-- 通知类型文案；未知类型保留服务端类型，便于反馈。 -->
+    <string name="notifications">通知</string>
+    <string name="notification_new_reply">%1$s 回复了你的评论</string>
+    <string name="notification_new_comment">%1$s 在你的主页留言</string>
+    <string name="notification_unsupported">暂不支持的通知类型：%1$s</string>
 </resources>

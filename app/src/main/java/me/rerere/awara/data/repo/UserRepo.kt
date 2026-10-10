@@ -64,4 +64,7 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
         iwaraAPI.getUserFriendRequests(userId, mapOf("page" to page.toString()))
 
     suspend fun getNotificationCounts() = iwaraAPI.getNotificationCount()
+
+    /** 通知页通过仓库读取，避免在界面层暴露 Retrofit。 */
+    suspend fun getNotifications(userId: String) = iwaraAPI.getNotifications(userId)
 }

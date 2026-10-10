@@ -38,6 +38,7 @@ import me.rerere.awara.ui.page.lab.LabPage
 import me.rerere.awara.ui.page.login.LoginPage
 import me.rerere.awara.ui.page.message.ConversationsPage
 import me.rerere.awara.ui.page.message.MessagePage
+import me.rerere.awara.ui.page.notification.NotificationsPage
 import me.rerere.awara.ui.page.playlist.PlaylistDetailPage
 import me.rerere.awara.ui.page.playlist.PlaylistsPage
 import me.rerere.awara.ui.page.search.SearchPage
@@ -187,6 +188,13 @@ class RouterActivity : ComponentActivity() {
                 }
 
                 composable("lab") { LabPage() }
+
+                composable(
+                    "notifications/{userId}",
+                    arguments = listOf(navArgument("userId") { type = NavType.StringType }),
+                ) {
+                    NotificationsPage()
+                }
             }
         }
     }

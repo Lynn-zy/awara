@@ -11,7 +11,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
-import me.rerere.awara.data.dto.Notification
+import me.rerere.awara.data.dto.NotificationCounts
 import me.rerere.awara.data.entity.Media
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
@@ -31,10 +31,11 @@ private const val TAG = "IndexVM"
 class IndexVM(
     private val userRepo: UserRepo,
     private val mediaRepo: MediaRepo,
-    private val updateChecker: UpdateAPI
+    private val updateChecker: UpdateAPI,
 ) : ViewModel() {
     var state by mutableStateOf(IndexState())
         private set
+
     var videoSort: String by mutableStateOf(MediaSortOptions.first().name)
     val videoFilters: MutableList<FilterValue> = mutableStateListOf()
     var imageSort: String = MediaSortOptions.first().name
@@ -51,13 +52,13 @@ class IndexVM(
 
     private fun checkUpdate() {
         viewModelScope.launch {
-            kotlin.runCatching {
-                val (code, name, changes) = updateChecker.checkUpdate()
-                events.emit(IndexEvent.ShowUpdateDialog(code, name, changes))
-                Log.i(TAG, "checkUpdate: $code $name $changes")
-            }.onFailure {
-                Log.e(TAG, "checkUpdate: ", it)
-            }
+            kotlin
+                .runCatching {
+                    val (code, name, changes) = updateChecker.checkUpdate()
+                    events.emit(IndexEvent.ShowUpdateDialog(code, name, changes))
+                    Log.i(TAG, "checkUpdate: $code $name $changes")
+                }
+                .onFailure { Log.e(TAG, "checkUpdate: ", it) }
         }
     }
 
@@ -65,74 +66,73 @@ class IndexVM(
         viewModelScope.launch {
             state = state.copy(subscriptionState = UiState.Loading)
             runAPICatching {
-                val param = mapOf(
-                    "subscribed" to "true",
-                    "limit" to "24",
-                    "page" to (state.subscriptionPage - 1).toString()
-                )
-                when (state.subscriptionType) {
-                    SubscriptionType.VIDEO -> mediaRepo.getVideoList(param)
-                    SubscriptionType.IMAGE -> mediaRepo.getImageList(param)
-                }
-            }.onSuccess {
-                state = state.copy(
-                    subscriptions = it.results,
-                    subscriptionTotal = it.count,
-                    subscriptionState = if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                )
-            }.onError {
-                state = state.copy(subscriptionState = UiState.Error(
-                    message = {
-                        Text(stringResource(error = it))
+                    val param =
+                        mapOf(
+                            "subscribed" to "true",
+                            "limit" to "24",
+                            "page" to (state.subscriptionPage - 1).toString(),
+                        )
+                    when (state.subscriptionType) {
+                        SubscriptionType.VIDEO -> mediaRepo.getVideoList(param)
+                        SubscriptionType.IMAGE -> mediaRepo.getImageList(param)
                     }
-                ))
-            }.onException {
-                state = state.copy(subscriptionState = UiState.Error(message = {
-                    Text(it.exception.localizedMessage ?: "Unknown Error")
-                }))
-            }
+                }
+                .onSuccess {
+                    state =
+                        state.copy(
+                            subscriptions = it.results,
+                            subscriptionTotal = it.count,
+                            subscriptionState =
+                                if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
+                        )
+                }
+                .onError {
+                    state =
+                        state.copy(
+                            subscriptionState =
+                                UiState.Error(message = { Text(stringResource(error = it)) })
+                        )
+                }
+                .onException {
+                    state =
+                        state.copy(
+                            subscriptionState =
+                                UiState.Error(
+                                    message = {
+                                        Text(it.exception.localizedMessage ?: "Unknown Error")
+                                    }
+                                )
+                        )
+                }
         }
     }
 
     fun loadCounts(userId: String) {
         viewModelScope.launch {
             launch {
-                runAPICatching {
-                    userRepo.getFollowingCount(userId = userId)
-                }.onSuccess {
-                    state = state.copy(followingCount = it)
-                }.onError {
-                    Log.i(TAG, "loadCounts: $it")
-                }.onSuccess {
-                    Log.i(TAG, "loadCounts: following count: $it")
-                }.onException {
-                    it.exception.printStackTrace()
-                    Log.i(TAG, "loadCounts: $it")
-                }
+                runAPICatching { userRepo.getFollowingCount(userId = userId) }
+                    .onSuccess { state = state.copy(followingCount = it) }
+                    .onError { Log.i(TAG, "loadCounts: $it") }
+                    .onSuccess { Log.i(TAG, "loadCounts: following count: $it") }
+                    .onException {
+                        it.exception.printStackTrace()
+                        Log.i(TAG, "loadCounts: $it")
+                    }
             }
 
             launch {
-                runAPICatching {
-                    userRepo.getFollowerCount(userId = userId)
-                }.onSuccess {
-                    state = state.copy(followerCount = it)
-                }
+                runAPICatching { userRepo.getFollowerCount(userId = userId) }
+                    .onSuccess { state = state.copy(followerCount = it) }
             }
 
             launch {
-                runAPICatching {
-                    userRepo.getFriendCount(userId = userId)
-                }.onSuccess {
-                    state = state.copy(friendsCount = it)
-                }
+                runAPICatching { userRepo.getFriendCount(userId = userId) }
+                    .onSuccess { state = state.copy(friendsCount = it) }
             }
 
             launch {
-                runAPICatching {
-                    userRepo.getNotificationCounts()
-                }.onSuccess {
-                    state = state.copy(notificationCounts = it)
-                }
+                runAPICatching { userRepo.getNotificationCounts() }
+                    .onSuccess { state = state.copy(notificationCounts = it) }
             }
         }
     }
@@ -152,30 +152,41 @@ class IndexVM(
         viewModelScope.launch {
             state = state.copy(videoState = UiState.Loading)
             runAPICatching {
-                mediaRepo.getVideoList(
-                    mapOf(
-                        "limit" to "24",
-                        "page" to (state.videoPage - 1).toString(),
-                        "sort" to videoSort,
-                    ) + videoFilters.toParams()
-                )
-            }.onSuccess {
-                state = state.copy(
-                    videoList = it.results,
-                    videoCount = it.count,
-                    videoState = if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                )
-            }.onError {
-                state = state.copy(subscriptionState = UiState.Error(
-                    message = {
-                        Text(stringResource(error = it))
-                    }
-                ))
-            }.onException {
-                state = state.copy(subscriptionState = UiState.Error(message = {
-                    Text(it.exception.localizedMessage ?: "Unknown Error")
-                }))
-            }
+                    mediaRepo.getVideoList(
+                        mapOf(
+                            "limit" to "24",
+                            "page" to (state.videoPage - 1).toString(),
+                            "sort" to videoSort,
+                        ) + videoFilters.toParams()
+                    )
+                }
+                .onSuccess {
+                    state =
+                        state.copy(
+                            videoList = it.results,
+                            videoCount = it.count,
+                            videoState =
+                                if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
+                        )
+                }
+                .onError {
+                    state =
+                        state.copy(
+                            subscriptionState =
+                                UiState.Error(message = { Text(stringResource(error = it)) })
+                        )
+                }
+                .onException {
+                    state =
+                        state.copy(
+                            subscriptionState =
+                                UiState.Error(
+                                    message = {
+                                        Text(it.exception.localizedMessage ?: "Unknown Error")
+                                    }
+                                )
+                        )
+                }
         }
     }
 
@@ -183,30 +194,41 @@ class IndexVM(
         viewModelScope.launch {
             state = state.copy(imageState = UiState.Loading)
             runAPICatching {
-                mediaRepo.getImageList(
-                    mapOf(
-                        "limit" to "24",
-                        "page" to (state.imagePage - 1).toString(),
-                        "sort" to imageSort,
-                    ) + imageFilters.toParams()
-                )
-            }.onSuccess {
-                state = state.copy(
-                    imageList = it.results,
-                    imageCount = it.count,
-                    imageState = if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                )
-            }.onError {
-                state = state.copy(subscriptionState = UiState.Error(
-                    message = {
-                        Text(stringResource(error = it))
-                    }
-                ))
-            }.onException {
-                state = state.copy(subscriptionState = UiState.Error(message = {
-                    Text(it.exception.localizedMessage ?: "Unknown Error")
-                }))
-            }
+                    mediaRepo.getImageList(
+                        mapOf(
+                            "limit" to "24",
+                            "page" to (state.imagePage - 1).toString(),
+                            "sort" to imageSort,
+                        ) + imageFilters.toParams()
+                    )
+                }
+                .onSuccess {
+                    state =
+                        state.copy(
+                            imageList = it.results,
+                            imageCount = it.count,
+                            imageState =
+                                if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
+                        )
+                }
+                .onError {
+                    state =
+                        state.copy(
+                            subscriptionState =
+                                UiState.Error(message = { Text(stringResource(error = it)) })
+                        )
+                }
+                .onException {
+                    state =
+                        state.copy(
+                            subscriptionState =
+                                UiState.Error(
+                                    message = {
+                                        Text(it.exception.localizedMessage ?: "Unknown Error")
+                                    }
+                                )
+                        )
+                }
         }
     }
 
@@ -273,12 +295,10 @@ class IndexVM(
         val followingCount: Int = 0,
         val followerCount: Int = 0,
         val friendsCount: Int = 0,
-        val notificationCounts: Notification = Notification()
+        val notificationCounts: NotificationCounts = NotificationCounts(),
     )
 
-    enum class SubscriptionType(
-        val id: Int
-    ) {
+    enum class SubscriptionType(val id: Int) {
         VIDEO(R.string.video),
         IMAGE(R.string.image),
     }
@@ -288,4 +308,3 @@ class IndexVM(
             IndexEvent()
     }
 }
-

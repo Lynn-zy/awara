@@ -103,8 +103,19 @@ fun IndexPagePhoneLayout(vm: IndexVM) {
                         }
 
                         Box {
-                            IconButton(onClick = { /*TODO*/ }) {
-                                Icon(Icons.Outlined.Notifications, null)
+                            // 通知路由绑定登录用户，未登录时禁止请求受保护接口。
+                            IconButton(
+                                onClick = {
+                                    userState.user?.let {
+                                        navController.navigate("notifications/${it.id}")
+                                    }
+                                },
+                                enabled = userState.user != null,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Notifications,
+                                    stringResource(R.string.notifications),
+                                )
                             }
 
                             if (vm.state.notificationCounts.notifications > 0) {

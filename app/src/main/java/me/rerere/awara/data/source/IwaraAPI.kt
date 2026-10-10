@@ -5,7 +5,7 @@ import me.rerere.awara.data.dto.FriendRequestDto
 import me.rerere.awara.data.dto.FriendStatusDto
 import me.rerere.awara.data.dto.LoginReq
 import me.rerere.awara.data.dto.LoginRes
-import me.rerere.awara.data.dto.Notification
+import me.rerere.awara.data.dto.NotificationCounts
 import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.dto.Self
 import me.rerere.awara.data.entity.Comment
@@ -21,6 +21,7 @@ import me.rerere.awara.data.entity.Image
 import me.rerere.awara.data.entity.Message
 import me.rerere.awara.data.entity.MessageCreationDto
 import me.rerere.awara.data.entity.MessageList
+import me.rerere.awara.data.entity.Notification
 import me.rerere.awara.data.entity.Playlist
 import me.rerere.awara.data.entity.PlaylistCreationDto
 import me.rerere.awara.data.entity.PlaylistPager
@@ -102,7 +103,11 @@ interface IwaraAPI {
 
     @POST("/playlists") suspend fun createPlaylist(@Body dto: PlaylistCreationDto): Playlist
 
-    @GET("/user/counts") suspend fun getNotificationCount(): Notification
+    @GET("/user/counts") suspend fun getNotificationCount(): NotificationCounts
+
+    /** 目标版本仅查询通知，不提供删除或标记已读操作。 */
+    @GET("/user/{userId}/notifications")
+    suspend fun getNotifications(@Path("userId") userId: String): Pager<Notification>
 
     @GET("/user/{userId}/followers")
     suspend fun getUserFollowers(

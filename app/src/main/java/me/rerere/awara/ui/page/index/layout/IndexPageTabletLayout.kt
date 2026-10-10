@@ -111,8 +111,19 @@ fun IndexPageTabletLayout(vm: IndexVM) {
                             }
 
                             Box {
-                                IconButton(onClick = { /*TODO*/ }) {
-                                    Icon(Icons.Outlined.Notifications, null)
+                                // 与手机布局共用同一个通知路由契约。
+                                IconButton(
+                                    onClick = {
+                                        userState.user?.let {
+                                            navController.navigate("notifications/${it.id}")
+                                        }
+                                    },
+                                    enabled = userState.user != null,
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Notifications,
+                                        stringResource(R.string.notifications),
+                                    )
                                 }
 
                                 if (vm.state.notificationCounts.notifications > 0) {
