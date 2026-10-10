@@ -72,6 +72,29 @@ interface IwaraAPI {
     @POST("/video/{id}/comments")
     suspend fun postVideoComment(@Path("id") id: String, @Body comment: CommentCreationDto): Comment
 
+    /**
+     * 获取用户资料的评论或回复分页列表。
+     *
+     * @param id 用户资料 ID（对应 ProfileDto 的 user.id）
+     * @param params 分页与二级回复筛选参数，如 page、parent
+     * @return 评论分页数据
+     */
+    @GET("/profile/{id}/comments")
+    suspend fun getProfileComments(
+        @Path("id") id: String,
+        @QueryMap params: Map<String, String>,
+    ): Pager<Comment>
+
+    /**
+     * 在用户资料主页发表新留言或二级回复。
+     *
+     * @param id 用户资料 ID（对应 ProfileDto 的 user.id）
+     * @param dto 包含正文与可选父评论 ID 的数据传输对象
+     * @return 发布成功的评论实体
+     */
+    @POST("/profile/{id}/comments")
+    suspend fun postProfileComment(@Path("id") id: String, @Body dto: CommentCreationDto): Comment
+
     @GET("/image/{id}") suspend fun getImage(@Path("id") id: String): Image
 
     @POST("/user/{id}/followers") suspend fun followUser(@Path("id") id: String): Response<Unit>

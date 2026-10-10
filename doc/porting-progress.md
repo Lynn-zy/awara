@@ -32,13 +32,13 @@
 
 ## 后续批次
 
-| 批次 | 范围                                    | 状态   |
-| ---- | --------------------------------------- | ------ |
-| 2    | 会话列表、消息发送与消息页面            | 已完成 |
-| 3    | 通知中心与通知计数                      | 已完成 |
-| 4    | 用户资料评论                            | 未开始 |
-| 5    | 下载分享、FileProvider 与播放器相关能力 | 未开始 |
-| 6    | 版本元数据、依赖与最终发布配置对齐      | 未开始 |
+| 批次 | 范围                                    | 状态             |
+| ---- | --------------------------------------- | ---------------- |
+| 2    | 会话列表、消息发送与消息页面            | 已完成           |
+| 3    | 通知中心与通知计数                      | 已完成           |
+| 4    | 用户资料评论与新建会话                  | 已完成           |
+| 5    | 下载分享、FileProvider 与播放器相关能力 | 未开始           |
+| 6    | 版本元数据、依赖与最终发布配置对齐      | 未开始           |
 
 ## 批次 2：会话列表与消息
 
@@ -58,12 +58,34 @@
 
 状态：已完成
 
+本地提交：`8aac009`（移植通知中心与通知计数）。
+
 - 计数 DTO 统一升级为 `NotificationCounts`，无旧类型别名；通知实体单独定义。
 - 接入 `/user/{userId}/notifications`，完成加载、空状态、错误重试和通知路由。
 - `newReply` 导航至视频，`newComment` 导航至资料页；未知类型提示，目标为空时禁止无效导航。
 - 手机/平板通知入口绑定登录用户，现有 IndexDrawer 计数刷新路径保留。
 - APK 未提供删除或标记已读接口，本批次不添加这些操作。
 - 校验：ktfmt 格式化、`git diff --check`、`:app:compileDebugKotlin` 均通过；未运行 APK 或调用生产 API。
+
+## 批次 4：用户资料评论与新建会话
+
+状态：已完成
+
+- 接入契约：
+  - `@GET("/profile/{id}/comments") suspend fun getProfileComments(@Path("id") id: String, @QueryMap params: Map<String, String>): Pager<Comment>`
+  - `@POST("/profile/{id}/comments") suspend fun postProfileComment(@Path("id") id: String, @Body dto: CommentCreationDto): Comment`
+  - `UserRepo.createConversation(userId: String, title: String, body: String, recipientId: String): ConversationCreatedDto`
+- 关键逻辑与架构：
+  - 严格核实实体结构：通过 APK 反编译及实体比对，确认主页评论接口与私信收件人均使用主页用户的真实 `ProfileDto.user.id`，未误用 `username` 或不存在的 `profile.id`。
+  - `CommentRepo` 扩充 `getProfileComments` 与 `postProfileComment` 仓库方法，支持多级回复与分页参数映射。
+  - `UserVM` 注入 `CommentRepo`，维护 `CommentState` 状态栈，实现 `loadComments/pushComment/popComment/jumpCommentPage/postComment`，并确保仅在 profile 加载成功后触发评论加载；异步异常与错误通过 `events` 暴露，协程取消异常 `CancellationException` 继续抛出。
+  - 会话创建逻辑在 `UserVM` 与 `UserPage` 完整闭环：通过现有的 `LocalDialogProvider` 挂载输入弹窗；前置非空校验、提交防重复与 loading 状态保护；成功关闭弹窗并跳转 `conversation/{id}/messages`，失败保留草稿并展示清晰反馈，避免在协程闭包内违规调用 Composable 的 `stringResource`。
+  - 主页第三标签将占位 `TodoStatus` 替换为 `CommentList`，`HorizontalPager` 的 `pageCount` 纠正为 3 并与 3 个 Tab 完全对齐；导航栏安全内边距复用 `WindowInsets.navigationBars`。
+  - 文本资源：在 `res/values/strings.xml` 中补齐新建会话相关的中文文案。
+- 验证限制与暂缓事项：
+  - ktfmt 格式化、`git diff --check`、`:app:compileDebugKotlin` 均通过；
+  - 留言加载失败可见，切换评论层级取消旧请求；发表评论和创建会话均具有 loading、防重复提交和 finally 清理；
+  - 未运行 APK，未调用生产 API。
 
 ## 验证限制与暂缓事项
 
