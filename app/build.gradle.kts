@@ -38,15 +38,18 @@ android {
             )
         }
     }
+    // 配置 Java 编译版本为 17，匹配本地环境与 Gradle 构建工具链
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
+    // 配置 Kotlin 编译目标字节码版本为 17
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "17"
     }
+    // 配置 Kotlin JVM 工具链版本为 17
     kotlin {
-        jvmToolchain(8)
+        jvmToolchain(17)
     }
     buildFeatures {
         compose = true
