@@ -11,6 +11,7 @@ import coil.memory.MemoryCache
 import me.rerere.awara.di.databaseModule
 import me.rerere.awara.di.networkModule
 import me.rerere.awara.di.repoModule
+import me.rerere.awara.di.tagI18NModule
 import me.rerere.awara.di.userCaseModule
 import me.rerere.awara.di.viewModelModule
 import me.rerere.awara.ui.registerErrorHandler
@@ -35,6 +36,7 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
                 networkModule,
                 databaseModule,
                 repoModule,
+                tagI18NModule,
                 viewModelModule,
                 userCaseModule
             )

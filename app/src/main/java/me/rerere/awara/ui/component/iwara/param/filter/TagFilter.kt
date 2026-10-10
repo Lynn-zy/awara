@@ -32,6 +32,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import kotlinx.coroutines.launch
@@ -40,10 +41,11 @@ import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.data.source.stringResource
+import me.rerere.awara.di.TagI18NResolver
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.iwara.param.FilterChipCloseIcon
 import me.rerere.awara.ui.component.iwara.param.FilterValue
-import org.koin.androidx.compose.get
+import org.koin.compose.koinInject
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -52,6 +54,8 @@ fun TagFilter(
     onValueAdd: (FilterValue) -> Unit,
     onValueRemove: (FilterValue) -> Unit
 ) {
+    val tagI18NResolver = koinInject<TagI18NResolver>()
+    val locales = LocalConfiguration.current.locales
     val currentTags by remember {
         derivedStateOf {
             values.filter { it.key == "tags" }
@@ -60,7 +64,7 @@ fun TagFilter(
 
     // query
     val message = LocalMessageProvider.current
-    val mediaRepo = get<MediaRepo>()
+    val mediaRepo = koinInject<MediaRepo>()
     val scope = rememberCoroutineScope()
     var query by remember {
         mutableStateOf("")
@@ -104,7 +108,7 @@ fun TagFilter(
                         onValueRemove(it)
                     },
                     label = {
-                        Text(it.value)
+                        Text(tagI18NResolver.tagName(it.value, locales))
                     },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = MaterialTheme.colorScheme.primary,
@@ -157,7 +161,7 @@ fun TagFilter(
                 ) {
                     items(queryResult) {
                         Text(
-                            text = it.id,
+                            text = tagI18NResolver.tagName(it.id, locales),
                             modifier = Modifier
                                 .clickable {
                                     onValueAdd(FilterValue("tags", it.id))

@@ -92,4 +92,6 @@
     <string name="friend_requests">Requests</string>
     <string name="friends_pending">Pending</string>
     <string name="friends_friends">Friends Already</string>
+    <string name="comment_failed">评论失败: %1$s</string>
+    <string name="comment_success">评论成功</string>
 </resources>

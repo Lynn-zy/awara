@@ -25,11 +25,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource as composeStringResource
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.MediaMetadata
 import com.google.android.exoplayer2.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.fixUrl
 import me.rerere.awara.data.entity.thumbnailUrl
@@ -152,17 +154,22 @@ fun  VideoPage(vm: VideoVM = koinViewModel()) {
 
                 is VideoVM.VideoEvent.CommentPostException -> {
                     message.error {
-                        Text("评论失败: ${it.throwable.message ?: it.throwable.javaClass.simpleName}")
+                        Text(
+                            composeStringResource(
+                                R.string.comment_failed,
+                                it.throwable.message ?: it.throwable.javaClass.simpleName
+                            )
+                        )
                     }
                 }
                 is VideoVM.VideoEvent.CommentPostFailed -> {
                     message.error {
-                        Text("评论失败: " + stringResource(it.error))
+                        Text(composeStringResource(R.string.comment_failed, stringResource(it.error)))
                     }
                 }
                 VideoVM.VideoEvent.CommentPosted -> {
                     message.success {
-                        Text("评论成功")
+                        Text(composeStringResource(R.string.comment_success))
                     }
                 }
             }
