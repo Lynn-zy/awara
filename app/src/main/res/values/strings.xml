@@ -94,4 +94,10 @@
     <string name="friends_friends">Friends Already</string>
     <string name="comment_failed">评论失败: %1$s</string>
     <string name="comment_success">评论成功</string>
+    <!-- 会话列表和消息详情共用的操作提示。 -->
+    <string name="conversations">会话</string>
+    <string name="messages">消息</string>
+    <string name="unread">未读</string>
+    <string name="message_body">输入消息</string>
+    <string name="send_message">发送消息</string>
 </resources>

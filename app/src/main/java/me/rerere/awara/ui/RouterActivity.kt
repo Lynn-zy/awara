@@ -65,10 +65,10 @@ class RouterActivity : ComponentActivity() {
                             splashScreen.setKeepOnScreenCondition { userState.refreshing }
                         }
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.background),
-                            contentAlignment = Alignment.Center
+                            modifier =
+                                Modifier.fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.background),
+                            contentAlignment = Alignment.Center,
                         ) {
                             if (!userState.refreshing) {
                                 Routes()
@@ -83,160 +83,110 @@ class RouterActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ContextProvider(
-        content: @Composable () -> Unit
-    ) {
-        MessageProvider {
-            DialogProvider {
-                content()
-            }
-        }
+    private fun ContextProvider(content: @Composable () -> Unit) {
+        MessageProvider { DialogProvider { content() } }
     }
 
     @Composable
     private fun Routes() {
         val navController = rememberAnimatedNavController()
-        CompositionLocalProvider(
-            LocalRouterProvider provides navController
-        ) {
+        CompositionLocalProvider(LocalRouterProvider provides navController) {
             AnimatedNavHost(
-                modifier = Modifier
-                    .fillMaxSize()
-                    // 防止夜间模式下切换页面闪白屏
-                    .background(MaterialTheme.colorScheme.background),
+                modifier =
+                    Modifier.fillMaxSize()
+                        // 防止夜间模式下切换页面闪白屏
+                        .background(MaterialTheme.colorScheme.background),
                 navController = navController,
                 startDestination = "index",
                 enterTransition = {
-                    slideInVertically(
-                        initialOffsetY = { 1000 },
-                        animationSpec = tween(300)
-                    ) + fadeIn(animationSpec = tween(300))
+                    slideInVertically(initialOffsetY = { 1000 }, animationSpec = tween(300)) +
+                        fadeIn(animationSpec = tween(300))
                 },
-                exitTransition = {
-                    fadeOut(animationSpec = tween(300))
-                },
-                popEnterTransition = {
-                    fadeIn(animationSpec = tween(300))
-                },
+                exitTransition = { fadeOut(animationSpec = tween(300)) },
+                popEnterTransition = { fadeIn(animationSpec = tween(300)) },
                 popExitTransition = {
-                    slideOutVertically(
-                        targetOffsetY = { 1000 },
-                        animationSpec = tween(300)
-                    ) + fadeOut(animationSpec = tween(100))
-                }
+                    slideOutVertically(targetOffsetY = { 1000 }, animationSpec = tween(300)) +
+                        fadeOut(animationSpec = tween(100))
+                },
             ) {
-                composable(
-                    route = "index",
-                    enterTransition = { null },
-                    exitTransition = { null },
-                ) {
+                composable(route = "index", enterTransition = { null }, exitTransition = { null }) {
                     IndexPage()
                 }
 
-                composable("login") {
-                    LoginPage()
-                }
+                composable("login") { LoginPage() }
 
                 composable(
                     route = "video/{id}",
-                    arguments = listOf(
-                        navArgument("id") {
-                            type = NavType.StringType
-                        }
-                    )
+                    arguments = listOf(navArgument("id") { type = NavType.StringType }),
                 ) {
                     VideoPage()
                 }
 
-                composable("image/{id}") {
-                    ImagePage()
-                }
+                composable("image/{id}") { ImagePage() }
 
-                composable("user/{id}") {
-                    UserPage()
-                }
+                composable("user/{id}") { UserPage() }
 
                 composable(
                     route = "user/{userId}/follow",
-                    arguments = listOf(
-                        navArgument("userId") {
-                            type = NavType.StringType
-                        }
-                    )
+                    arguments = listOf(navArgument("userId") { type = NavType.StringType }),
                 ) {
                     FollowPage()
                 }
 
                 composable(
                     route = "playlists/{userId}",
-                    arguments = listOf(
-                        navArgument("userId") {
-                            type = NavType.StringType
-                        }
-                    )
+                    arguments = listOf(navArgument("userId") { type = NavType.StringType }),
                 ) {
                     PlaylistsPage()
                 }
 
                 composable(
                     route = "playlist/{id}",
-                    arguments = listOf(
-                        navArgument("id") {
-                            type = NavType.StringType
-                        }
-                    )
+                    arguments = listOf(navArgument("id") { type = NavType.StringType }),
                 ) {
                     PlaylistDetailPage()
                 }
 
-                composable("favorites") {
-                    FavoritesPage()
-                }
+                composable("favorites") { FavoritesPage() }
 
-                composable("setting") {
-                    SettingPage()
-                }
+                composable("setting") { SettingPage() }
 
-                composable("search") {
-                    SearchPage()
-                }
+                composable("search") { SearchPage() }
 
-                composable("history") {
-                    HistoryPage()
-                }
+                composable("history") { HistoryPage() }
 
-                composable("download") {
-                    DownloadPage()
-                }
+                composable("download") { DownloadPage() }
 
-                composable("friends/{userId}?self={self}", arguments = listOf(
-                    navArgument("userId") {
-                        type = NavType.StringType
-                    },
-                    navArgument("self") {
-                        type = NavType.BoolType
-                        defaultValue = false
-                    }
-                )) {
+                composable(
+                    "friends/{userId}?self={self}",
+                    arguments =
+                        listOf(
+                            navArgument("userId") { type = NavType.StringType },
+                            navArgument("self") {
+                                type = NavType.BoolType
+                                defaultValue = false
+                            },
+                        ),
+                ) {
                     FriendsPage()
                 }
 
-                composable("conversations") {
+                // 会话列表明确绑定当前登录用户，不保留无参数的旧占位路由。
+                composable(
+                    "conversations/{userId}",
+                    arguments = listOf(navArgument("userId") { type = NavType.StringType }),
+                ) {
                     ConversationsPage()
                 }
 
                 composable(
-                    "message/{id}", arguments = listOf(
-                        navArgument("id") {
-                            type = NavType.StringType
-                        })
+                    "conversation/{id}/messages",
+                    arguments = listOf(navArgument("id") { type = NavType.StringType }),
                 ) {
                     MessagePage()
                 }
 
-                composable("lab") {
-                    LabPage()
-                }
+                composable("lab") { LabPage() }
             }
         }
     }

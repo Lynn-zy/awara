@@ -52,33 +52,22 @@ fun IndexPageTabletLayout(vm: IndexVM) {
     val pagerState = rememberPagerState()
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val navigations = remember(userState.user) {
-        indexNavigations.filter {
-            !it.needLogin || userState.user != null
+    val navigations =
+        remember(userState.user) {
+            indexNavigations.filter { !it.needLogin || userState.user != null }
         }
-    }
     ModalNavigationDrawer(
-        drawerContent = {
-            ModalDrawerSheet {
-                IndexDrawer(vm)
-            }
-        },
+        drawerContent = { ModalDrawerSheet { IndexDrawer(vm) } },
         drawerState = drawerState,
     ) {
         Row {
             NavigationRail {
                 navigations.forEachIndexed { index, indexNavigation ->
                     NavigationRailItem(
-                        icon = {
-                            indexNavigation.icon()
-                        },
-                        label = {
-                            indexNavigation.title()
-                        },
+                        icon = { indexNavigation.icon() },
+                        label = { indexNavigation.title() },
                         selected = pagerState.currentPage == index,
-                        onClick = {
-                            scope.launch { pagerState.animateScrollToPage(index) }
-                        }
+                        onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
                     )
                 }
             }
@@ -86,35 +75,35 @@ fun IndexPageTabletLayout(vm: IndexVM) {
                 topBar = {
                     TopAppBar(
                         title = {
-                            Text(
-                                text = userState.user?.name ?: stringResource(R.string.app_name)
-                            )
+                            Text(text = userState.user?.name ?: stringResource(R.string.app_name))
                         },
                         navigationIcon = {
                             Avatar(
                                 user = userState.user,
-                                onClick = {
-                                    scope.launch { drawerState.open() }
-                                },
+                                onClick = { scope.launch { drawerState.open() } },
                                 modifier = Modifier.size(32.dp),
-                                showOnlineStatus = false
+                                showOnlineStatus = false,
                             )
                         },
                         actions = {
                             Box {
                                 IconButton(
                                     onClick = {
-                                        navController.navigate("conversations")
-                                    }
+                                        userState.user?.let {
+                                            navController.navigate("conversations/${it.id}")
+                                        }
+                                    },
+                                    enabled = userState.user != null,
                                 ) {
-                                    Icon(Icons.Outlined.Message, null)
+                                    Icon(
+                                        Icons.Outlined.Message,
+                                        stringResource(R.string.conversations),
+                                    )
                                 }
 
-                                if(vm.state.notificationCounts.messages > 0) {
+                                if (vm.state.notificationCounts.messages > 0) {
                                     Badge(
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(4.dp)
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
                                     ) {
                                         Text(vm.state.notificationCounts.messages.toString())
                                     }
@@ -126,27 +115,21 @@ fun IndexPageTabletLayout(vm: IndexVM) {
                                     Icon(Icons.Outlined.Notifications, null)
                                 }
 
-                                if(vm.state.notificationCounts.notifications > 0) {
+                                if (vm.state.notificationCounts.notifications > 0) {
                                     Badge(
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(4.dp)
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
                                     ) {
                                         Text(vm.state.notificationCounts.notifications.toString())
                                     }
                                 }
                             }
 
-                            IconButton(
-                                onClick = {
-                                    navController.navigate("search")
-                                }
-                            ) {
+                            IconButton(onClick = { navController.navigate("search") }) {
                                 Icon(Icons.Outlined.Search, "Search")
                             }
-                        }
+                        },
                     )
-                },
+                }
             ) { innerPadding ->
                 NamedHorizontalPager(
                     state = pagerState,
@@ -167,9 +150,7 @@ fun IndexPageTabletLayout(vm: IndexVM) {
                         }
 
                         "forum" -> {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                TodoStatus()
-                            }
+                            Box(modifier = Modifier.fillMaxSize()) { TodoStatus() }
                         }
                     }
                 }
