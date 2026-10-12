@@ -108,6 +108,7 @@
     <string name="comment_load_failed">留言加载失败：%1$s</string>
     <string name="notification_new_reply">%1$s 回复了你的评论</string>
     <string name="notification_new_comment">%1$s 在你的主页留言</string>
+    <string name="notification_video_source">来自视频：%1$s</string>
     <string name="notification_unsupported">暂不支持的通知类型：%1$s</string>
     <!-- 用户资料页新建会话对话框与操作提示。 -->
     <string name="conversation_new">新建会话</string>

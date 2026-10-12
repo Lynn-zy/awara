@@ -1,8 +1,12 @@
 package me.rerere.awara.ui.page.notification
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,14 +14,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Comment
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Quickreply
+import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,7 +39,7 @@ import org.koin.androidx.compose.koinViewModel
 fun NotificationsPage(vm: NotificationsVM = koinViewModel()) {
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = { Text(stringResource(R.string.notifications)) },
                 navigationIcon = { BackButton() },
             )
@@ -87,22 +91,47 @@ private fun NotificationCard(notification: Notification) {
             "newComment" -> Icons.Outlined.Comment
             else -> Icons.Outlined.ErrorOutline
         }
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        onClick = { destination?.let(router::navigate) },
-        enabled = destination != null,
+    Card(
+        modifier =
+            Modifier.fillMaxWidth().clickable(enabled = destination != null) {
+                destination?.let(router::navigate)
+            }
     ) {
-        ListItem(
-            headlineContent = { Text(headline) },
-            overlineContent = { Text(notification.createdAt.toLocalDateTimeString()) },
-            supportingContent = {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = notification.createdAt.toLocalDateTimeString(),
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(icon, null)
                 Text(
-                    notification.comment?.body ?: "--",
-                    maxLines = 3,
+                    text = headline,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            },
-            leadingContent = { Icon(icon, null) },
-        )
+            }
+            Text(
+                text = notification.comment?.body ?: "--",
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // 视频标题允许多行展示，避免来源信息被截断。
+            notification.video
+                ?.title
+                ?.takeIf { it.isNotBlank() }
+                ?.let { videoTitle ->
+                    Text(
+                        text = stringResource(R.string.notification_video_source, videoTitle),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+        }
     }
 }
