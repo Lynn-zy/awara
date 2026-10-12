@@ -38,18 +38,10 @@ import me.rerere.awara.ui.component.common.SkeletonBox
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 
 @Composable
-fun MediaCard(
-    modifier: Modifier = Modifier,
-    media: Media
-) {
+fun MediaCard(modifier: Modifier = Modifier, media: Media) {
     val router = LocalRouterProvider.current
-    val workMode by rememberBooleanPreference(
-        key = "setting.work_mode",
-        default = false
-    )
-    val painter = rememberAsyncImagePainter(
-        model = media.thumbnailUrl()
-    )
+    val workMode by rememberBooleanPreference(key = "setting.work_mode", default = false)
+    val painter = rememberAsyncImagePainter(model = media.thumbnailUrl())
     Card(
         modifier = modifier,
         onClick = {
@@ -57,41 +49,34 @@ fun MediaCard(
                 is Video -> router.navigate("video/${media.id}")
                 is Image -> router.navigate("image/${media.id}")
             }
-        }
+        },
     ) {
         Box {
             Column {
                 SkeletonBox(
                     show = painter.state is AsyncImagePainter.State.Loading,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(220f / 160f),
+                    modifier = Modifier.fillMaxWidth().aspectRatio(220f / 160f),
                 ) {
                     Image(
                         painter = painter,
                         contentDescription = "Media Cover",
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(if (workMode) Modifier.blur(8.dp) else Modifier)
+                        modifier =
+                            Modifier.fillMaxSize()
+                                .then(if (workMode) Modifier.blur(8.dp) else Modifier),
                     )
                 }
 
-                Column(
-                    modifier = Modifier.padding(
-                        horizontal = 6.dp,
-                        vertical = 4.dp
-                    )
-                ) {
+                Column(modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                     Text(
                         text = media.title.trim(),
                         maxLines = 2,
-                        style = MaterialTheme.typography.labelLarge
+                        style = MaterialTheme.typography.labelLarge,
                     )
 
                     Row {
                         Text(
-                            text = media.user.name,
+                            text = media.user?.name.orEmpty(),
                             style = MaterialTheme.typography.labelMedium,
                             color = LocalContentColor.current.copy(alpha = 0.75f),
                         )
@@ -102,28 +87,22 @@ fun MediaCard(
                             imageVector = Icons.Outlined.FavoriteBorder,
                             contentDescription = null,
                             tint = LocalContentColor.current.copy(alpha = 0.75f),
-                            modifier = Modifier.height(
-                                16.dp
-                            )
+                            modifier = Modifier.height(16.dp),
                         )
                         Text(
                             text = media.numLikes.toString(),
                             style = MaterialTheme.typography.labelMedium,
-                            color = LocalContentColor.current.copy(alpha = 0.75f)
+                            color = LocalContentColor.current.copy(alpha = 0.75f),
                         )
                     }
                 }
             }
 
-            if(media is Video && media.private) {
-                Badge(
-                    modifier = Modifier
-                        .padding(4.dp)
-                        .align(Alignment.TopEnd)
-                ) {
+            if (media is Video && media.private) {
+                Badge(modifier = Modifier.padding(4.dp).align(Alignment.TopEnd)) {
                     Text(
                         text = stringResource(R.string.private_badge),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }

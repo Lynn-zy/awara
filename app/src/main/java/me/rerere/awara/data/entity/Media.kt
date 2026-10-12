@@ -1,12 +1,12 @@
 package me.rerere.awara.data.entity
 
+import java.time.Instant
 import kotlinx.serialization.Serializable
 import me.rerere.awara.util.InstantSerializer
 import me.rerere.awara.util.sha1
 import me.rerere.awara.util.toHex
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import java.time.Instant
 
 sealed interface Media {
     val id: String
@@ -19,7 +19,7 @@ sealed interface Media {
     val updatedAt: Instant
     val deletedAt: Instant?
     val slug: String?
-    val user: User
+    val user: User?
     val body: String?
     val tags: List<Tag>
 }
@@ -33,14 +33,12 @@ data class Video(
     override val numLikes: Int,
     override val numViews: Int,
     override val body: String?,
-    @Serializable(with = InstantSerializer::class)
-    override val createdAt: Instant,
-    @Serializable(with = InstantSerializer::class)
-    override val updatedAt: Instant,
-    @Serializable(with = InstantSerializer::class)
-    override val deletedAt: Instant?,
+    @Serializable(with = InstantSerializer::class) override val createdAt: Instant,
+    @Serializable(with = InstantSerializer::class) override val updatedAt: Instant,
+    @Serializable(with = InstantSerializer::class) override val deletedAt: Instant?,
     override val slug: String?,
-    override val user: User,
+    // 原版 1.1.3 的通知关联视频允许没有作者对象。
+    override val user: User?,
     override val tags: List<Tag>,
     val private: Boolean,
     val rating: String,
@@ -48,8 +46,8 @@ data class Video(
     val embedUrl: String?,
     val file: File?,
     val fileUrl: String?,
-    val thumbnail: Int
-): Media
+    val thumbnail: Int,
+) : Media
 
 @Serializable
 data class Image(
@@ -60,32 +58,32 @@ data class Image(
     override val numLikes: Int,
     override val numViews: Int,
     override val body: String?,
-    @Serializable(with = InstantSerializer::class)
-    override val createdAt: Instant,
-    @Serializable(with = InstantSerializer::class)
-    override val updatedAt: Instant,
-    @Serializable(with = InstantSerializer::class)
-    override val deletedAt: Instant?,
+    @Serializable(with = InstantSerializer::class) override val createdAt: Instant,
+    @Serializable(with = InstantSerializer::class) override val updatedAt: Instant,
+    @Serializable(with = InstantSerializer::class) override val deletedAt: Instant?,
     override val slug: String?,
     override val user: User,
     override val tags: List<Tag>,
     val numImages: Int,
     val rating: String,
     val files: List<File>,
-    val thumbnail: File
-): Media
+    val thumbnail: File,
+) : Media
 
-fun Media.thumbnailUrl(): String = when(this) {
-    is Video -> if (embedUrl != null) {
-        val url = embedUrl.toHttpUrlOrNull()
-        val id = url?.queryParameter("v") ?: url?.pathSegments?.lastOrNull() ?: ""
-        "https://i.iwara.tv/image/embed/thumbnail/youtube/$id"
-    } else run {
-        val id = this.thumbnail.toString().padStart(2, '0')
-        "https://i.iwara.tv/image/thumbnail/${file?.id}/thumbnail-$id.jpg"
+fun Media.thumbnailUrl(): String =
+    when (this) {
+        is Video ->
+            if (embedUrl != null) {
+                val url = embedUrl.toHttpUrlOrNull()
+                val id = url?.queryParameter("v") ?: url?.pathSegments?.lastOrNull() ?: ""
+                "https://i.iwara.tv/image/embed/thumbnail/youtube/$id"
+            } else
+                run {
+                    val id = this.thumbnail.toString().padStart(2, '0')
+                    "https://i.iwara.tv/image/thumbnail/${file?.id}/thumbnail-$id.jpg"
+                }
+        is Image -> "https://i.iwara.tv/image/thumbnail/${thumbnail.id}/${thumbnail.name}"
     }
-    is Image -> "https://i.iwara.tv/image/thumbnail/${thumbnail.id}/${thumbnail.name}"
-}
 
 val Video.signature: String
     get() {
