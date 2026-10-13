@@ -4,18 +4,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -24,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,7 +49,8 @@ import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.openUrl
-import me.rerere.awara.util.toLocalDateTimeString
+import me.rerere.awara.util.toDateDividerString
+import me.rerere.awara.util.toTimeString
 import org.koin.androidx.compose.koinViewModel
 
 /** 会话消息使用反向列表，将最近消息和输入区相邻显示。 */
@@ -78,15 +85,66 @@ fun MessagePage(vm: MessageVM = koinViewModel()) {
                     modifier = Modifier.fillMaxSize(),
                     onErrorRetry = vm::loadMessages,
                 ) {
+                    // 按时间升序按日期和发送者聚合，并逆序供反向列表渲染。
+                    val timelineItems =
+                        remember(vm.state.messages, userId) {
+                            val chronological = vm.state.messages.sortedBy { it.createdAt }
+                            val result = mutableListOf<ChatTimelineItem>()
+                            var currentGroup: MutableList<Message>? = null
+                            var currentDate: String? = null
+
+                            for (message in chronological) {
+                                val date = message.createdAt.toDateDividerString()
+                                if (date != currentDate) {
+                                    currentGroup?.let {
+                                        result.add(
+                                            ChatTimelineItem.MessageGroup(
+                                                it,
+                                                it.first().user.id == userId,
+                                            )
+                                        )
+                                    }
+                                    currentGroup = null
+                                    result.add(ChatTimelineItem.DateSeparator(date))
+                                    currentDate = date
+                                }
+
+                                if (
+                                    currentGroup != null &&
+                                        currentGroup.last().user.id == message.user.id
+                                ) {
+                                    currentGroup.add(message)
+                                } else {
+                                    currentGroup?.let {
+                                        result.add(
+                                            ChatTimelineItem.MessageGroup(
+                                                it,
+                                                it.first().user.id == userId,
+                                            )
+                                        )
+                                    }
+                                    currentGroup = mutableListOf(message)
+                                }
+                            }
+                            currentGroup?.let {
+                                result.add(
+                                    ChatTimelineItem.MessageGroup(it, it.first().user.id == userId)
+                                )
+                            }
+                            result.reversed()
+                        }
                     LazyColumn(
                         reverseLayout = true,
-                        contentPadding = PaddingValues(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        // 数据按时间倒序，索引 0 位于列表底部。
-                        items(vm.state.messages, key = { it.id }) { message ->
-                            MessageRow(message, self = message.user.id == userId)
+                        items(timelineItems, key = { it.key }) { item ->
+                            when (item) {
+                                is ChatTimelineItem.DateSeparator -> DateSeparatorRow(item.date)
+                                is ChatTimelineItem.MessageGroup ->
+                                    MessageGroupRow(item.messages, self = item.self)
+                            }
                         }
                     }
                 }
@@ -123,43 +181,124 @@ fun MessagePage(vm: MessageVM = koinViewModel()) {
     }
 }
 
-/** 根据发送者区分消息方向，复用头像与 Markdown 富文本呈现。 */
+/** 聊天时间轴项：日期分隔线或消息聚合组。 */
+private sealed interface ChatTimelineItem {
+    val key: String
+
+    data class DateSeparator(val date: String) : ChatTimelineItem {
+        override val key: String
+            get() = "date_$date"
+    }
+
+    data class MessageGroup(val messages: List<Message>, val self: Boolean) : ChatTimelineItem {
+        override val key: String
+            get() = "msg_${messages.first().id}"
+    }
+}
+
+/** 居中显示的低对比度日期分割线，避免在移动端上过于突兀。 */
 @Composable
-private fun MessageRow(message: Message, self: Boolean) {
-    val router = LocalRouterProvider.current
-    val context = LocalContext.current
+private fun DateSeparatorRow(date: String) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Divider(
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+            thickness = 0.5.dp,
+        )
+        Text(
+            text = date,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+        )
+        Divider(
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+            thickness = 0.5.dp,
+        )
+    }
+}
+
+/** 左右贴边的消息聚合组；连续发送时头像与名称只在顶部显示一次。 */
+@Composable
+private fun MessageGroupRow(messages: List<Message>, self: Boolean) {
+    val router = LocalRouterProvider.current
+    val user = messages.first().user
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         horizontalArrangement = if (self) Arrangement.End else Arrangement.Start,
     ) {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color =
-                if (self) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth(0.9f),
+        if (!self) {
+            Avatar(
+                user = user,
+                modifier = Modifier.size(36.dp),
+                onClick = { router.navigate("user/${user.username}") },
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+
+        Column(
+            modifier = Modifier.weight(1f, fill = false),
+            horizontalAlignment = if (self) Alignment.End else Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Avatar(
-                        user = message.user,
-                        modifier = Modifier.size(32.dp),
-                        onClick = { router.navigate("user/${message.user.username}") },
-                    )
-                    Text(message.user.name, style = MaterialTheme.typography.labelLarge)
-                }
-                RichText(text = message.body, onLinkClick = { context.openUrl(it) })
-                Text(
-                    message.createdAt.toLocalDateTimeString(),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
+            Text(
+                text = user.name,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier =
+                    Modifier.padding(
+                        start = if (self) 0.dp else 4.dp,
+                        end = if (self) 4.dp else 0.dp,
+                        bottom = 2.dp,
+                    ),
+            )
+
+            messages.forEach { message -> MessageBubble(message = message, self = self) }
+        }
+
+        if (self) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Avatar(
+                user = user,
+                modifier = Modifier.size(36.dp),
+                onClick = { router.navigate("user/${user.username}") },
+            )
+        }
+    }
+}
+
+/** 独立消息气泡，末端底部显示发送时间。 */
+@Composable
+private fun MessageBubble(message: Message, self: Boolean) {
+    val context = LocalContext.current
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color =
+            if (self) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor =
+            if (self) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            RichText(
+                text = message.body,
+                style = MaterialTheme.typography.bodyMedium.copy(color = LocalContentColor.current),
+                onLinkClick = { context.openUrl(it) },
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = message.createdAt.toTimeString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = LocalContentColor.current.copy(alpha = 0.65f),
+            )
         }
     }
 }

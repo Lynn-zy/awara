@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
@@ -81,7 +82,7 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
     }
 }
 
-/** 展示会话参与者、未读标识与最后一条消息摘要。 */
+/** 展示对方昵称、会话标题与最后回复时间；接口的 lastMessage 存在滞后，故不展示最后一条消息。 */
 @Composable
 private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
     val selfId = LocalUserStore.current.collectAsState().user?.id
@@ -89,6 +90,12 @@ private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
     val participant =
         conversation.participants.firstOrNull { it.id != selfId }
             ?: conversation.participants.firstOrNull()
+    // 只展示对方昵称；排除自己后为空时回退到全部参与者。
+    val otherNames =
+        conversation.participants
+            .filter { it.id != selfId }
+            .ifEmpty { conversation.participants }
+            .joinToString { it.name }
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -101,16 +108,22 @@ private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
             ) {
                 participant?.let { Avatar(user = it, modifier = Modifier.size(48.dp)) }
 
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    // 会话标题层级高于参与者昵称。
                     Text(
                         text = conversation.title,
                         style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = conversation.participants.joinToString { it.name },
-                        style = MaterialTheme.typography.labelMedium,
+                        text = otherNames,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -120,12 +133,6 @@ private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
                     Badge { Text(stringResource(R.string.unread)) }
                 }
             }
-
-            Text(
-                text = conversation.lastMessage.body,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
 
             Text(
                 text = conversation.updatedAt.toLocalDateTimeString(),
