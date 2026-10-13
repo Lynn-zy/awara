@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoMode
 import androidx.compose.material.icons.outlined.ColorLens
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -17,15 +18,24 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import me.rerere.awara.R
+import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.Avatar
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.util.openUrl
 import me.rerere.compose_setting.components.SettingItemCategory
 import me.rerere.compose_setting.components.types.SettingBooleanItem
@@ -34,12 +44,37 @@ import me.rerere.compose_setting.components.types.SettingPickerItem
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberIntPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
+import org.koin.compose.koinInject
 
 @Composable
 fun SettingPage() {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val router = LocalRouterProvider.current
+    val downloadStorage: DownloadStorage = koinInject()
+    var showDownloadDirectoryDialog by remember { mutableStateOf(false) }
+    var directoryUri by
+        rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = "")
+    val directoryLabel by
+        produceState(
+            initialValue =
+                if (directoryUri.isBlank()) DownloadStorage.DEFAULT_DIRECTORY_LABEL
+                else directoryUri,
+            key1 = directoryUri,
+            key2 = downloadStorage,
+        ) {
+            value = withContext(Dispatchers.IO) { downloadStorage.directoryLabel(directoryUri) }
+        }
+    if (showDownloadDirectoryDialog) {
+        DownloadDirectoryDialog(
+            onDismiss = {
+                directoryUri = downloadStorage.directoryUri()
+                showDownloadDirectoryDialog = false
+            },
+            downloadStorage = downloadStorage,
+            onDirectoryChanged = { directoryUri = it },
+        )
+    }
     Scaffold(
         topBar = {
             LargeTopAppBar(
@@ -146,6 +181,17 @@ fun SettingPage() {
                         text = {
                             Text(stringResource(R.string.setting_player_download_player_text))
                         },
+                    )
+                }
+            }
+
+            item {
+                SettingItemCategory(title = { Text(stringResource(R.string.setting_download)) }) {
+                    SettingLinkItem(
+                        title = { Text(stringResource(R.string.download_directory_title)) },
+                        text = { Text(directoryLabel) },
+                        icon = { Icon(Icons.Outlined.Folder, null) },
+                        onClick = { showDownloadDirectoryDialog = true },
                     )
                 }
             }

@@ -13,9 +13,8 @@ android {
         applicationId = "me.rerere.awara"
         minSdk = 26
         targetSdk = 33
-        // 版本元数据与目标 APK 1.1.3 对齐。
-        versionCode = 14
-        versionName = "1.1.3"
+        versionCode = 15
+        versionName = "1.1.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -24,6 +23,8 @@ android {
 
     buildTypes {
         release {
+            // 本次测试包经用户确认使用调试证书，不能用于正式发布。
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -54,6 +55,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.1")
     implementation("androidx.activity:activity-compose:1.7.1")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // MDC (仅用于提供动态取色算法，用于在视频页面动态取色)
     implementation("com.google.android.material:material:1.9.0")
@@ -124,7 +126,6 @@ dependencies {
     // Profile Installer
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 
-    // Leak Canary
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.10")
 
     // Test

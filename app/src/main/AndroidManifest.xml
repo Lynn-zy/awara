@@ -1,49 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <application
-        android:name=".App"
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:localeConfig="@xml/locale_config"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.App.Starting"
-        tools:targetApi="tiramisu">
-
-        <!-- 只读内容提供器：向第三方播放器授予下载视频的临时读取权限（仅暴露 Download/ 子目录） -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.provider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/files_provider" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <application android:name=".App" android:allowBackup="true" android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="@xml/backup_rules" android:icon="@mipmap/ic_launcher" android:label="@string/app_name" android:localeConfig="@xml/locale_config" android:roundIcon="@mipmap/ic_launcher_round" android:supportsRtl="true" android:theme="@style/Theme.App.Starting" tools:targetApi="tiramisu">
+        <!-- Android 8–9 仅共享公共 Download/Awara 中的视频，外部播放只授予临时读取权限。 -->
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.provider" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/files_provider" />
         </provider>
-
-        <activity
-            android:name=".ui.RouterActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode|smallestScreenSize|layoutDirection|fontScale|density|screenLayout|layoutDirection|locale|colorMode"
-            android:exported="true"
-            android:windowSoftInputMode="adjustResize">
+        <activity android:name=".ui.RouterActivity" android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode|smallestScreenSize|layoutDirection|fontScale|density|screenLayout|layoutDirection|locale|colorMode" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".ui.ErrorActivity"
-            android:theme="@style/Theme.Awara" />
+        <activity android:name=".ui.ErrorActivity" android:theme="@style/Theme.Awara" />
     </application>
 </manifest>

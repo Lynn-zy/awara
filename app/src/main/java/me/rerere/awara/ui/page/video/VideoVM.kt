@@ -7,7 +7,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import java.time.Instant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import me.rerere.awara.data.entity.CommentCreationDto
 import me.rerere.awara.data.entity.HistoryItem
@@ -32,7 +36,6 @@ import me.rerere.awara.ui.component.iwara.comment.push
 import me.rerere.awara.ui.component.iwara.comment.updatePage
 import me.rerere.awara.ui.component.iwara.comment.updateTopStack
 import me.rerere.awara.util.JsonInstance
-import java.time.Instant
 
 private const val TAG = "VideoVM"
 
@@ -41,12 +44,15 @@ class VideoVM(
     private val mediaRepo: MediaRepo,
     private val userRepo: UserRepo,
     private val commentRepo: CommentRepo,
-    private val appDatabase: AppDatabase
+    private val appDatabase: AppDatabase,
 ) : ViewModel() {
     val id = checkNotNull(savedStateHandle.get<String>("id"))
     var state by mutableStateOf(VideoState())
         private set
+
     val events = MutableSharedFlow<VideoEvent>()
+    // 切换或重试时取消上一次请求，避免旧响应覆盖当前作者作品列表
+    private var userMoreVideosJob: Job? = null
 
     init {
         getVideo()
@@ -54,21 +60,26 @@ class VideoVM(
         loadPlaylistForVideo()
     }
 
-    suspend fun isVideoAlreadyDownloaded() = appDatabase.downloadDao().getDownloadItem(resourceId = id) != null
+    suspend fun isVideoAlreadyDownloaded() =
+        appDatabase.downloadDao().getDownloadItem(resourceId = id) != null
 
     private fun writeHistory() {
         viewModelScope.launch {
-            kotlin.runCatching {
-                appDatabase.historyDao().insertHistory(HistoryItem(
-                    time = Instant.now(),
-                    type = HistoryType.VIDEO,
-                    resourceId = id,
-                    title = state.video?.title ?: "",
-                    thumbnail = state.video?.thumbnailUrl() ?: ""
-                ))
-            }.onFailure {
-                it.printStackTrace()
-            }
+            kotlin
+                .runCatching {
+                    appDatabase
+                        .historyDao()
+                        .insertHistory(
+                            HistoryItem(
+                                time = Instant.now(),
+                                type = HistoryType.VIDEO,
+                                resourceId = id,
+                                title = state.video?.title ?: "",
+                                thumbnail = state.video?.thumbnailUrl() ?: "",
+                            )
+                        )
+                }
+                .onFailure { it.printStackTrace() }
         }
     }
 
@@ -76,70 +87,126 @@ class VideoVM(
         viewModelScope.launch {
             state = state.copy(loading = true, private = false)
             runAPICatching {
-                val video = mediaRepo.getVideo(id)
-                val urls = mediaRepo.parseVideoUrl(video).filter {
-                    it.name != "preview" // 忽略预览视频
+                    val video = mediaRepo.getVideo(id)
+                    val urls =
+                        mediaRepo.parseVideoUrl(video).filter {
+                            it.name != "preview" // 忽略预览视频
+                        }
+                    video to urls
                 }
-                video to urls
-            }.onSuccess {
-                state = state.copy(video = it.first, urls = it.second)
-                events.emit(VideoEvent.UrlLoaded(it.second))
+                .onSuccess {
+                    state = state.copy(video = it.first, urls = it.second)
+                    events.emit(VideoEvent.UrlLoaded(it.second))
 
-                writeHistory()
-            }.onError {
-                Log.w(TAG, "getVideo: $it")
-
-                if(it.message == "errors.privateVideo") {
-                    state = state.copy(
-                        private = true,
-                        privateUser = it.data?.get("user")?.let { JsonInstance.decodeFromJsonElement(User.serializer(), it) }
-                    )
+                    loadUserMoreVideos()
+                    writeHistory()
                 }
-            }.onException {
-                Log.w(TAG, "getVideo: ${it.exception}")
-            }
+                .onError {
+                    Log.w(TAG, "getVideo: $it")
+
+                    if (it.message == "errors.privateVideo") {
+                        state =
+                            state.copy(
+                                private = true,
+                                privateUser =
+                                    it.data?.get("user")?.let {
+                                        JsonInstance.decodeFromJsonElement(User.serializer(), it)
+                                    },
+                            )
+                    }
+                }
+                .onException { Log.w(TAG, "getVideo: ${it.exception}") }
             state = state.copy(loading = false)
         }
 
         viewModelScope.launch {
-            runAPICatching {
-                mediaRepo.getRelatedVideos(id)
-            }.onSuccess {
-                state = state.copy(relatedVideos = it.results)
-            }.onError {
-                Log.w(TAG, "getRelatedVideos: $it")
-            }.onException {
-                Log.w(TAG, "getRelatedVideos: ${it.exception}")
-            }
+            runAPICatching { mediaRepo.getRelatedVideos(id) }
+                .onSuccess {
+                    state =
+                        state.copy(relatedVideos = it.results.filter { video -> video.id != id })
+                }
+                .onError { Log.w(TAG, "getRelatedVideos: $it") }
+                .onException { Log.w(TAG, "getRelatedVideos: ${it.exception}") }
         }
+    }
+
+    fun loadUserMoreVideos() {
+        userMoreVideosJob?.cancel()
+        val userId = state.video?.user?.id?.takeIf { it.isNotBlank() }
+        if (userId == null) {
+            state =
+                state.copy(
+                    userMoreVideos = emptyList(),
+                    userMoreVideosLoading = false,
+                    userMoreVideosError = null,
+                )
+            return
+        }
+        state = state.copy(userMoreVideosLoading = true, userMoreVideosError = null)
+        userMoreVideosJob =
+            viewModelScope.launch {
+                try {
+                    runAPICatching {
+                            mediaRepo.getVideoList(
+                                mapOf("user" to userId, "limit" to "6", "exclude" to id)
+                            )
+                        }
+                        .onSuccess { pager ->
+                            if (state.video?.user?.id == userId) {
+                                state =
+                                    state.copy(
+                                        userMoreVideos =
+                                            pager.results.filter { video -> video.id != id },
+                                        userMoreVideosError = null,
+                                    )
+                            }
+                        }
+                        .onError { error ->
+                            Log.w(TAG, "loadUserMoreVideos: $error")
+                            if (state.video?.user?.id == userId) {
+                                state = state.copy(userMoreVideosError = error.message)
+                            }
+                        }
+                        .onException { exception ->
+                            if (exception.exception is CancellationException) {
+                                throw exception.exception
+                            }
+                            Log.w(TAG, "loadUserMoreVideos: ${exception.exception}")
+                            if (state.video?.user?.id == userId) {
+                                state =
+                                    state.copy(
+                                        userMoreVideosError =
+                                            exception.exception.message
+                                                ?: exception.exception.javaClass.simpleName
+                                    )
+                            }
+                        }
+                } finally {
+                    if (isActive) {
+                        state = state.copy(userMoreVideosLoading = false)
+                    }
+                }
+            }
     }
 
     fun createPlaylist(title: String) {
         viewModelScope.launch {
-            runAPICatching {
-                mediaRepo.createPlaylist(title)
-            }.onSuccess {
-                loadPlaylistForVideo()
-            }.onError {
-                Log.w(TAG, "createPlaylist: $it")
-            }.onException {
-                Log.w(TAG, "createPlaylist: ${it.exception}")
-            }
+            runAPICatching { mediaRepo.createPlaylist(title) }
+                .onSuccess { loadPlaylistForVideo() }
+                .onError { Log.w(TAG, "createPlaylist: $it") }
+                .onException { Log.w(TAG, "createPlaylist: ${it.exception}") }
         }
     }
 
     fun loadPlaylistForVideo() {
         viewModelScope.launch {
-            runAPICatching {
-                mediaRepo.getLightPlaylist(id)
-            }.onSuccess {
-                Log.i(TAG, "loadPlaylistForVideo: $it")
-                state = state.copy(playlist = it)
-            }.onError {
-                Log.w(TAG, "loadPlaylistForVideo: $it")
-            }.onException {
-                Log.w(TAG, "loadPlaylistForVideo: ${it.exception}")
-            }
+            runAPICatching { mediaRepo.getLightPlaylist(id) }
+                .onSuccess {
+                    Log.i(TAG, "loadPlaylistForVideo: $it")
+                    state = state.copy(playlist = it)
+                }
+                .onError { Log.w(TAG, "loadPlaylistForVideo: $it") }
+                .onException { Log.w(TAG, "loadPlaylistForVideo: ${it.exception}") }
         }
     }
 
@@ -147,19 +214,18 @@ class VideoVM(
         viewModelScope.launch {
             state = state.copy(likeLoading = true)
             runAPICatching {
-                val video = state.video ?: return@runAPICatching
-                state = if (video.liked) {
-                    mediaRepo.unlikeVideo(video.id)
-                    state.copy(video = video.copy(liked = false))
-                } else {
-                    mediaRepo.likeVideo(video.id)
-                    state.copy(video = video.copy(liked = true))
+                    val video = state.video ?: return@runAPICatching
+                    state =
+                        if (video.liked) {
+                            mediaRepo.unlikeVideo(video.id)
+                            state.copy(video = video.copy(liked = false))
+                        } else {
+                            mediaRepo.likeVideo(video.id)
+                            state.copy(video = video.copy(liked = true))
+                        }
                 }
-            }.onError {
-                Log.w(TAG, "likeOrUnlike(error): $it")
-            }.onException {
-                Log.w(TAG, "likeOrUnlike(exception)", it.exception)
-            }
+                .onError { Log.w(TAG, "likeOrUnlike(error): $it") }
+                .onException { Log.w(TAG, "likeOrUnlike(exception)", it.exception) }
             state = state.copy(likeLoading = false)
         }
     }
@@ -167,14 +233,13 @@ class VideoVM(
     fun followOrUnfollow() {
         viewModelScope.launch {
             runAPICatching {
-                if(state.video?.user?.following == true) {
-                    userRepo.unfollowUser(state.video?.user?.id ?: return@runAPICatching)
-                } else {
-                    userRepo.followUser(state.video?.user?.id ?: return@runAPICatching)
+                    if (state.video?.user?.following == true) {
+                        userRepo.unfollowUser(state.video?.user?.id ?: return@runAPICatching)
+                    } else {
+                        userRepo.followUser(state.video?.user?.id ?: return@runAPICatching)
+                    }
                 }
-            }.onSuccess {
-                getVideo()
-            }
+                .onSuccess { getVideo() }
         }
     }
 
@@ -188,64 +253,62 @@ class VideoVM(
         viewModelScope.launch {
             val currentCommentState = state.commentState.stack.last()
             runAPICatching {
-                if (currentCommentState.parent != null) {
-                    commentRepo.getVideoCommentReplies(
-                        id,
-                        currentCommentState.page - 1,
-                        currentCommentState.parent
-                    )
-                } else {
-                    commentRepo.getVideoComments(id, currentCommentState.page - 1)
-                }
-            }.onSuccess {
-                state = state.copy(
-                    commentState = state.commentState.updateTopStack(
-                        currentCommentState.copy(
-                            comments = it.results,
-                            limit = it.limit,
-                            total = it.count,
+                    if (currentCommentState.parent != null) {
+                        commentRepo.getVideoCommentReplies(
+                            id,
+                            currentCommentState.page - 1,
+                            currentCommentState.parent,
                         )
-                    )
-                )
-                Log.i(TAG, "loadComments: $it")
-            }.onError {
-                Log.w(TAG, "loadComments(error): $it")
-            }.onException {
-                Log.w(TAG, "loadComments(exception)", it.exception)
-            }
+                    } else {
+                        commentRepo.getVideoComments(id, currentCommentState.page - 1)
+                    }
+                }
+                .onSuccess {
+                    state =
+                        state.copy(
+                            commentState =
+                                state.commentState.updateTopStack(
+                                    currentCommentState.copy(
+                                        comments = it.results,
+                                        limit = it.limit,
+                                        total = it.count,
+                                    )
+                                )
+                        )
+                    Log.i(TAG, "loadComments: $it")
+                }
+                .onError { Log.w(TAG, "loadComments(error): $it") }
+                .onException { Log.w(TAG, "loadComments(exception)", it.exception) }
             state = state.copy(commentState = state.commentState.copy(loading = false))
         }
     }
 
     fun pushComment(id: String) {
-        state = state.copy(
-            commentState = state.commentState.push(id)
-        )
+        state = state.copy(commentState = state.commentState.push(id))
         loadComments()
     }
 
     fun popComment() {
-        state = state.copy(
-            commentState = state.commentState.pop()
-        )
+        state = state.copy(commentState = state.commentState.pop())
     }
 
     fun postComment(it: CommentCreationDto) {
         viewModelScope.launch {
-            runAPICatching {
-                commentRepo.postVideoComment(id, it.body, it.parentId)
-            }.onSuccess {
-                events.emit(VideoEvent.CommentPosted)
-                Log.i(TAG, "postComment: $it")
-                // 重新加载评论
-                loadComments()
-            }.onError {
-                events.emit(VideoEvent.CommentPostFailed(it))
-                Log.w(TAG, "postComment(error): $it")
-            }.onException {
-                events.emit(VideoEvent.CommentPostException(it.exception))
-                Log.w(TAG, "postComment(exception)", it.exception)
-            }
+            runAPICatching { commentRepo.postVideoComment(id, it.body, it.parentId) }
+                .onSuccess {
+                    events.emit(VideoEvent.CommentPosted)
+                    Log.i(TAG, "postComment: $it")
+                    // 重新加载评论
+                    loadComments()
+                }
+                .onError {
+                    events.emit(VideoEvent.CommentPostFailed(it))
+                    Log.w(TAG, "postComment(error): $it")
+                }
+                .onException {
+                    events.emit(VideoEvent.CommentPostException(it.exception))
+                    Log.w(TAG, "postComment(exception)", it.exception)
+                }
         }
     }
 
@@ -253,17 +316,12 @@ class VideoVM(
         viewModelScope.launch {
             state = state.copy(playlistLoading = true)
             runAPICatching {
-                mediaRepo.addVideoToPlaylist(playlistId, id)
-                mediaRepo.getLightPlaylist(id).let {
-                    state = state.copy(playlist = it)
+                    mediaRepo.addVideoToPlaylist(playlistId, id)
+                    mediaRepo.getLightPlaylist(id).let { state = state.copy(playlist = it) }
                 }
-            }.onSuccess {
-                Log.i(TAG, "addVideoToPlaylist: $it")
-            }.onError {
-                Log.w(TAG, "addVideoToPlaylist(error): $it")
-            }.onException {
-                Log.w(TAG, "addVideoToPlaylist(exception)", it.exception)
-            }
+                .onSuccess { Log.i(TAG, "addVideoToPlaylist: $it") }
+                .onError { Log.w(TAG, "addVideoToPlaylist(error): $it") }
+                .onException { Log.w(TAG, "addVideoToPlaylist(exception)", it.exception) }
             state = state.copy(playlistLoading = false)
         }
     }
@@ -272,17 +330,12 @@ class VideoVM(
         viewModelScope.launch {
             state = state.copy(playlistLoading = true)
             runAPICatching {
-                mediaRepo.removeVideoFromPlaylist(playlistId, id)
-                mediaRepo.getLightPlaylist(id).let {
-                    state = state.copy(playlist = it)
+                    mediaRepo.removeVideoFromPlaylist(playlistId, id)
+                    mediaRepo.getLightPlaylist(id).let { state = state.copy(playlist = it) }
                 }
-            }.onSuccess {
-                Log.i(TAG, "removeVideoFromPlaylist: $it")
-            }.onError {
-                Log.w(TAG, "removeVideoFromPlaylist(error): $it")
-            }.onException {
-                Log.w(TAG, "removeVideoFromPlaylist(exception)", it.exception)
-            }
+                .onSuccess { Log.i(TAG, "removeVideoFromPlaylist: $it") }
+                .onError { Log.w(TAG, "removeVideoFromPlaylist(error): $it") }
+                .onException { Log.w(TAG, "removeVideoFromPlaylist(exception)", it.exception) }
             state = state.copy(playlistLoading = false)
         }
     }
@@ -294,6 +347,9 @@ class VideoVM(
         val privateUser: User? = null,
         val urls: List<VideoFile> = emptyList(),
         val relatedVideos: List<Video> = emptyList(),
+        val userMoreVideos: List<Video> = emptyList(),
+        val userMoreVideosLoading: Boolean = false,
+        val userMoreVideosError: String? = null,
         val likeLoading: Boolean = false,
         val commentState: CommentState = CommentState(),
         val playlist: List<Playlist> = emptyList(),
@@ -304,7 +360,9 @@ class VideoVM(
         class UrlLoaded(val urls: List<VideoFile>) : VideoEvent()
 
         object CommentPosted : VideoEvent()
+
         class CommentPostFailed(val error: APIResult.Error) : VideoEvent()
+
         class CommentPostException(val throwable: Throwable) : VideoEvent()
     }
 }

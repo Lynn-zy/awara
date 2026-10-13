@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
-import me.rerere.awara.ui.component.hitokoto.Hitokoto
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.RequireLoginVisible
 import me.rerere.awara.ui.stores.LocalUserStore
@@ -53,27 +52,19 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
     val message = LocalMessageProvider.current
 
     LaunchedEffect(userState.user?.id) {
-        userState.user?.id?.let { userId ->
-            vm.loadCounts(userId)
-        }
+        userState.user?.id?.let { userId -> vm.loadCounts(userId) }
     }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .padding(16.dp)
-            .height(IntrinsicSize.Min),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        modifier = Modifier.padding(16.dp).height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Avatar(
-            modifier = Modifier
-                .fillMaxHeight()
-                .aspectRatio(1f),
+            modifier = Modifier.fillMaxHeight().aspectRatio(1f),
             user = userState.user,
-            onClick = {
-                router.navigate("login")
-            },
-            showOnlineStatus = false
+            onClick = { router.navigate("login") },
+            showOnlineStatus = false,
         )
         Column {
             // User nick name
@@ -97,9 +88,7 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
         IconButton(
             onClick = {
                 userStore(UserStoreAction.Logout)
-                message.info {
-                    Text("已登出")
-                }
+                message.info { Text("已登出") }
             }
         ) {
             Icon(Icons.Outlined.ExitToApp, "Logout")
@@ -109,83 +98,58 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
     RequireLoginVisible {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         ) {
             Card(
                 modifier = Modifier.weight(1f),
-                onClick = {
-                    router.navigate("user/${userState.user?.id}/follow")
-                }
+                onClick = { router.navigate("user/${userState.user?.id}/follow") },
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Text(
                         text = vm.state.followingCount.toString(),
-                        style = MaterialTheme.typography.titleLarge
+                        style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
                         text = stringResource(R.string.following),
-                        style = MaterialTheme.typography.labelLarge
+                        style = MaterialTheme.typography.labelLarge,
                     )
                 }
             }
 
             Card(
                 modifier = Modifier.weight(1f),
-                onClick = {
-                    router.navigate("user/${userState.user?.id}/follow")
-                }
+                onClick = { router.navigate("user/${userState.user?.id}/follow") },
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Text(
                         text = vm.state.followerCount.toString(),
-                        style = MaterialTheme.typography.titleLarge
+                        style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
                         text = stringResource(R.string.follower),
-                        style = MaterialTheme.typography.labelLarge
+                        style = MaterialTheme.typography.labelLarge,
                     )
                 }
             }
 
-
             Card(
                 modifier = Modifier.weight(1f),
-                onClick = {
-                    router.navigate("friends/${userState.user?.id}?self=true")
-                }
+                onClick = { router.navigate("friends/${userState.user?.id}?self=true") },
             ) {
                 Box {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                    ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                         Text(
                             text = vm.state.friendsCount.toString(),
-                            style = MaterialTheme.typography.titleLarge
+                            style = MaterialTheme.typography.titleLarge,
                         )
                         Text(
                             text = stringResource(R.string.friends),
-                            style = MaterialTheme.typography.labelLarge
+                            style = MaterialTheme.typography.labelLarge,
                         )
                     }
 
                     if (vm.state.notificationCounts.friendRequests > 0) {
-                        Badge(
-                            modifier = Modifier
-                                .padding(8.dp)
-                                .align(Alignment.TopEnd)
-                        ) {
+                        Badge(modifier = Modifier.padding(8.dp).align(Alignment.TopEnd)) {
                             Text(vm.state.notificationCounts.friendRequests.toString())
                         }
                     }
@@ -196,81 +160,37 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
 
     RequireLoginVisible {
         DrawerItem(
-            icon = {
-                Icon(Icons.Outlined.FavoriteBorder, "Favorite")
-            },
-            label = {
-                Text(stringResource(R.string.drawer_favorite))
-            },
-            onClick = {
-                router.navigate("favorites")
-            }
+            icon = { Icon(Icons.Outlined.FavoriteBorder, "Favorite") },
+            label = { Text(stringResource(R.string.drawer_favorite)) },
+            onClick = { router.navigate("favorites") },
         )
     }
 
     RequireLoginVisible {
         DrawerItem(
-            icon = {
-                Icon(Icons.Outlined.FeaturedPlayList, "PlayList")
-            },
-            label = {
-                Text(stringResource(R.string.drawer_playlists))
-            },
-            onClick = {
-                userState.user?.id?.let { userId ->
-                    router.navigate("playlists/$userId")
-                }
-            }
+            icon = { Icon(Icons.Outlined.FeaturedPlayList, "PlayList") },
+            label = { Text(stringResource(R.string.drawer_playlists)) },
+            onClick = { userState.user?.id?.let { userId -> router.navigate("playlists/$userId") } },
         )
     }
 
     DrawerItem(
-        icon = {
-            Icon(Icons.Outlined.Download, "Downloads")
-        },
-        label = {
-            Text(stringResource(R.string.drawer_downloads))
-        },
-        onClick = {
-            router.navigate("download")
-        }
+        icon = { Icon(Icons.Outlined.Download, "Downloads") },
+        label = { Text(stringResource(R.string.drawer_downloads)) },
+        onClick = { router.navigate("download") },
     )
 
     DrawerItem(
-        icon = {
-            Icon(Icons.Outlined.History, "History")
-        },
-        label = {
-            Text(stringResource(R.string.drawer_history))
-        },
-        onClick = {
-            router.navigate("history")
-        }
+        icon = { Icon(Icons.Outlined.History, "History") },
+        label = { Text(stringResource(R.string.drawer_history)) },
+        onClick = { router.navigate("history") },
     )
 
     DrawerItem(
-        icon = {
-            Icon(Icons.Outlined.Settings, "Settings")
-        },
-        label = {
-            Text(stringResource(R.string.drawer_setting))
-        },
-        onClick = {
-            router.navigate("setting")
-        }
+        icon = { Icon(Icons.Outlined.Settings, "Settings") },
+        label = { Text(stringResource(R.string.drawer_setting)) },
+        onClick = { router.navigate("setting") },
     )
-
-    Spacer(modifier = Modifier.weight(1f))
-
-    Card(
-        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-    ) {
-        Hitokoto(
-            modifier = Modifier
-                .padding(8.dp)
-                .fillMaxWidth()
-        )
-    }
 }
 
 @Composable
@@ -278,24 +198,20 @@ private fun DrawerItem(
     icon: @Composable () -> Unit,
     label: @Composable () -> Unit,
     tail: @Composable () -> Unit = {},
-    onClick: () -> Unit
+    onClick: () -> Unit,
 ) {
     ProvideTextStyle(MaterialTheme.typography.titleMedium) {
         Surface(
-            //tonalElevation = 4.dp,
+            // tonalElevation = 4.dp,
             // shadowElevation = 4.dp,
             shape = RoundedCornerShape(50),
-            onClick = {
-                onClick()
-            },
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            onClick = { onClick() },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .padding(16.dp)
-                    .fillMaxWidth()
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
             ) {
                 icon()
                 label()

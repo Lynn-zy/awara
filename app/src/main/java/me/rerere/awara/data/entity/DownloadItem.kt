@@ -12,10 +12,13 @@ data class DownloadItem(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     @ColumnInfo val title: String,
     @ColumnInfo val thumbnail: String,
-    @ColumnInfo val path: String,
+    @ColumnInfo val uri: String,
     @ColumnInfo val type: DownloadType,
     @ColumnInfo val resourceId: String,
     @ColumnInfo val time: Instant,
+    @ColumnInfo(defaultValue = "''") val authorId: String = "",
+    @ColumnInfo(defaultValue = "''") val authorName: String = "",
+    @ColumnInfo(defaultValue = "0") val sizeBytes: Long = 0,
 )
 
 enum class DownloadType {
@@ -26,14 +29,11 @@ class DownloadTypeConverter {
     @androidx.room.TypeConverter
     fun toDownloadType(value: String) = enumValueOf<DownloadType>(value)
 
-    @androidx.room.TypeConverter
-    fun fromDownloadType(value: DownloadType) = value.name
+    @androidx.room.TypeConverter fun fromDownloadType(value: DownloadType) = value.name
 }
 
 class DownloadInstantConverter {
-    @androidx.room.TypeConverter
-    fun toInstant(value: Long): Instant = Instant.ofEpochSecond(value)
+    @androidx.room.TypeConverter fun toInstant(value: Long): Instant = Instant.ofEpochSecond(value)
 
-    @androidx.room.TypeConverter
-    fun fromInstant(value: Instant): Long = value.epochSecond
+    @androidx.room.TypeConverter fun fromInstant(value: Instant): Long = value.epochSecond
 }
