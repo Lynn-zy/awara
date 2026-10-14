@@ -16,6 +16,7 @@ class DownloadListTest {
         epochSecond: Long = 1_000L,
         authorId: String = "",
         authorName: String = "",
+        authorAvatar: String = "",
         sizeBytes: Long = 0L,
     ): DownloadItem {
         return DownloadItem(
@@ -28,6 +29,7 @@ class DownloadListTest {
             time = Instant.ofEpochSecond(epochSecond),
             authorId = authorId,
             authorName = authorName,
+            authorAvatar = authorAvatar,
             sizeBytes = sizeBytes,
         )
     }
@@ -170,5 +172,197 @@ class DownloadListTest {
         assertEquals("author_known", groups[1].authorId)
         assertEquals("Creator", groups[1].authorName)
         assertEquals(listOf(3, 4), groups[1].items.map { it.id })
+    }
+
+    @Test
+    fun sortByTimeOrdersOldestFirstWhenAscending() {
+        val older = createItem(id = 1, title = "Alpha", epochSecond = 100L)
+        val tieLowId = createItem(id = 2, title = "Beta", epochSecond = 200L)
+        val tieHighId = createItem(id = 5, title = "Gamma", epochSecond = 200L)
+
+        val sorted =
+            sortDownloadedItems(
+                listOf(older, tieLowId, tieHighId),
+                DownloadSortMode.TIME,
+                ascending = true,
+            )
+
+        assertEquals(listOf(1, 2, 5), sorted.map { it.id })
+    }
+
+    @Test
+    fun sortByNameOrdersDescendingWhenNotAscending() {
+        val itemB = createItem(id = 1, title = "banana", epochSecond = 300L)
+        val itemAUpper = createItem(id = 2, title = "Apple", epochSecond = 100L)
+        val itemALowerOlder = createItem(id = 3, title = "Apple", epochSecond = 100L)
+        val itemBlankTitle =
+            createItem(id = 4, title = "   ", resourceId = "000_first", epochSecond = 50L)
+
+        val sorted =
+            sortDownloadedItems(
+                listOf(itemB, itemAUpper, itemALowerOlder, itemBlankTitle),
+                "name",
+                ascending = false,
+            )
+
+        assertEquals(listOf(1, 3, 2, 4), sorted.map { it.id })
+    }
+
+    @Test
+    fun sortBySizeOrdersSmallestFirstWhenAscending() {
+        val small = createItem(id = 1, title = "Small", epochSecond = 500L, sizeBytes = 100L)
+        val largeOlder =
+            createItem(id = 2, title = "Large Older", epochSecond = 100L, sizeBytes = 900L)
+        val largeNewerLowId =
+            createItem(id = 3, title = "Large Newer 1", epochSecond = 200L, sizeBytes = 900L)
+        val largeNewerHighId =
+            createItem(id = 4, title = "Large Newer 2", epochSecond = 200L, sizeBytes = 900L)
+
+        val sorted =
+            sortDownloadedItems(
+                listOf(small, largeOlder, largeNewerLowId, largeNewerHighId),
+                DownloadSortMode.SIZE,
+                ascending = true,
+            )
+
+        assertEquals(listOf(1, 4, 3, 2), sorted.map { it.id })
+    }
+
+    @Test
+    fun downloadAuthorGroupAggregatesStatsAndExtractsAvatar() {
+        val item1 =
+            createItem(
+                id = 1,
+                title = "Video 1",
+                epochSecond = 200L,
+                authorId = "author_x",
+                authorName = "Creator X",
+                authorAvatar = "https://example.com/avatar.jpg",
+                sizeBytes = 1000L,
+            )
+        val item2 =
+            createItem(
+                id = 2,
+                title = "Video 2",
+                epochSecond = 400L,
+                authorId = "author_x",
+                authorName = "Creator X",
+                authorAvatar = "",
+                sizeBytes = 500L,
+            )
+
+        val groups = groupDownloadedItemsByAuthor(listOf(item1, item2))
+        assertEquals(1, groups.size)
+        val group = groups[0]
+        assertEquals("author_x", group.authorId)
+        assertEquals("Creator X", group.authorName)
+        assertEquals("https://example.com/avatar.jpg", group.avatar)
+        assertEquals(2, group.count)
+        assertEquals(1500L, group.totalBytes)
+        assertEquals(Instant.ofEpochSecond(400L), group.latestDownloadTime)
+    }
+
+    @Test
+    fun groupDownloadedItemsByAuthorSortsFoldersByAggregate() {
+        val authorAItem =
+            createItem(
+                id = 1,
+                title = "Item A",
+                epochSecond = 100L,
+                authorId = "id_a",
+                authorName = "Alice",
+                sizeBytes = 500L,
+            )
+        val authorBItem =
+            createItem(
+                id = 2,
+                title = "Item B",
+                epochSecond = 300L,
+                authorId = "id_b",
+                authorName = "Bob",
+                sizeBytes = 200L,
+            )
+
+        val timeDesc =
+            groupDownloadedItemsByAuthor(
+                listOf(authorAItem, authorBItem),
+                DownloadSortMode.TIME,
+                ascending = false,
+            )
+        assertEquals(listOf("id_b", "id_a"), timeDesc.map { it.authorId })
+
+        val timeAsc =
+            groupDownloadedItemsByAuthor(
+                listOf(authorAItem, authorBItem),
+                DownloadSortMode.TIME,
+                ascending = true,
+            )
+        assertEquals(listOf("id_a", "id_b"), timeAsc.map { it.authorId })
+
+        val sizeDesc =
+            groupDownloadedItemsByAuthor(
+                listOf(authorAItem, authorBItem),
+                DownloadSortMode.SIZE,
+                ascending = false,
+            )
+        assertEquals(listOf("id_a", "id_b"), sizeDesc.map { it.authorId })
+
+        val sizeAsc =
+            groupDownloadedItemsByAuthor(
+                listOf(authorAItem, authorBItem),
+                DownloadSortMode.SIZE,
+                ascending = true,
+            )
+        assertEquals(listOf("id_b", "id_a"), sizeAsc.map { it.authorId })
+
+        val nameAsc =
+            groupDownloadedItemsByAuthor(
+                listOf(authorAItem, authorBItem),
+                DownloadSortMode.NAME,
+                ascending = true,
+            )
+        assertEquals(listOf("id_a", "id_b"), nameAsc.map { it.authorId })
+
+        val nameDesc =
+            groupDownloadedItemsByAuthor(
+                listOf(authorAItem, authorBItem),
+                DownloadSortMode.NAME,
+                ascending = false,
+            )
+        assertEquals(listOf("id_b", "id_a"), nameDesc.map { it.authorId })
+    }
+
+    @Test
+    fun unknownAuthorIdNeverMergesWithRealAuthorIdHavingSameName() {
+        val unknownItem =
+            createItem(
+                id = 1,
+                title = "Video 1",
+                epochSecond = 200L,
+                authorId = "",
+                authorName = "Ghost",
+            )
+        val realAuthorItem =
+            createItem(
+                id = 2,
+                title = "Video 2",
+                epochSecond = 300L,
+                authorId = "author_real",
+                authorName = "Ghost",
+            )
+
+        val groups = groupDownloadedItemsByAuthor(listOf(unknownItem, realAuthorItem), "time")
+        assertEquals(2, groups.size)
+
+        val unknownGroup = groups.first { it.isUnknownAuthor }
+        val realGroup = groups.first { !it.isUnknownAuthor }
+
+        assertEquals("", unknownGroup.authorId)
+        assertEquals("", unknownGroup.authorName)
+        assertEquals(listOf(1), unknownGroup.items.map { it.id })
+
+        assertEquals("author_real", realGroup.authorId)
+        assertEquals("Ghost", realGroup.authorName)
+        assertEquals(listOf(2), realGroup.items.map { it.id })
     }
 }

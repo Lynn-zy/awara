@@ -18,6 +18,7 @@ data class DownloadItem(
     @ColumnInfo val time: Instant,
     @ColumnInfo(defaultValue = "''") val authorId: String = "",
     @ColumnInfo(defaultValue = "''") val authorName: String = "",
+    @ColumnInfo(defaultValue = "''") val authorAvatar: String = "",
     @ColumnInfo(defaultValue = "0") val sizeBytes: Long = 0,
 )
 

@@ -59,22 +59,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
-import androidx.work.Data
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
-import androidx.work.await
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
+import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.fixUrl
-import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
@@ -89,7 +83,6 @@ import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.util.openUrl
 import me.rerere.awara.util.shareLink
 import me.rerere.awara.util.toLocalDateTimeString
-import me.rerere.awara.worker.DownloadWorker
 import org.koin.compose.koinInject
 
 @Composable
@@ -205,6 +198,7 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
     val downloadStorage: DownloadStorage = koinInject()
+    val downloadManager: DownloadManager = koinInject()
     Card(modifier = Modifier.animateContentSize().fillMaxWidth()) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -364,79 +358,10 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                                     return@DropdownMenuItem
                                 }
 
-                                val workManager = WorkManager.getInstance(context)
                                 downloadEnqueueing = true
                                 scope.launch {
                                     try {
-                                        if (
-                                            workManager.getWorkInfosByTag(vm.id).await().any {
-                                                it.state == WorkInfo.State.RUNNING ||
-                                                    it.state == WorkInfo.State.ENQUEUED
-                                            }
-                                        ) {
-                                            message.error {
-                                                Text(stringResource(R.string.already_downloading))
-                                            }
-                                            return@launch
-                                        }
-
-                                        if (vm.isVideoAlreadyDownloaded()) {
-                                            message.error {
-                                                Text(stringResource(R.string.already_downloaded))
-                                            }
-                                            return@launch
-                                        }
-
-                                        val req =
-                                            OneTimeWorkRequestBuilder<DownloadWorker>()
-                                                .setInputData(
-                                                    Data.Builder()
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_TITLE,
-                                                            video.title,
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_URL,
-                                                            downloadUrl,
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_RESOURCE_ID,
-                                                            vm.id,
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_TYPE,
-                                                            "VIDEO",
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_THUMBNAIL,
-                                                            video.thumbnailUrl(),
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker
-                                                                .KEY_DOWNLOAD_DIRECTORY_URI,
-                                                            directoryUri,
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_AUTHOR_ID,
-                                                            video.user?.id.orEmpty(),
-                                                        )
-                                                        .putString(
-                                                            DownloadWorker.KEY_DOWNLOAD_AUTHOR_NAME,
-                                                            video.user?.name.orEmpty(),
-                                                        )
-                                                        .build()
-                                                )
-                                                .addTag(vm.id)
-                                                .build()
-
-                                        workManager
-                                            .enqueueUniqueWork(
-                                                "download_${vm.id}",
-                                                ExistingWorkPolicy.KEEP,
-                                                req,
-                                            )
-                                            .await()
-
+                                        downloadManager.enqueue(video, downloadUrl, directoryUri)
                                         message.info {
                                             Text(stringResource(R.string.start_downloading))
                                         }

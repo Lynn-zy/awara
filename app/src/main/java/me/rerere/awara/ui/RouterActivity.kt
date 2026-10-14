@@ -1,5 +1,6 @@
 package me.rerere.awara.ui
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +17,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -27,6 +31,8 @@ import com.google.accompanist.navigation.animation.composable
 import com.google.accompanist.navigation.animation.rememberAnimatedNavController
 import me.rerere.awara.ui.component.common.DialogProvider
 import me.rerere.awara.ui.component.common.MessageProvider
+import me.rerere.awara.ui.page.download.DownloadHubPage
+import me.rerere.awara.ui.page.download.DownloadManagerPage
 import me.rerere.awara.ui.page.download.DownloadPage
 import me.rerere.awara.ui.page.favorites.FavoritesPage
 import me.rerere.awara.ui.page.follow.FollowPage
@@ -53,10 +59,15 @@ import me.rerere.awara.ui.theme.AwaraTheme
 private const val TAG = "RouterActivity"
 
 class RouterActivity : ComponentActivity() {
+    private var openDownloadManager by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val splashScreen = installSplashScreen().apply { setKeepOnScreenCondition { true } }
         super.onCreate(savedInstanceState)
+        openDownloadManager =
+            savedInstanceState?.getBoolean("pending_download_manager")
+                ?: (intent?.getStringExtra("awara.download.route") == "download/manager")
         setContent {
             AwaraTheme {
                 ContextProvider {
@@ -81,6 +92,19 @@ class RouterActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getStringExtra("awara.download.route") == "download/manager") {
+            openDownloadManager = true
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("pending_download_manager", openDownloadManager)
+        super.onSaveInstanceState(outState)
     }
 
     @Composable
@@ -156,7 +180,9 @@ class RouterActivity : ComponentActivity() {
 
                 composable("history") { HistoryPage() }
 
-                composable("download") { DownloadPage() }
+                composable("download") { DownloadHubPage() }
+                composable("download/manager") { DownloadManagerPage() }
+                composable("download/videos") { DownloadPage() }
 
                 composable(
                     "friends/{userId}?self={self}",
@@ -194,6 +220,15 @@ class RouterActivity : ComponentActivity() {
                     arguments = listOf(navArgument("userId") { type = NavType.StringType }),
                 ) {
                     NotificationsPage()
+                }
+            }
+            LaunchedEffect(openDownloadManager) {
+                if (openDownloadManager) {
+                    if (navController.currentDestination?.route != "download/manager") {
+                        navController.navigate("download/manager") { launchSingleTop = true }
+                    }
+                    openDownloadManager = false
+                    intent?.removeExtra("awara.download.route")
                 }
             }
         }
