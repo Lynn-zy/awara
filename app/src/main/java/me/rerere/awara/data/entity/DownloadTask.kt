@@ -1,5 +1,6 @@
 package me.rerere.awara.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -12,6 +13,7 @@ data class DownloadTask(
     val url: String,
     val thumbnail: String,
     val directoryUri: String,
+    @ColumnInfo(defaultValue = "''") val quality: String = "",
     val authorId: String = "",
     val authorName: String = "",
     val authorAvatar: String = "",

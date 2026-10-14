@@ -182,9 +182,24 @@
     <string name="download_author_folder_stats">%1$d videos · %2$s · %3$s</string>
     <string name="download_author_folder_open">Open folder</string>
     <string name="download_more_actions">More options</string>
-    <string name="download_play">Play</string>
     <string name="download_delete_confirm_title">Delete downloaded file</string>
     <string name="download_delete_confirm_message">Are you sure you want to delete \"%1$s\"? The local file will be removed.</string>
     <string name="download_folder_empty">No videos in this category</string>
     <string name="download_back">Back</string>
+    <string name="download_play_external">Play with system player</string>
+    <string name="download_selection_count">%1$d selected</string>
+    <string name="download_select_all">Select all</string>
+    <string name="download_clear_selection">Clear selection</string>
+    <string name="download_delete_selected">Delete selected</string>
+    <string name="download_delete_selected_title">Delete selected videos</string>
+    <string name="download_delete_selected_message">Delete the %1$d selected videos? Their local files will also be removed.</string>
+    <string name="download_selected_accessibility">Selected</string>
+    <string name="video_quality_original">Original</string>
+    <string name="video_quality_choose_download">Choose download quality</string>
+    <string name="video_quality_choose_playback">Playback quality</string>
+    <string name="video_quality_confirm">Confirm</string>
+    <string name="video_quality_unavailable">Quality unavailable</string>
+    <string name="video_source_load_failed">Could not load video quality: %1$s</string>
+    <string name="download_quality_missing">This task has no saved quality. Cancel it and create a new download to avoid mixing video files.</string>
+    <string name="download_invalid_video">The downloaded file has no readable video track. It has not been saved as a completed download.</string>
 </resources>

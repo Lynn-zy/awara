@@ -83,15 +83,14 @@ class VideoVM(
         }
     }
 
-    private fun getVideo() {
+    fun getVideo() {
+        if (state.loading) return
+        state = state.copy(loading = true, private = false, sourceError = null)
         viewModelScope.launch {
-            state = state.copy(loading = true, private = false)
             runAPICatching {
                     val video = mediaRepo.getVideo(id)
-                    val urls =
-                        mediaRepo.parseVideoUrl(video).filter {
-                            it.name != "preview" // 忽略预览视频
-                        }
+                    state = state.copy(video = video)
+                    val urls = mediaRepo.parseVideoUrl(video)
                     video to urls
                 }
                 .onSuccess {
@@ -103,6 +102,7 @@ class VideoVM(
                 }
                 .onError {
                     Log.w(TAG, "getVideo: $it")
+                    state = state.copy(sourceError = it.message)
 
                     if (it.message == "errors.privateVideo") {
                         state =
@@ -115,7 +115,14 @@ class VideoVM(
                             )
                     }
                 }
-                .onException { Log.w(TAG, "getVideo: ${it.exception}") }
+                .onException {
+                    val reason =
+                        it.exception.message?.replace(Regex("https?://[^\\s]+")) { url ->
+                            url.value.substringBefore('?')
+                        } ?: it.exception.javaClass.simpleName
+                    Log.w(TAG, "getVideo: $reason")
+                    state = state.copy(sourceError = reason)
+                }
             state = state.copy(loading = false)
         }
 
@@ -346,6 +353,7 @@ class VideoVM(
         val private: Boolean = false,
         val privateUser: User? = null,
         val urls: List<VideoFile> = emptyList(),
+        val sourceError: String? = null,
         val relatedVideos: List<Video> = emptyList(),
         val userMoreVideos: List<Video> = emptyList(),
         val userMoreVideosLoading: Boolean = false,

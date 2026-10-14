@@ -29,61 +29,73 @@ fun rememberPlayerState(
             .build()
             .apply {
                 playWhenReady = true
-                repeatMode = if(mmkvPreference.getBoolean("setting.loop_play", false)) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                repeatMode =
+                    if (mmkvPreference.getBoolean("setting.loop_play", false))
+                        Player.REPEAT_MODE_ONE
+                    else Player.REPEAT_MODE_OFF
             }
     }
 ): PlayerState {
     val context = LocalContext.current
-    val state by remember {
-        mutableStateOf(PlayerState(builder(context)))
-    }
+    val state by remember { mutableStateOf(PlayerState(builder(context))) }
     DisposableEffect(context) {
-        val playbackListener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                super.onPlaybackStateChanged(playbackState)
-                state.state = when (playbackState) {
-                    Player.STATE_IDLE -> PlayerState.State.IDLE
-                    Player.STATE_BUFFERING -> PlayerState.State.BUFFERING
-                    Player.STATE_READY -> PlayerState.State.READY
-                    Player.STATE_ENDED -> PlayerState.State.ENDED
-                    else -> PlayerState.State.IDLE.also {
-                        Log.w(TAG, "onPlaybackStateChanged: unknown state $playbackState")
+        val playbackListener =
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    super.onPlaybackStateChanged(playbackState)
+                    state.state =
+                        when (playbackState) {
+                            Player.STATE_IDLE -> PlayerState.State.IDLE
+                            Player.STATE_BUFFERING -> PlayerState.State.BUFFERING
+                            Player.STATE_READY -> PlayerState.State.READY
+                            Player.STATE_ENDED -> PlayerState.State.ENDED
+                            else ->
+                                PlayerState.State.IDLE.also {
+                                    Log.w(
+                                        TAG,
+                                        "onPlaybackStateChanged: unknown state $playbackState",
+                                    )
+                                }
+                        }
+                    if (playbackState == Player.STATE_READY) {
+                        state.duration = state.player.duration
+                        state.currentMediaItem = state.player.currentMediaItem
                     }
                 }
-                if (playbackState == Player.STATE_READY) {
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    super.onIsPlayingChanged(isPlaying)
+                    state.playing = isPlaying
                     state.duration = state.player.duration
-                    state.currentMediaItem = state.player.currentMediaItem
+                }
+
+                override fun onIsLoadingChanged(isLoading: Boolean) {
+                    super.onIsLoadingChanged(isLoading)
+                    state.loading = isLoading
+                }
+
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    super.onVideoSizeChanged(videoSize)
+                    state.videoSize = PlayerState.VideoSize.from(videoSize)
+                    state.duration = state.player.duration
                 }
             }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                super.onIsPlayingChanged(isPlaying)
-                state.playing = isPlaying
-                state.duration = state.player.duration
-            }
-
-            override fun onIsLoadingChanged(isLoading: Boolean) {
-                super.onIsLoadingChanged(isLoading)
-                state.loading = isLoading
-            }
-
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                super.onVideoSizeChanged(videoSize)
-                state.videoSize = PlayerState.VideoSize.from(videoSize)
-                state.duration = state.player.duration
-            }
-        }
         state.player.addListener(playbackListener)
         state.playing = state.player.isPlaying
-        state.state = when (state.player.playbackState) {
-            Player.STATE_IDLE -> PlayerState.State.IDLE
-            Player.STATE_BUFFERING -> PlayerState.State.BUFFERING
-            Player.STATE_READY -> PlayerState.State.READY
-            Player.STATE_ENDED -> PlayerState.State.ENDED
-            else -> PlayerState.State.IDLE.also {
-                Log.w(TAG, "onPlaybackStateChanged: unknown state ${state.player.playbackState}")
+        state.state =
+            when (state.player.playbackState) {
+                Player.STATE_IDLE -> PlayerState.State.IDLE
+                Player.STATE_BUFFERING -> PlayerState.State.BUFFERING
+                Player.STATE_READY -> PlayerState.State.READY
+                Player.STATE_ENDED -> PlayerState.State.ENDED
+                else ->
+                    PlayerState.State.IDLE.also {
+                        Log.w(
+                            TAG,
+                            "onPlaybackStateChanged: unknown state ${state.player.playbackState}",
+                        )
+                    }
             }
-        }
         state.videoSize = PlayerState.VideoSize.from(state.player.videoSize)
         state.duration = state.player.duration
         Log.i(TAG, "rememberPlayerState: Init")
@@ -100,11 +112,16 @@ fun rememberPlayerState(
 
 @Stable
 @SuppressLint("UnsafeOptInUsageError")
-class PlayerState(val player: Player) {
+class PlayerState(
+    val player: Player,
+    initialQuality: String = mmkvPreference.getString("setting.player_quality", "Source")!!,
+    private val saveQualityPreference: (String) -> Unit = { quality ->
+        mmkvPreference.putString("setting.player_quality", quality)
+    },
+) {
     var playing by mutableStateOf(false)
     var state by mutableStateOf(State.IDLE)
     var loading by mutableStateOf(false)
-
 
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
     var duration by mutableStateOf(0L)
@@ -112,12 +129,10 @@ class PlayerState(val player: Player) {
 
     var playerItems by mutableStateOf<List<PlayerItem>>(emptyList())
         private set
-    var currentQuality by mutableStateOf(
-        mmkvPreference.getString(
-            "setting.player_quality",
-            "Source"
-        )!!
-    )
+
+    private var preferredQuality = initialQuality
+
+    var currentQuality by mutableStateOf(initialQuality)
     var currentMediaItem by mutableStateOf<MediaItem?>(null)
 
     fun prepare() {
@@ -131,27 +146,41 @@ class PlayerState(val player: Player) {
 
     fun updatePlayerItems(items: List<PlayerItem>) {
         playerItems = items
+        if (items.isEmpty()) {
+            player.clearMediaItems()
+            currentMediaItem = null
+            currentQuality = ""
+            return
+        }
         if (playerItems.isNotEmpty()) {
-            val item = playerItems.find { it.quality == currentQuality }
-            if (item != null) {
-                player.setMediaItem(item.mediaItem)
-                currentMediaItem = item.mediaItem
+            val targetItem = selectTargetPlayerItem(playerItems, preferredQuality)
+            if (targetItem != null) {
+                currentQuality = targetItem.quality
+                val sameVideo = currentMediaItem?.mediaId == targetItem.mediaItem.mediaId
+                val position = if (sameVideo) player.currentPosition.coerceAtLeast(0L) else 0L
+                val playWhenReady = player.playWhenReady
+                player.setMediaItem(targetItem.mediaItem, position)
+                player.playWhenReady = playWhenReady
+                currentMediaItem = targetItem.mediaItem
             }
         }
     }
 
     fun updateCurrentQuality(quality: String) {
-        currentQuality = quality
-        mmkvPreference.putString("setting.player_quality", quality)
-        if (playerItems.isNotEmpty()) {
-            val item = playerItems.find { it.quality == quality }
-            if (item != null) {
-                player.setMediaItem(item.mediaItem)
-                player.prepare()
+        if (playerItems.isEmpty()) return
+        val item = playerItems.firstOrNull { matchVideoQuality(it.quality, quality) } ?: return
+        currentQuality = item.quality
+        preferredQuality = item.quality
+        saveQualityPreference(item.quality)
 
-                currentMediaItem = item.mediaItem
-            }
-        }
+        // 切换清晰度保留当前进度与播控状态，不强制开始播放
+        val currentPosition = player.currentPosition.coerceAtLeast(0L)
+        val playWhenReady = player.playWhenReady
+        player.setMediaItem(item.mediaItem, currentPosition)
+        player.playWhenReady = playWhenReady
+        player.prepare()
+
+        currentMediaItem = item.mediaItem
     }
 
     fun pause() {
@@ -167,25 +196,17 @@ class PlayerState(val player: Player) {
         IDLE,
         BUFFERING,
         READY,
-        ENDED
+        ENDED,
     }
 
-    data class PlayerItem(
-        val quality: String,
-        val mediaItem: MediaItem,
-    )
+    data class PlayerItem(val quality: String, val mediaItem: MediaItem)
 
-    data class VideoSize(
-        val width: Int,
-        val height: Int,
-    ) {
+    data class VideoSize(val width: Int, val height: Int) {
         companion object {
             val UNKNOWN = VideoSize(0, 0)
 
-            fun from(videoSize: com.google.android.exoplayer2.video.VideoSize) = VideoSize(
-                videoSize.width,
-                videoSize.height,
-            )
+            fun from(videoSize: com.google.android.exoplayer2.video.VideoSize) =
+                VideoSize(videoSize.width, videoSize.height)
         }
     }
 }

@@ -24,9 +24,13 @@ import me.rerere.awara.R
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.data.entity.Video
+import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.fixUrl
+import me.rerere.awara.data.entity.qualityKey
+import me.rerere.awara.data.entity.requireDownloadQuality
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.entity.toAvatarUrl
+import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.worker.DownloadWorker
@@ -65,8 +69,10 @@ class DownloadManager(
         activeCalls.remove(taskId)?.cancel()
     }
 
-    suspend fun enqueue(video: Video, url: String, directoryUri: String) =
+    suspend fun enqueue(video: Video, source: VideoFile, directoryUri: String) =
         withContext(Dispatchers.IO) {
+            val selectedSource = listOf(source).requireDownloadQuality(source.qualityKey)
+            val url = selectedSource.src.download.fixUrl()
             val taskId = UUID.randomUUID().toString()
             val authorAvatar = (video.user?.avatar).toAvatarUrl()
 
@@ -85,6 +91,7 @@ class DownloadManager(
                     url = url,
                     thumbnail = video.thumbnailUrl(),
                     directoryUri = directoryUri,
+                    quality = selectedSource.qualityKey,
                     authorId = video.user?.id.orEmpty(),
                     authorName = video.user?.name.orEmpty(),
                     authorAvatar = authorAvatar,
@@ -191,6 +198,12 @@ class DownloadManager(
                     return@withLock
                 }
 
+                if (task.quality.isBlank()) {
+                    throw IllegalStateException(
+                        context.getString(R.string.download_quality_missing)
+                    )
+                }
+
                 // 等待旧传输释放，禁止直接覆盖活跃工作
                 val transMutex = getTransferMutex(taskId)
                 transMutex.withLock {
@@ -204,13 +217,17 @@ class DownloadManager(
                     try {
                         val video = mediaRepo.getVideo(task.resourceId)
                         val files = mediaRepo.parseVideoUrl(video)
-                        val file = files.lastOrNull() ?: error("未获取到视频文件链接")
+                        val file = files.requireDownloadQuality(task.quality)
                         file.src.download.fixUrl()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        database.downloadTaskDao().updateError(taskId, "刷新链接失败: ${e.message}")
-                        throw e
+                        val reason =
+                            e.message?.replace(Regex("https?://[^\\s]+")) { url ->
+                                url.value.substringBefore('?')
+                            } ?: e.javaClass.simpleName
+                        database.downloadTaskDao().updateError(taskId, "刷新链接失败: $reason")
+                        throw java.io.IOException("刷新链接失败: $reason", e)
                     }
 
                 val req =
@@ -221,14 +238,26 @@ class DownloadManager(
                         .build()
 
                 withContext(NonCancellable) {
-                    database
-                        .downloadTaskDao()
-                        .updateResumeInfo(
-                            taskId = taskId,
-                            url = refreshedUrl,
-                            status = DownloadTaskStatus.QUEUED,
-                            workId = req.id.toString(),
-                        )
+                    val resumed =
+                        transMutex.withLock {
+                            val resourceChanged =
+                                task.url.videoDownloadResourceKey() !=
+                                    refreshedUrl.videoDownloadResourceKey()
+                            if (resourceChanged) parts.delete(taskId)
+                            database
+                                .downloadTaskDao()
+                                .updateResumeInfo(
+                                    taskId = taskId,
+                                    url = refreshedUrl,
+                                    status = DownloadTaskStatus.QUEUED,
+                                    workId = req.id.toString(),
+                                    previousWorkId = task.workId,
+                                    downloadedBytes = parts.file(taskId).length(),
+                                    totalBytes = if (resourceChanged) -1L else task.totalBytes,
+                                    validator = if (resourceChanged) null else task.validator,
+                                )
+                        }
+                    check(resumed > 0) { "任务状态已变化，请重试" }
 
                     try {
                         WorkManager.getInstance(context)

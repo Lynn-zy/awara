@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -15,6 +16,8 @@ import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -103,6 +106,27 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         return@withLock Result.failure()
                     }
 
+                    if (task.quality.isBlank()) {
+                        val changed =
+                            appDatabase
+                                .downloadTaskDao()
+                                .compareAndSetStatus(
+                                    taskId,
+                                    id.toString(),
+                                    task.status,
+                                    DownloadTaskStatus.FAILED,
+                                )
+                        if (changed > 0) {
+                            appDatabase
+                                .downloadTaskDao()
+                                .updateError(
+                                    taskId,
+                                    appContext.getString(R.string.download_quality_missing),
+                                )
+                        }
+                        return@withLock Result.failure()
+                    }
+
                     // 系统重启后也可认领未完成的保存任务，旧目标先清理再重试。
                     if (task.status != DownloadTaskStatus.RUNNING) {
                         val claimed =
@@ -176,6 +200,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         url = currentTask.url,
                         targetFile = partFile,
                         validator = currentTask.validator,
+                        expectedTotalBytes = currentTask.totalBytes,
                         onBindCall = { call -> downloadManager.registerActiveCall(taskId, call) },
                         onValidatorResolved = { validator ->
                             appDatabase
@@ -222,6 +247,25 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                             notificationCompat.notify(notificationId, progressNotification)
                         },
                     )
+
+                    try {
+                        validateVideoFile(partFile)
+                    } catch (exception: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        withContext(NonCancellable) {
+                            downloadManager.parts.delete(taskId)
+                            appDatabase
+                                .downloadTaskDao()
+                                .updateProgress(taskId, id.toString(), 0L, -1L)
+                            appDatabase
+                                .downloadTaskDao()
+                                .updateValidator(taskId, id.toString(), null)
+                        }
+                        throw IOException(
+                            appContext.getString(R.string.download_invalid_video),
+                            exception,
+                        )
+                    }
 
                     // 传输完成，CAS 进入保存阶段
                     val casSaving =
@@ -410,6 +454,18 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     }
                 }
             }
+        }
+    }
+
+    private fun validateVideoFile(file: File) {
+        val metadata = MediaMetadataRetriever()
+        try {
+            metadata.setDataSource(file.absolutePath)
+            if (metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == null) {
+                throw IOException(appContext.getString(R.string.download_invalid_video))
+            }
+        } finally {
+            metadata.release()
         }
     }
 

@@ -99,9 +99,18 @@ interface DownloadTaskDao {
     ): Int
 
     @Query(
-        "UPDATE download_tasks SET url = :url, status = :status, workId = :workId, error = null WHERE taskId = :taskId"
+        "UPDATE download_tasks SET url = :url, status = :status, workId = :workId, error = null, downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, validator = :validator WHERE taskId = :taskId AND workId = :previousWorkId AND status IN ('PAUSED', 'FAILED')"
     )
-    suspend fun updateResumeInfo(taskId: String, url: String, status: String, workId: String): Int
+    suspend fun updateResumeInfo(
+        taskId: String,
+        url: String,
+        status: String,
+        workId: String,
+        previousWorkId: String,
+        downloadedBytes: Long,
+        totalBytes: Long,
+        validator: String?,
+    ): Int
 
     @Query("UPDATE download_tasks SET error = :error WHERE taskId = :taskId")
     suspend fun updateError(taskId: String, error: String?): Int

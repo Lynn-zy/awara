@@ -144,9 +144,24 @@
     <string name="download_author_folder_stats">%1$d 个视频 · %2$s · %3$s</string>
     <string name="download_author_folder_open">打开文件夹</string>
     <string name="download_more_actions">更多操作</string>
-    <string name="download_play">播放</string>
     <string name="download_delete_confirm_title">删除已下载文件</string>
     <string name="download_delete_confirm_message">确定要删除“%1$s”吗？本地文件也将被移除。</string>
     <string name="download_folder_empty">该分类下暂无视频</string>
     <string name="download_back">返回</string>
+    <string name="download_play_external">使用系统播放器播放</string>
+    <string name="download_selection_count">已选择 %1$d 项</string>
+    <string name="download_select_all">全选</string>
+    <string name="download_clear_selection">取消选择</string>
+    <string name="download_delete_selected">删除所选</string>
+    <string name="download_delete_selected_title">删除所选视频</string>
+    <string name="download_delete_selected_message">确定要删除选中的 %1$d 个视频吗？本地文件也会被删除。</string>
+    <string name="download_selected_accessibility">已选中</string>
+    <string name="video_quality_original">原画</string>
+    <string name="video_quality_choose_download">选择下载清晰度</string>
+    <string name="video_quality_choose_playback">播放清晰度</string>
+    <string name="video_quality_confirm">确认</string>
+    <string name="video_quality_unavailable">清晰度不可用</string>
+    <string name="video_source_load_failed">视频清晰度加载失败：%1$s</string>
+    <string name="download_quality_missing">此任务未保存清晰度，请取消后重新下载，避免拼接不同的视频文件。</string>
+    <string name="download_invalid_video">下载文件中没有可读取的视频轨道，未将其保存为已完成视频。</string>
 </resources>

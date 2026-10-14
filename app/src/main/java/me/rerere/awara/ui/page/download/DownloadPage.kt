@@ -7,14 +7,14 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -53,6 +53,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,10 +64,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -87,6 +95,7 @@ import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.player.Player
@@ -101,6 +110,7 @@ import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DownloadPage(vm: DownloadVM = koinViewModel()) {
     val downloadedItems = vm.state.items
@@ -126,6 +136,9 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
 
     // 选中作者ID：null 表示在根目录，"" 表示未知作者分组
     var selectedAuthorId by rememberSaveable { mutableStateOf<String?>(null) }
+    // 多选集合：记录当前选中的下载记录 ID
+    var selectedIds by rememberSaveable { mutableStateOf(emptySet<Int>()) }
+    val isSelectionMode = selectedIds.isNotEmpty()
 
     LaunchedEffect(groupByAuthors) {
         if (!groupByAuthors) {
@@ -135,6 +148,7 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
 
     var showDirectoryDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
     val sortedItems =
         remember(downloadedItems, sortKey, sortAscending) {
@@ -153,6 +167,34 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
             authorGroups.firstOrNull { it.authorId == selectedAuthorId }
         }
 
+    // 当前视图可见的视频列表
+    val visibleItems =
+        remember(groupByAuthors, selectedAuthorId, sortedItems, selectedGroup) {
+            if (groupByAuthors) {
+                if (selectedAuthorId != null) {
+                    selectedGroup?.items.orEmpty()
+                } else {
+                    emptyList()
+                }
+            } else {
+                sortedItems
+            }
+        }
+    val visibleVideoIds = remember(visibleItems) { visibleItems.map { it.id }.toSet() }
+    val selectedVisibleIds =
+        remember(selectedIds, visibleVideoIds) { selectedIds.intersect(visibleVideoIds) }
+    val allVisibleSelected = isAllVideosSelected(selectedIds, visibleVideoIds)
+    val isDeleting = vm.state.deletingIds.isNotEmpty()
+
+    LaunchedEffect(visibleVideoIds, vm.state.uiState, selectedAuthorId) {
+        if (vm.state.uiState == UiState.Success || vm.state.uiState == UiState.Empty) {
+            selectedIds = selectedIds.intersect(visibleVideoIds)
+            if (groupByAuthors && selectedAuthorId != null && selectedGroup == null) {
+                selectedAuthorId = null
+            }
+        }
+    }
+
     LaunchedEffect(vm.state.deleteError) {
         val reason = vm.state.deleteError ?: return@LaunchedEffect
         message.error { Text(stringResource(R.string.download_delete_failed, reason)) }
@@ -161,6 +203,44 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
 
     if (showDirectoryDialog) {
         DownloadDirectoryDialog(onDismiss = { showDirectoryDialog = false })
+    }
+
+    if (showBatchDeleteConfirm) {
+        val selectedItemsToDelete = visibleItems.filter { it.id in selectedVisibleIds }
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) showBatchDeleteConfirm = false },
+            title = { Text(text = stringResource(R.string.download_delete_selected_title)) },
+            text = {
+                Text(
+                    text =
+                        stringResource(
+                            R.string.download_delete_selected_message,
+                            selectedItemsToDelete.size,
+                        )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showBatchDeleteConfirm = false
+                        vm.delete(selectedItemsToDelete) { successIds, _ ->
+                            selectedIds = selectedIds - successIds
+                        }
+                    },
+                    enabled = !isDeleting,
+                ) {
+                    Text(
+                        text = stringResource(R.string.download_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }, enabled = !isDeleting) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 
     val state = rememberPlayerState { ExoPlayer.Builder(it).build() }
@@ -192,9 +272,14 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
 
     BackHandler(fullscreen) { exitFullScreen() }
 
-    BackHandler(!fullscreen && selectedAuthorId != null) { selectedAuthorId = null }
+    // 多选模式下按返回键优先退出选择，不退出作者目录或页面
+    BackHandler(!fullscreen && isSelectionMode) { selectedIds = emptySet() }
 
-    fun playDownloadedItem(item: DownloadItem) {
+    BackHandler(!fullscreen && !isSelectionMode && selectedAuthorId != null) {
+        selectedAuthorId = null
+    }
+
+    fun playExternal(item: DownloadItem) {
         val rawUri = item.uri.trim()
         if (rawUri.isEmpty()) {
             message.error { Text(stringResource(R.string.download_file_missing)) }
@@ -223,39 +308,75 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                 return@launch
             }
 
-            when (internalPlayer) {
-                "external" -> {
-                    try {
-                        val intent =
-                            Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(contentUri, "video/*")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                clipData = ClipData.newRawUri(null, contentUri)
-                            }
-                        context.startActivity(intent)
-                    } catch (_: ActivityNotFoundException) {
-                        message.error { Text(stringResource(R.string.download_no_player)) }
-                    } catch (e: Throwable) {
-                        val reason =
-                            e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                        message.error {
-                            Text(stringResource(R.string.download_open_external_failed, reason))
-                        }
+            try {
+                val mimeType =
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.getType(contentUri)?.takeIf {
+                            it.startsWith("video/")
+                        } ?: "video/*"
                     }
-                }
-                else -> {
-                    try {
-                        state.player.setMediaItem(MediaItem.Builder().setUri(contentUri).build())
-                        state.player.prepare()
-                        fullscreen = true
-                    } catch (e: Throwable) {
-                        val reason =
-                            e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                        message.error {
-                            Text(stringResource(R.string.download_play_failed, reason))
-                        }
+                val intent =
+                    Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(contentUri, mimeType)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        clipData = ClipData.newRawUri(null, contentUri)
                     }
+                context.startActivity(intent)
+            } catch (_: ActivityNotFoundException) {
+                message.error { Text(stringResource(R.string.download_no_player)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val reason =
+                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                message.error {
+                    Text(stringResource(R.string.download_open_external_failed, reason))
                 }
+            }
+        }
+    }
+
+    fun playDownloadedItem(item: DownloadItem) {
+        if (internalPlayer == "external") {
+            playExternal(item)
+            return
+        }
+        val rawUri = item.uri.trim()
+        if (rawUri.isEmpty()) {
+            message.error { Text(stringResource(R.string.download_file_missing)) }
+            return
+        }
+        val contentUri = runCatching { Uri.parse(rawUri) }.getOrNull()
+        if (contentUri == null) {
+            message.error { Text(stringResource(R.string.download_file_missing)) }
+            return
+        }
+        scope.launch {
+            val exists =
+                try {
+                    withContext(Dispatchers.IO) { downloadStorage.exists(contentUri) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    val reason =
+                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                    message.error { Text(stringResource(R.string.download_play_failed, reason)) }
+                    return@launch
+                }
+
+            if (!exists) {
+                message.error { Text(stringResource(R.string.download_file_missing)) }
+                return@launch
+            }
+
+            try {
+                state.player.setMediaItem(MediaItem.Builder().setUri(contentUri).build())
+                state.player.prepare()
+                fullscreen = true
+            } catch (e: Exception) {
+                val reason =
+                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                message.error { Text(stringResource(R.string.download_play_failed, reason)) }
             }
         }
     }
@@ -308,17 +429,54 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
             topBar = {
                 TopAppBar(
                     title = {
-                        val titleText =
-                            if (selectedAuthorId != null) {
-                                selectedGroup?.authorName?.ifBlank { null }
-                                    ?: stringResource(R.string.download_unknown_author)
-                            } else {
-                                stringResource(R.string.download_completed)
-                            }
-                        Text(text = titleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (isSelectionMode) {
+                            Text(
+                                text =
+                                    stringResource(
+                                        R.string.download_selection_count,
+                                        selectedVisibleIds.size,
+                                    ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        } else {
+                            val titleText =
+                                if (selectedAuthorId != null) {
+                                    selectedGroup?.authorName?.ifBlank { null }
+                                        ?: stringResource(R.string.download_unknown_author)
+                                } else {
+                                    stringResource(R.string.download_completed)
+                                }
+                            Text(text = titleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     },
                     navigationIcon = {
-                        if (selectedAuthorId != null) {
+                        if (isSelectionMode) {
+                            val selectAllDesc =
+                                stringResource(
+                                    if (allVisibleSelected) R.string.download_clear_selection
+                                    else R.string.download_select_all
+                                )
+                            TriStateCheckbox(
+                                state =
+                                    when {
+                                        allVisibleSelected -> ToggleableState.On
+                                        selectedVisibleIds.isNotEmpty() ->
+                                            ToggleableState.Indeterminate
+                                        else -> ToggleableState.Off
+                                    },
+                                enabled = !isDeleting,
+                                onClick = {
+                                    selectedIds =
+                                        if (!allVisibleSelected) {
+                                            selectAllVideos(selectedIds, visibleVideoIds)
+                                        } else {
+                                            deselectAllVideos(selectedIds, visibleVideoIds)
+                                        }
+                                },
+                                modifier = Modifier.semantics { contentDescription = selectAllDesc },
+                            )
+                        } else if (selectedAuthorId != null) {
                             IconButton(onClick = { selectedAuthorId = null }) {
                                 Icon(
                                     imageVector = Icons.Outlined.ArrowBack,
@@ -330,93 +488,117 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                         }
                     },
                     actions = {
-                        IconButton(onClick = { showDirectoryDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Folder,
-                                contentDescription =
-                                    stringResource(R.string.download_directory_title),
-                            )
-                        }
-
-                        Box {
-                            IconButton(onClick = { showSortMenu = true }) {
+                        if (isSelectionMode) {
+                            IconButton(
+                                onClick = { showBatchDeleteConfirm = true },
+                                enabled = selectedVisibleIds.isNotEmpty() && !isDeleting,
+                            ) {
                                 Icon(
-                                    imageVector = Icons.Outlined.Sort,
-                                    contentDescription = stringResource(R.string.download_sort),
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription =
+                                        stringResource(R.string.download_delete_selected),
+                                    tint =
+                                        if (selectedVisibleIds.isNotEmpty() && !isDeleting)
+                                            MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                                 )
                             }
-                            DropdownMenu(
-                                expanded = showSortMenu,
-                                onDismissRequest = { showSortMenu = false },
-                            ) {
-                                val currentSortMode = DownloadSortMode.fromKey(sortKey)
-                                DownloadSortMode.values().forEach { mode ->
-                                    val isSelected = currentSortMode == mode
-                                    val modeLabel =
-                                        when (mode) {
-                                            DownloadSortMode.TIME ->
-                                                stringResource(R.string.download_sort_time)
-                                            DownloadSortMode.NAME ->
-                                                stringResource(R.string.download_sort_name)
-                                            DownloadSortMode.SIZE ->
-                                                stringResource(R.string.download_sort_size)
-                                        }
-                                    DropdownMenuItem(
-                                        text = { Text(modeLabel) },
-                                        trailingIcon = {
-                                            if (isSelected) {
-                                                val directionText =
-                                                    stringResource(
-                                                        if (sortAscending)
-                                                            R.string.download_sort_ascending
-                                                        else R.string.download_sort_descending
-                                                    )
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement =
-                                                        Arrangement.spacedBy(4.dp),
-                                                ) {
-                                                    Text(
-                                                        text = directionText,
-                                                        style =
-                                                            MaterialTheme.typography.labelMedium,
-                                                        color = MaterialTheme.colorScheme.primary,
-                                                    )
-                                                    Icon(
-                                                        imageVector =
-                                                            if (sortAscending)
-                                                                Icons.Outlined.ArrowUpward
-                                                            else Icons.Outlined.ArrowDownward,
-                                                        contentDescription = directionText,
-                                                        tint = MaterialTheme.colorScheme.primary,
-                                                    )
-                                                }
+                        } else {
+                            IconButton(onClick = { showDirectoryDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Folder,
+                                    contentDescription =
+                                        stringResource(R.string.download_directory_title),
+                                )
+                            }
+
+                            Box {
+                                IconButton(onClick = { showSortMenu = !showSortMenu }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Sort,
+                                        contentDescription = stringResource(R.string.download_sort),
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showSortMenu,
+                                    onDismissRequest = { showSortMenu = false },
+                                ) {
+                                    val currentSortMode = DownloadSortMode.fromKey(sortKey)
+                                    DownloadSortMode.values().forEach { mode ->
+                                        val isSelected = currentSortMode == mode
+                                        val modeLabel =
+                                            when (mode) {
+                                                DownloadSortMode.TIME ->
+                                                    stringResource(R.string.download_sort_time)
+                                                DownloadSortMode.NAME ->
+                                                    stringResource(R.string.download_sort_name)
+                                                DownloadSortMode.SIZE ->
+                                                    stringResource(R.string.download_sort_size)
                                             }
+                                        DropdownMenuItem(
+                                            text = { Text(modeLabel) },
+                                            trailingIcon = {
+                                                if (isSelected) {
+                                                    val directionText =
+                                                        stringResource(
+                                                            if (sortAscending)
+                                                                R.string.download_sort_ascending
+                                                            else R.string.download_sort_descending
+                                                        )
+                                                    Row(
+                                                        verticalAlignment =
+                                                            Alignment.CenterVertically,
+                                                        horizontalArrangement =
+                                                            Arrangement.spacedBy(4.dp),
+                                                    ) {
+                                                        Text(
+                                                            text = directionText,
+                                                            style =
+                                                                MaterialTheme.typography
+                                                                    .labelMedium,
+                                                            color =
+                                                                MaterialTheme.colorScheme.primary,
+                                                        )
+                                                        Icon(
+                                                            imageVector =
+                                                                if (sortAscending)
+                                                                    Icons.Outlined.ArrowUpward
+                                                                else Icons.Outlined.ArrowDownward,
+                                                            contentDescription = directionText,
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                selectedIds = emptySet()
+                                                if (isSelected) {
+                                                    sortAscending = !sortAscending
+                                                } else {
+                                                    sortKey = mode.key
+                                                    sortAscending = mode.defaultAscending
+                                                }
+                                            },
+                                        )
+                                    }
+                                    Divider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(stringResource(R.string.download_group_authors))
+                                        },
+                                        trailingIcon = {
+                                            Checkbox(
+                                                checked = groupByAuthors,
+                                                onCheckedChange = null,
+                                            )
                                         },
                                         onClick = {
-                                            if (isSelected) {
-                                                sortAscending = !sortAscending
-                                            } else {
-                                                sortKey = mode.key
-                                                sortAscending = mode.defaultAscending
-                                            }
-                                            showSortMenu = false
+                                            groupByAuthors = !groupByAuthors
+                                            selectedAuthorId = null
+                                            selectedIds = emptySet()
                                         },
                                     )
                                 }
-                                Divider()
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(stringResource(R.string.download_group_authors))
-                                    },
-                                    trailingIcon = {
-                                        Checkbox(checked = groupByAuthors, onCheckedChange = null)
-                                    },
-                                    onClick = {
-                                        groupByAuthors = !groupByAuthors
-                                        showSortMenu = false
-                                    },
-                                )
                             }
                         }
                     },
@@ -470,7 +652,10 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                         ) { group ->
                             AuthorFolderRow(
                                 group = group,
-                                onClick = { selectedAuthorId = group.authorId },
+                                onClick = {
+                                    selectedAuthorId = group.authorId
+                                    selectedIds = emptySet()
+                                },
                             )
                         }
                     }
@@ -500,8 +685,15 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                             ) { item ->
                                 DownloadItemRow(
                                     item = item,
-                                    onDelete = { vm.delete(item) },
+                                    isSelectionMode = isSelectionMode,
+                                    isSelected = item.id in selectedIds,
+                                    isDeleting = item.id in vm.state.deletingIds,
+                                    onToggleSelect = {
+                                        selectedIds = toggleSelection(selectedIds, item.id)
+                                    },
+                                    onDelete = { vm.delete(listOf(item)) },
                                     onClick = { playDownloadedItem(item) },
+                                    onPlayExternal = { playExternal(item) },
                                 )
                             }
                         }
@@ -519,8 +711,15 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                         ) { item ->
                             DownloadItemRow(
                                 item = item,
-                                onDelete = { vm.delete(item) },
+                                isSelectionMode = isSelectionMode,
+                                isSelected = item.id in selectedIds,
+                                isDeleting = item.id in vm.state.deletingIds,
+                                onToggleSelect = {
+                                    selectedIds = toggleSelection(selectedIds, item.id)
+                                },
+                                onDelete = { vm.delete(listOf(item)) },
                                 onClick = { playDownloadedItem(item) },
+                                onPlayExternal = { playExternal(item) },
                             )
                         }
                     }
@@ -601,9 +800,18 @@ fun AuthorFolderRow(group: DownloadAuthorGroup, onClick: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DownloadItemRow(item: DownloadItem, onDelete: () -> Unit, onClick: () -> Unit) {
+fun DownloadItemRow(
+    item: DownloadItem,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    isDeleting: Boolean,
+    onToggleSelect: () -> Unit,
+    onDelete: () -> Unit,
+    onClick: () -> Unit,
+    onPlayExternal: () -> Unit,
+) {
     val displayTitle = item.title.ifBlank { item.resourceId }
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -637,15 +845,51 @@ fun DownloadItemRow(item: DownloadItem, onDelete: () -> Unit, onClick: () -> Uni
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val thumbWidth = if (maxWidth >= 600.dp) 132.dp else 112.dp
+        val thumbWidth = if (maxWidth >= 600.dp) 112.dp else 96.dp
+        val rowBackground =
+            if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+            else MaterialTheme.colorScheme.surface
+        val selectedStateDesc = stringResource(R.string.download_selected_accessibility)
 
         Row(
             modifier =
                 Modifier.fillMaxWidth()
-                    .clickable(onClick = onClick)
+                    .background(rowBackground)
+                    .alpha(if (isDeleting) 0.38f else 1f)
+                    .combinedClickable(
+                        enabled = !isDeleting,
+                        role = if (isSelectionMode) Role.Checkbox else null,
+                        onClick = {
+                            if (isSelectionMode) {
+                                onToggleSelect()
+                            } else {
+                                onClick()
+                            }
+                        },
+                        onLongClick = {
+                            if (!isSelectionMode) {
+                                onToggleSelect()
+                            }
+                        },
+                    )
+                    .semantics {
+                        if (isSelectionMode) {
+                            stateDescription = if (isSelected) selectedStateDesc else ""
+                            toggleableState =
+                                if (isSelected) ToggleableState.On else ToggleableState.Off
+                        }
+                    }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = null,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+            }
+
             AsyncImage(
                 model = item.thumbnail,
                 contentDescription = null,
@@ -655,88 +899,109 @@ fun DownloadItemRow(item: DownloadItem, onDelete: () -> Unit, onClick: () -> Uni
             )
 
             Column(
-                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.weight(1f).padding(start = 12.dp, end = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = displayTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 3,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
 
                 if (item.authorName.isNotBlank()) {
                     Text(
                         text = item.authorName.trim(),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
 
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    DownloadBadge(prettyFileSize(item.sizeBytes))
-                    DownloadBadge(item.time.toLocalDateString())
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = prettyFileSize(item.sizeBytes),
+                        modifier = Modifier.weight(0.42f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = item.time.toLocalDateString(),
+                        modifier = Modifier.weight(0.58f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
 
-            Box {
-                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(48.dp)) {
-                    Icon(
-                        imageVector = Icons.Outlined.MoreVert,
-                        contentDescription = stringResource(R.string.download_more_actions),
-                    )
-                }
+            if (!isSelectionMode) {
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        enabled = !isDeleting,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = stringResource(R.string.download_more_actions),
+                        )
+                    }
 
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.download_play)) },
-                        leadingIcon = { Icon(Icons.Outlined.PlayArrow, contentDescription = null) },
-                        onClick = {
-                            showMenu = false
-                            onClick()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = stringResource(R.string.download_delete),
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Delete,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            showDeleteConfirm = true
-                        },
-                    )
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.download_play_external)) },
+                            leadingIcon = {
+                                Icon(Icons.Outlined.PlayArrow, contentDescription = null)
+                            },
+                            onClick = {
+                                showMenu = false
+                                onPlayExternal()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = stringResource(R.string.download_delete),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                showDeleteConfirm = true
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-private fun DownloadBadge(text: String) {
-    Box(
-        modifier =
-            Modifier.clip(RoundedCornerShape(4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
+// 纯状态选择管理函数，便于测试与复用
+fun toggleSelection(selectedIds: Set<Int>, id: Int): Set<Int> =
+    if (id in selectedIds) selectedIds - id else selectedIds + id
+
+fun selectAllVideos(selectedIds: Set<Int>, visibleIds: Set<Int>): Set<Int> =
+    selectedIds + visibleIds
+
+fun deselectAllVideos(selectedIds: Set<Int>, visibleIds: Set<Int>): Set<Int> =
+    selectedIds - visibleIds
+
+fun isAllVideosSelected(selectedIds: Set<Int>, visibleIds: Set<Int>): Boolean =
+    visibleIds.isNotEmpty() && visibleIds.all { it in selectedIds }

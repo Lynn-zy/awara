@@ -4,6 +4,8 @@ import java.io.EOFException
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.RandomAccessFile
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
@@ -23,22 +25,16 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
         url: String,
         targetFile: File,
         validator: String?,
+        expectedTotalBytes: Long = -1L,
         onBindCall: ((Call) -> Unit)? = null,
         onValidatorResolved: (suspend (String?) -> Unit)? = null,
         onProgress: suspend (downloadedBytes: Long, totalBytes: Long) -> Unit,
     ) =
         withContext(Dispatchers.IO) {
             var currentOffset = if (targetFile.exists()) targetFile.length() else 0L
-
-            // 无强校验器且已有分块数据时，无法保障服务器内容一致性，从头开始
-            if (currentOffset > 0L && validator.isNullOrBlank()) {
-                currentOffset = 0L
-            }
-
             var retriedFromZero = false
 
             while (true) {
-                val requestOffset = currentOffset
                 val reqBuilder =
                     Request.Builder()
                         .url(url)
@@ -46,11 +42,56 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
                         .header("Referer", "https://www.iwara.tv/")
                         .header("Accept", "*/*")
 
-                if (requestOffset > 0L) {
-                    reqBuilder.header("Range", "bytes=$requestOffset-")
-                    if (!validator.isNullOrBlank()) {
-                        reqBuilder.header("If-Range", validator)
+                val rangeValidator =
+                    validator?.trim()?.takeIf { it.startsWith('"') && it.endsWith('"') }
+                val hasStrongValidator = rangeValidator != null
+                val canResumeWithoutValidator =
+                    !hasStrongValidator &&
+                        currentOffset > 0L &&
+                        expectedTotalBytes > 0L &&
+                        currentOffset <= expectedTotalBytes
+
+                val isFullCompletedProbe =
+                    hasStrongValidator &&
+                        expectedTotalBytes > 0L &&
+                        currentOffset == expectedTotalBytes
+
+                val requestRangeStart: Long?
+                val overlapLength: Long
+
+                if (retriedFromZero) {
+                    requestRangeStart = null
+                    overlapLength = 0L
+                } else if (currentOffset == 0L) {
+                    requestRangeStart = 0L
+                    overlapLength = 0L
+                    reqBuilder.header("Range", "bytes=0-")
+                } else if (hasStrongValidator) {
+                    if (isFullCompletedProbe) {
+                        // 全量已存在时探测尾部避免 416
+                        val start = maxOf(0L, currentOffset - OVERLAP_SIZE)
+                        requestRangeStart = start
+                        overlapLength = currentOffset - start
+                        reqBuilder.header("Range", "bytes=$start-")
+                        rangeValidator?.let { reqBuilder.header("If-Range", it) }
+                    } else {
+                        // 强校验器普通续传
+                        requestRangeStart = currentOffset
+                        overlapLength = 0L
+                        reqBuilder.header("Range", "bytes=$currentOffset-")
+                        rangeValidator?.let { reqBuilder.header("If-Range", it) }
                     }
+                } else if (canResumeWithoutValidator) {
+                    // 无强校验器但已知 total 且部分下载未超界，从尾部重叠发起请求
+                    val start = maxOf(0L, currentOffset - OVERLAP_SIZE)
+                    requestRangeStart = start
+                    overlapLength = currentOffset - start
+                    reqBuilder.header("Range", "bytes=$start-")
+                } else {
+                    // 无强校验器且无可靠元数据，无法保障一致性，从头请求，但保留旧文件直到收到有效响应
+                    currentOffset = 0L
+                    requestRangeStart = null
+                    overlapLength = 0L
                 }
 
                 val call = okHttpClient.newCall(reqBuilder.build())
@@ -104,83 +145,145 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
 
                             val resolvedValidator = extractValidator(response)
 
-                            var append = false
-                            var totalBytes = -1L
-
-                            if (statusCode == 206) {
-                                // 206 响应但校验器与原校验器不一致，说明服务端资源已变更，从 0 安全重试一次
-                                if (
-                                    requestOffset > 0L &&
-                                        !validator.isNullOrBlank() &&
-                                        !resolvedValidator.isNullOrBlank() &&
-                                        resolvedValidator != validator
-                                ) {
-                                    if (!retriedFromZero) {
-                                        resetTargetFile(targetFile)
-                                        currentOffset = 0L
-                                        retriedFromZero = true
-                                        return@use true
-                                    }
-                                    throw IOException(
-                                        "Validator changed on 206: expected $validator, got $resolvedValidator"
-                                    )
-                                }
-
-                                val contentRange = response.header("Content-Range").orEmpty()
-                                val parsed = parseContentRange(contentRange)
-                                val start = parsed?.first
-                                val end = parsed?.second
-                                val total = parsed?.third ?: -1L
-                                val bodyLen = response.body?.contentLength() ?: -1L
-
-                                val rangeValid =
-                                    start != null &&
-                                        end != null &&
-                                        start == requestOffset &&
-                                        end >= start &&
-                                        (total == -1L || end < total) &&
-                                        (bodyLen == -1L || bodyLen == (end - start + 1L))
-
-                                if (!rangeValid) {
-                                    if (!retriedFromZero) {
-                                        resetTargetFile(targetFile)
-                                        currentOffset = 0L
-                                        retriedFromZero = true
-                                        return@use true
-                                    }
-                                    throw IOException(
-                                        "Content-Range mismatch: $contentRange, expected start: $requestOffset"
-                                    )
-                                }
-
-                                if (!resolvedValidator.isNullOrBlank()) {
-                                    onValidatorResolved?.invoke(resolvedValidator)
-                                }
-
-                                append = requestOffset > 0L
-                                totalBytes = if (total > 0L) total else -1L
-                            } else if (statusCode == 200) {
-                                // HTTP 200 降级时从 0 重置文件，并始终更新/清理校验器（包含 null）
+                            if (statusCode == 200) {
+                                // 200 响应安全重写文件，绝不追加，并更新/清理校验器
                                 resetTargetFile(targetFile)
                                 currentOffset = 0L
                                 onValidatorResolved?.invoke(resolvedValidator)
 
-                                append = false
                                 val len = response.body?.contentLength() ?: -1L
-                                totalBytes = if (len > 0L) len else -1L
+                                val totalBytes = if (len > 0L) len else -1L
+
+                                onProgress(0L, totalBytes)
+
+                                val bodyStream =
+                                    response.body?.byteStream()
+                                        ?: throw IOException("Empty response body")
+                                readResponseBody(
+                                    input = bodyStream,
+                                    targetFile = targetFile,
+                                    append = false,
+                                    currentOffset = 0L,
+                                    expectedBytes = if (len > 0L) len else -1L,
+                                    totalBytes = totalBytes,
+                                    onProgress = onProgress,
+                                )
+                                return@use false
                             }
 
-                            // 响应头解析完毕立即通知初始进度
-                            val initialAnnounceBytes = if (append) targetFile.length() else 0L
-                            onProgress(initialAnnounceBytes, totalBytes)
+                            // 以下处理 206 响应
+                            val expectedStart = requestRangeStart ?: 0L
 
-                            readResponseBody(
-                                response = response,
-                                targetFile = targetFile,
-                                append = append,
-                                totalBytes = totalBytes,
-                                onProgress = onProgress,
-                            )
+                            // 强校验器变更且非重叠模式时从 0 重试一次
+                            if (
+                                hasStrongValidator &&
+                                    currentOffset > 0L &&
+                                    !resolvedValidator.isNullOrBlank() &&
+                                    resolvedValidator != rangeValidator
+                            ) {
+                                if (!retriedFromZero) {
+                                    resetTargetFile(targetFile)
+                                    currentOffset = 0L
+                                    retriedFromZero = true
+                                    return@use true
+                                }
+                                throw IOException(
+                                    "Validator changed on 206: expected $validator, got $resolvedValidator"
+                                )
+                            }
+
+                            val contentRange = response.header("Content-Range").orEmpty()
+                            val parsed = parseContentRange(contentRange)
+                            val start = parsed?.first
+                            val end = parsed?.second
+                            val total = parsed?.third ?: -1L
+                            val bodyLen = response.body?.contentLength() ?: -1L
+
+                            // 元数据已知时，206 total 必须严格相等，否则直接报错保留原文件，不得追加或重试清空
+                            if (expectedTotalBytes > 0L && currentOffset > 0L) {
+                                if (total == -1L || total != expectedTotalBytes) {
+                                    throw IOException(
+                                        "Total bytes mismatch on 206: expected $expectedTotalBytes, got ${if (total == -1L) "unknown" else total}"
+                                    )
+                                }
+                            }
+
+                            val expectedRangeBodyLen =
+                                if (start != null && end != null && end >= start) {
+                                    end - start + 1L
+                                } else {
+                                    -1L
+                                }
+
+                            val rangeValid =
+                                start != null &&
+                                    end != null &&
+                                    start == expectedStart &&
+                                    end >= start &&
+                                    (total == -1L || end < total) &&
+                                    (bodyLen == -1L || bodyLen == expectedRangeBodyLen)
+
+                            if (!rangeValid) {
+                                if (hasStrongValidator && !retriedFromZero) {
+                                    resetTargetFile(targetFile)
+                                    currentOffset = 0L
+                                    retriedFromZero = true
+                                    return@use true
+                                }
+                                throw IOException(
+                                    "Content-Range mismatch: $contentRange, expected start: $expectedStart"
+                                )
+                            }
+
+                            val totalBytes = if (total > 0L) total else expectedTotalBytes
+                            if (totalBytes <= 0L) {
+                                throw IOException("无法确认分块响应的完整文件大小")
+                            }
+                            val bodyStream =
+                                response.body?.byteStream()
+                                    ?: throw IOException("Empty response body")
+
+                            // 重叠部分与本地文件逐字节校验
+                            if (overlapLength > 0L) {
+                                verifyOverlap(
+                                    input = bodyStream,
+                                    targetFile = targetFile,
+                                    rangeStart = start!!,
+                                    overlapLength = overlapLength,
+                                )
+                            }
+
+                            // 重叠验证通过后才更新或清理校验器
+                            onValidatorResolved?.invoke(resolvedValidator)
+
+                            // 初始进度通知维持实际已有 offset 与稳定 total
+                            onProgress(currentOffset, totalBytes)
+
+                            val expectedNewBytes = expectedRangeBodyLen - overlapLength
+
+                            if (expectedNewBytes == 0L) {
+                                // 全量文件探测验证完成，确认流结束并安全返回
+                                val extra = bodyStream.read()
+                                if (extra != -1) {
+                                    throw IOException(
+                                        "Unexpected extra bytes after completed overlap verification"
+                                    )
+                                }
+                                onProgress(targetFile.length(), totalBytes)
+                            } else {
+                                // 仅写入 offset 后新字节
+                                val append = currentOffset > 0L
+                                readResponseBody(
+                                    input = bodyStream,
+                                    targetFile = targetFile,
+                                    append = append,
+                                    currentOffset = currentOffset,
+                                    expectedBytes = expectedNewBytes,
+                                    totalBytes = totalBytes,
+                                    onProgress = onProgress,
+                                )
+                            }
+
                             false
                         }
                     } catch (exception: IOException) {
@@ -215,12 +318,8 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
     }
 
     private fun extractValidator(response: Response): String? {
-        val etag = response.header("ETag")?.trim()
-        return if (etag != null && !etag.startsWith("W/", ignoreCase = true)) {
-            etag
-        } else {
-            response.header("Last-Modified")?.trim()
-        }
+        // 无法证明 CDN 的修改时间是强校验器，此时改用大小和重叠字节验证。
+        return response.header("ETag")?.trim()?.takeIf { it.startsWith('"') && it.endsWith('"') }
     }
 
     private fun parseContentRange(header: String): Triple<Long, Long, Long?>? {
@@ -231,38 +330,90 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
         return Triple(start, end, total)
     }
 
+    // 逐字节比对重叠区间，保障内容一致性且不修改本地文件
+    private suspend fun verifyOverlap(
+        input: InputStream,
+        targetFile: File,
+        rangeStart: Long,
+        overlapLength: Long,
+    ) {
+        if (overlapLength <= 0L) return
+        var verified = 0L
+        RandomAccessFile(targetFile, "r").use { raf ->
+            raf.seek(rangeStart)
+            val netBuffer = ByteArray(8192)
+            val fileBuffer = ByteArray(8192)
+            while (verified < overlapLength) {
+                currentCoroutineContext().ensureActive()
+                val toRead = minOf(netBuffer.size.toLong(), overlapLength - verified).toInt()
+                var netRead = 0
+                while (netRead < toRead) {
+                    val r = input.read(netBuffer, netRead, toRead - netRead)
+                    if (r == -1) {
+                        throw EOFException("Premature EOF while verifying overlap data")
+                    }
+                    netRead += r
+                }
+                raf.readFully(fileBuffer, 0, toRead)
+                for (i in 0 until toRead) {
+                    if (netBuffer[i] != fileBuffer[i]) {
+                        throw IOException(
+                            "Overlap byte mismatch at offset ${rangeStart + verified + i}"
+                        )
+                    }
+                }
+                verified += toRead
+            }
+        }
+    }
+
+    // 读取响应体流并写入磁盘，严格校验响应体长度
     private suspend fun readResponseBody(
-        response: Response,
+        input: InputStream,
         targetFile: File,
         append: Boolean,
+        currentOffset: Long,
+        expectedBytes: Long,
         totalBytes: Long,
         onProgress: suspend (Long, Long) -> Unit,
     ) {
-        val body = response.body ?: throw IOException("Empty response body")
-        targetFile.parentFile?.mkdirs()
+        val parent = targetFile.parentFile
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs()
+        }
 
-        var writtenBytes = if (append) targetFile.length() else 0L
+        var writtenBytes = 0L
         var lastProgressTime = System.currentTimeMillis()
 
         FileOutputStream(targetFile, append).use { fos ->
-            body.byteStream().use { input ->
-                val buffer = ByteArray(8192)
-                var len: Int
-                while (input.read(buffer).also { len = it } != -1) {
-                    currentCoroutineContext().ensureActive()
-                    fos.write(buffer, 0, len)
-                    writtenBytes += len
-
-                    val now = System.currentTimeMillis()
-                    if (now - lastProgressTime >= 500L) {
-                        onProgress(writtenBytes, totalBytes)
-                        lastProgressTime = now
-                    }
+            val buffer = ByteArray(8192)
+            var len: Int
+            while (input.read(buffer).also { len = it } != -1) {
+                currentCoroutineContext().ensureActive()
+                if (expectedBytes >= 0L && writtenBytes + len > expectedBytes) {
+                    throw IOException("响应字节数超过声明范围")
                 }
-                fos.flush()
+                fos.write(buffer, 0, len)
+                writtenBytes += len
+
+                val now = System.currentTimeMillis()
+                if (now - lastProgressTime >= 500L) {
+                    onProgress(currentOffset + writtenBytes, totalBytes)
+                    lastProgressTime = now
+                }
             }
+            fos.flush()
         }
+
         currentCoroutineContext().ensureActive()
+
+        // 严格校验已读响应长度，防止 chunked 或截断假成功
+        if (expectedBytes >= 0L && writtenBytes != expectedBytes) {
+            throw EOFException(
+                "Incomplete response body: expected $expectedBytes bytes, but got $writtenBytes bytes"
+            )
+        }
+
         val finalDiskLength = targetFile.length()
         onProgress(finalDiskLength, totalBytes)
 
@@ -274,6 +425,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
     }
 
     companion object {
+        private const val OVERLAP_SIZE = 65536L
         private val CONTENT_RANGE_REGEX =
             Regex("""bytes\s+(\d+)-(\d+)/(?:(\d+)|\*)""", RegexOption.IGNORE_CASE)
     }

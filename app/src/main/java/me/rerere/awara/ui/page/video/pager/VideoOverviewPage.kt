@@ -45,6 +45,7 @@ import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +69,7 @@ import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.Video
+import me.rerere.awara.data.entity.downloadableVideoFiles
 import me.rerere.awara.data.entity.fixUrl
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.Button
@@ -79,10 +81,12 @@ import me.rerere.awara.ui.component.iwara.AuthorCard
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.component.iwara.TagRow
+import me.rerere.awara.ui.component.player.VideoQualityDownloadDialog
 import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.util.openUrl
 import me.rerere.awara.util.shareLink
 import me.rerere.awara.util.toLocalDateTimeString
+import me.rerere.compose_setting.preference.mmkvPreference
 import org.koin.compose.koinInject
 
 @Composable
@@ -104,6 +108,24 @@ fun VideoOverviewPage(vm: VideoVM) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 contentPadding = PaddingValues(8.dp) + WindowInsets.navigationBars.asPaddingValues(),
             ) {
+                state.sourceError?.let { reason ->
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.video_source_load_failed, reason),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { vm.getVideo() }) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                    }
+                }
                 state.video?.let {
                     item(span = StaggeredGridItemSpan.FullLine) {
                         VideoInfoCard(video = it, vm = vm)
@@ -190,6 +212,11 @@ fun VideoOverviewPage(vm: VideoVM) {
     }
 }
 
+private enum class DownloadOptionMode {
+    APP,
+    EXTERNAL,
+}
+
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 private fun VideoInfoCard(video: Video, vm: VideoVM) {
@@ -271,12 +298,28 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                     )
                 var showDownloadMenu by remember { mutableStateOf(false) }
                 var downloadEnqueueing by remember { mutableStateOf(false) }
+                var pendingDownloadOption by remember { mutableStateOf<DownloadOptionMode?>(null) }
+                val isDownloadBusy = downloadEnqueueing || vm.state.loading
+                val availableSources =
+                    remember(vm.state.urls) { vm.state.urls.downloadableVideoFiles() }
+                LaunchedEffect(availableSources) {
+                    if (pendingDownloadOption != null && availableSources.isEmpty()) {
+                        pendingDownloadOption = null
+                        message.error { Text(stringResource(R.string.download_url_unavailable)) }
+                    }
+                }
+
+                fun checkAndPrepareDownload(mode: DownloadOptionMode) {
+                    if (isDownloadBusy) return
+                    if (availableSources.isEmpty()) {
+                        message.error { Text(stringResource(R.string.download_url_unavailable)) }
+                        return
+                    }
+                    pendingDownloadOption = mode
+                }
 
                 Box {
-                    IconButton(
-                        enabled = !downloadEnqueueing,
-                        onClick = { showDownloadMenu = true },
-                    ) {
+                    IconButton(enabled = !isDownloadBusy, onClick = { showDownloadMenu = true }) {
                         Icon(Icons.Outlined.Download, null)
                     }
 
@@ -286,147 +329,148 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                     ) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.download_method_app)) },
-                            enabled = !downloadEnqueueing,
+                            enabled = !isDownloadBusy,
                             onClick = {
                                 showDownloadMenu = false
-                                if (downloadEnqueueing) return@DropdownMenuItem
-
-                                val downloadUrl =
-                                    vm.state.urls
-                                        .lastOrNull()
-                                        ?.src
-                                        ?.download
-                                        ?.fixUrl()
-                                        ?.trim()
-                                        .orEmpty()
-                                val parsedUri =
-                                    downloadUrl.takeIf { it.isNotBlank() }?.let(Uri::parse)
-                                val scheme = parsedUri?.scheme?.lowercase()
-                                if (
-                                    parsedUri == null ||
-                                        (scheme != "http" && scheme != "https") ||
-                                        parsedUri.host.isNullOrBlank()
-                                ) {
-                                    message.error {
-                                        Text(stringResource(R.string.download_url_unavailable))
-                                    }
-                                    return@DropdownMenuItem
-                                }
-
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    if (
-                                        notificationPermissionState.status !=
-                                            PermissionStatus.Granted
-                                    ) {
-                                        message.error {
-                                            Text(
-                                                stringResource(
-                                                    R.string.please_grant_notification_permission
-                                                )
-                                            )
-                                        }
-                                        notificationPermissionState.launchPermissionRequest()
-                                        return@DropdownMenuItem
-                                    }
-                                }
-
-                                if (
-                                    !NotificationManagerCompat.from(context)
-                                        .areNotificationsEnabled()
-                                ) {
-                                    message.error {
-                                        Text(stringResource(R.string.notification_is_not_enabled))
-                                    }
-                                    return@DropdownMenuItem
-                                }
-
-                                val directoryUri = downloadStorage.directoryUri()
-                                // Android 8.0-9.0 未配置 SAF 目录时写入公共下载目录需要运行时存储权限
-                                if (
-                                    Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                                        directoryUri.isBlank() &&
-                                        storagePermissionState.status != PermissionStatus.Granted
-                                ) {
-                                    message.error {
-                                        Text(
-                                            stringResource(
-                                                R.string.download_storage_permission_required
-                                            )
-                                        )
-                                    }
-                                    storagePermissionState.launchPermissionRequest()
-                                    return@DropdownMenuItem
-                                }
-
-                                downloadEnqueueing = true
-                                scope.launch {
-                                    try {
-                                        downloadManager.enqueue(video, downloadUrl, directoryUri)
-                                        message.info {
-                                            Text(stringResource(R.string.start_downloading))
-                                        }
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        message.error {
-                                            Text(
-                                                stringResource(
-                                                    R.string.download_enqueue_failed,
-                                                    e.message ?: e.javaClass.simpleName,
-                                                )
-                                            )
-                                        }
-                                    } finally {
-                                        downloadEnqueueing = false
-                                    }
-                                }
+                                checkAndPrepareDownload(DownloadOptionMode.APP)
                             },
                         )
 
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.download_method_open_link)) },
-                            enabled = !downloadEnqueueing,
+                            enabled = !isDownloadBusy,
                             onClick = {
                                 showDownloadMenu = false
-                                val downloadUrl =
-                                    vm.state.urls
-                                        .lastOrNull()
-                                        ?.src
-                                        ?.download
-                                        ?.fixUrl()
-                                        ?.trim()
-                                        .orEmpty()
-                                val uri = downloadUrl.takeIf { it.isNotBlank() }?.let(Uri::parse)
-                                val scheme = uri?.scheme?.lowercase()
-                                if (
-                                    uri == null ||
-                                        (scheme != "http" && scheme != "https") ||
-                                        uri.host.isNullOrBlank()
-                                ) {
-                                    message.error {
-                                        Text(stringResource(R.string.download_url_unavailable))
-                                    }
-                                    return@DropdownMenuItem
-                                }
-                                try {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                                } catch (e: ActivityNotFoundException) {
-                                    message.error {
-                                        Text(stringResource(R.string.download_no_handler))
-                                    }
-                                } catch (e: Exception) {
-                                    message.error {
-                                        Text(
-                                            stringResource(
-                                                R.string.download_open_link_failed,
-                                                e.message ?: e.javaClass.simpleName,
-                                            )
-                                        )
-                                    }
-                                }
+                                checkAndPrepareDownload(DownloadOptionMode.EXTERNAL)
                             },
                         )
                     }
+                }
+
+                val currentPendingOption = pendingDownloadOption
+                if (currentPendingOption != null && availableSources.isNotEmpty()) {
+                    val savedQuality = mmkvPreference.getString("setting.player_quality", "Source")
+                    VideoQualityDownloadDialog(
+                        sources = availableSources,
+                        initialSelectedQualityKey = savedQuality,
+                        onDismissRequest = { pendingDownloadOption = null },
+                        onConfirm = { selectedSource ->
+                            pendingDownloadOption = null
+                            when (currentPendingOption) {
+                                DownloadOptionMode.APP -> {
+                                    if (downloadEnqueueing) return@VideoQualityDownloadDialog
+
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        if (
+                                            notificationPermissionState.status !=
+                                                PermissionStatus.Granted
+                                        ) {
+                                            message.error {
+                                                Text(
+                                                    stringResource(
+                                                        R.string
+                                                            .please_grant_notification_permission
+                                                    )
+                                                )
+                                            }
+                                            notificationPermissionState.launchPermissionRequest()
+                                            return@VideoQualityDownloadDialog
+                                        }
+                                    }
+
+                                    if (
+                                        !NotificationManagerCompat.from(context)
+                                            .areNotificationsEnabled()
+                                    ) {
+                                        message.error {
+                                            Text(
+                                                stringResource(R.string.notification_is_not_enabled)
+                                            )
+                                        }
+                                        return@VideoQualityDownloadDialog
+                                    }
+
+                                    val directoryUri = downloadStorage.directoryUri()
+                                    // Android 8.0-9.0 未配置 SAF 目录时写入公共下载目录需要运行时存储权限
+                                    if (
+                                        Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                            directoryUri.isBlank() &&
+                                            storagePermissionState.status !=
+                                                PermissionStatus.Granted
+                                    ) {
+                                        message.error {
+                                            Text(
+                                                stringResource(
+                                                    R.string.download_storage_permission_required
+                                                )
+                                            )
+                                        }
+                                        storagePermissionState.launchPermissionRequest()
+                                        return@VideoQualityDownloadDialog
+                                    }
+
+                                    downloadEnqueueing = true
+                                    scope.launch {
+                                        try {
+                                            downloadManager.enqueue(
+                                                video,
+                                                selectedSource,
+                                                directoryUri,
+                                            )
+                                            message.info {
+                                                Text(stringResource(R.string.start_downloading))
+                                            }
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            message.error {
+                                                Text(
+                                                    stringResource(
+                                                        R.string.download_enqueue_failed,
+                                                        e.message ?: e.javaClass.simpleName,
+                                                    )
+                                                )
+                                            }
+                                        } finally {
+                                            downloadEnqueueing = false
+                                        }
+                                    }
+                                }
+                                DownloadOptionMode.EXTERNAL -> {
+                                    val downloadUrl = selectedSource.src.download.fixUrl().trim()
+                                    val uri =
+                                        downloadUrl.takeIf { it.isNotBlank() }?.let(Uri::parse)
+                                    val scheme = uri?.scheme?.lowercase()
+                                    if (
+                                        uri == null ||
+                                            (scheme != "http" && scheme != "https") ||
+                                            uri.host.isNullOrBlank()
+                                    ) {
+                                        message.error {
+                                            Text(stringResource(R.string.download_url_unavailable))
+                                        }
+                                        return@VideoQualityDownloadDialog
+                                    }
+                                    try {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                    } catch (e: ActivityNotFoundException) {
+                                        message.error {
+                                            Text(stringResource(R.string.download_no_handler))
+                                        }
+                                    } catch (e: Exception) {
+                                        message.error {
+                                            Text(
+                                                stringResource(
+                                                    R.string.download_open_link_failed,
+                                                    e.message ?: e.javaClass.simpleName,
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    )
                 }
 
                 IconButton(onClick = { context.shareLink("https://www.iwara.tv/video/${vm.id}") }) {

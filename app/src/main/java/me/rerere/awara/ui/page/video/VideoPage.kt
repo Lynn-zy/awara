@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cast
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.FullscreenExit
@@ -34,6 +35,8 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.fixUrl
+import me.rerere.awara.data.entity.playableVideoFiles
+import me.rerere.awara.data.entity.qualityKey
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.ui.LocalMessageProvider
@@ -42,8 +45,10 @@ import me.rerere.awara.ui.component.player.DlnaSelector
 import me.rerere.awara.ui.component.player.Player
 import me.rerere.awara.ui.component.player.PlayerScaffold
 import me.rerere.awara.ui.component.player.PlayerState
+import me.rerere.awara.ui.component.player.matchVideoQuality
 import me.rerere.awara.ui.component.player.rememberDlnaCastState
 import me.rerere.awara.ui.component.player.rememberPlayerState
+import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.ForceSystemBarColor
 import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
 import me.rerere.awara.ui.hooks.rememberWindowSizeClass
@@ -115,12 +120,14 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     }
     BackHandler(fullscreen) { exitFullScreen() }
     fun applyUrls(urls: List<VideoFile>) {
+        val playable = urls.playableVideoFiles()
         state.updatePlayerItems(
-            urls.map {
+            playable.map {
                 PlayerState.PlayerItem(
                     quality = it.name,
                     mediaItem =
                         MediaItem.Builder()
+                            .setMediaId(vm.id)
                             .setUri(it.src.view.fixUrl())
                             .setMediaMetadata(
                                 MediaMetadata.Builder().setTitle(vm.state.video?.title).build()
@@ -129,7 +136,6 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                 )
             }
         )
-        // state.updateCurrentQuality(urls.lastOrNull()?.name ?: "Source")
         if (mmkvPreference.getBoolean("setting.auto_play", true)) {
             state.prepare()
         }
@@ -203,21 +209,50 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
 
                         Box {
                             var expandedVideoQuality by remember { mutableStateOf(false) }
+                            val playableUrls = vm.state.urls.playableVideoFiles()
                             TextButton(onClick = { expandedVideoQuality = true }) {
-                                Text(text = state.currentQuality, color = Color.White)
+                                Text(
+                                    text = videoQualityDisplayName(state.currentQuality),
+                                    color = Color.White,
+                                )
                             }
                             DropdownMenu(
                                 expanded = expandedVideoQuality,
                                 onDismissRequest = { expandedVideoQuality = false },
                             ) {
-                                vm.state.urls.forEach { url ->
+                                if (playableUrls.isEmpty()) {
                                     DropdownMenuItem(
-                                        onClick = {
-                                            expandedVideoQuality = false
-                                            state.updateCurrentQuality(url.name)
+                                        text = {
+                                            Text(
+                                                composeStringResource(
+                                                    R.string.video_quality_unavailable
+                                                )
+                                            )
                                         },
-                                        text = { Text(url.name) },
+                                        enabled = false,
+                                        onClick = {},
                                     )
+                                } else {
+                                    playableUrls.forEach { url ->
+                                        val isSelected =
+                                            matchVideoQuality(url.qualityKey, state.currentQuality)
+                                        DropdownMenuItem(
+                                            onClick = {
+                                                expandedVideoQuality = false
+                                                state.updateCurrentQuality(url.name)
+                                            },
+                                            text = { Text(videoQualityDisplayName(url.name)) },
+                                            trailingIcon =
+                                                if (isSelected) {
+                                                    {
+                                                        Icon(
+                                                            Icons.Outlined.Check,
+                                                            contentDescription = null,
+                                                        )
+                                                    }
+                                                } else null,
+                                        )
+                                    }
                                 }
                             }
                         }

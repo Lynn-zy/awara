@@ -90,5 +90,9 @@ val Video.signature: String
         val url = fileUrl?.toHttpUrl() ?: return ""
         val id = url.pathSegments.lastOrNull() ?: return ""
         val expire = url.queryParameter("expires") ?: return ""
-        return "${id}_${expire}_5nFp9kmbNnHdAFhaqMvt".toByteArray().sha1().toHex().lowercase()
+        return "${id}_${expire}_mSvL05GfEmeEmsEYfGCnVpEjYgTJraJN"
+            .toByteArray()
+            .sha1()
+            .toHex()
+            .lowercase()
     }

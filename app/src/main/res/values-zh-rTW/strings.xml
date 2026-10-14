@@ -144,9 +144,24 @@
     <string name="download_author_folder_stats">%1$d 部影片 · %2$s · %3$s</string>
     <string name="download_author_folder_open">開啟資料夾</string>
     <string name="download_more_actions">更多操作</string>
-    <string name="download_play">播放</string>
     <string name="download_delete_confirm_title">刪除已下載檔案</string>
     <string name="download_delete_confirm_message">確定要刪除「%1$s」嗎？本機檔案也將被移除。</string>
     <string name="download_folder_empty">該分類下暫無影片</string>
     <string name="download_back">返回</string>
+    <string name="download_play_external">使用系統播放器播放</string>
+    <string name="download_selection_count">已選擇 %1$d 項</string>
+    <string name="download_select_all">全選</string>
+    <string name="download_clear_selection">取消選擇</string>
+    <string name="download_delete_selected">刪除所選</string>
+    <string name="download_delete_selected_title">刪除所選影片</string>
+    <string name="download_delete_selected_message">確定要刪除選中的 %1$d 部影片嗎？本機檔案也會被刪除。</string>
+    <string name="download_selected_accessibility">已選取</string>
+    <string name="video_quality_original">原畫</string>
+    <string name="video_quality_choose_download">選擇下載畫質</string>
+    <string name="video_quality_choose_playback">播放畫質</string>
+    <string name="video_quality_confirm">確認</string>
+    <string name="video_quality_unavailable">畫質不可用</string>
+    <string name="video_source_load_failed">影片畫質載入失敗：%1$s</string>
+    <string name="download_quality_missing">此任務未儲存畫質，請取消後重新下載，避免拼接不同的影片檔案。</string>
+    <string name="download_invalid_video">下載檔案沒有可讀取的影片軌道，未將其儲存為已完成影片。</string>
 </resources>

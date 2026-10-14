@@ -144,9 +144,24 @@
     <string name="download_author_folder_stats">%1$d 件の動画 · %2$s · %3$s</string>
     <string name="download_author_folder_open">フォルダを開く</string>
     <string name="download_more_actions">その他の操作</string>
-    <string name="download_play">再生</string>
     <string name="download_delete_confirm_title">ダウンロードファイルを削除</string>
     <string name="download_delete_confirm_message">「%1$s」を削除しますか？端末上のファイルも削除されます。</string>
     <string name="download_folder_empty">このカテゴリには動画がありません</string>
     <string name="download_back">戻る</string>
+    <string name="download_play_external">システムのプレーヤーで再生</string>
+    <string name="download_selection_count">%1$d 件選択中</string>
+    <string name="download_select_all">すべて選択</string>
+    <string name="download_clear_selection">選択解除</string>
+    <string name="download_delete_selected">選択した動画を削除</string>
+    <string name="download_delete_selected_title">選択した動画を削除</string>
+    <string name="download_delete_selected_message">選択した %1$d 件の動画を削除しますか？ローカルファイルも削除されます。</string>
+    <string name="download_selected_accessibility">選択中</string>
+    <string name="video_quality_original">オリジナル</string>
+    <string name="video_quality_choose_download">ダウンロード画質を選択</string>
+    <string name="video_quality_choose_playback">再生画質</string>
+    <string name="video_quality_confirm">確定</string>
+    <string name="video_quality_unavailable">画質を利用できません</string>
+    <string name="video_source_load_failed">動画の画質を読み込めませんでした：%1$s</string>
+    <string name="download_quality_missing">このタスクには画質が保存されていません。異なる動画の混在を防ぐため、キャンセルして新しくダウンロードしてください。</string>
+    <string name="download_invalid_video">読み取れる動画トラックがありません。完了した動画として保存されていません。</string>
 </resources>
