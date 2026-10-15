@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.page.download
 
 import java.time.Instant
+import java.time.ZoneId
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadType
 import org.junit.Assert.assertEquals
@@ -9,6 +10,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DownloadListTest {
+    @Test
+    fun downloadDateUsesTwoDigitYearAndPaddedMonthAndDay() {
+        assertEquals(
+            "26/01/09",
+            formatDownloadDate(Instant.parse("2026-01-09T12:00:00Z"), ZoneId.of("UTC")),
+        )
+    }
+
+    @Test
+    fun downloadDateUsesLocalTimeZoneAtYearBoundary() {
+        assertEquals(
+            "27/01/01",
+            formatDownloadDate(Instant.parse("2026-12-31T20:00:00Z"), ZoneId.of("Asia/Shanghai")),
+        )
+    }
+
     private fun createItem(
         id: Int,
         title: String,

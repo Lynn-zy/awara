@@ -13,9 +13,9 @@ import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Source
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,7 +50,8 @@ import org.koin.compose.koinInject
 @Composable
 fun SettingPage() {
     val context = LocalContext.current
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val router = LocalRouterProvider.current
     val downloadStorage: DownloadStorage = koinInject()
     var showDownloadDirectoryDialog by remember { mutableStateOf(false) }
@@ -77,8 +79,14 @@ fun SettingPage() {
     }
     Scaffold(
         topBar = {
-            LargeTopAppBar(
-                title = { Text(stringResource(R.string.setting_title)) },
+            TopAppBar(
+                title = {
+                    Text(
+                        text = stringResource(R.string.setting_title),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 navigationIcon = { BackButton() },
                 scrollBehavior = scrollBehavior,
             )

@@ -23,14 +23,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.DownloadDone
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.PersonOff
 import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Translate
@@ -42,6 +49,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,12 +62,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import coil.compose.AsyncImage
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
@@ -68,6 +79,7 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
+import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.downloadableVideoFiles
 import me.rerere.awara.data.entity.fixUrl
@@ -108,14 +120,31 @@ fun VideoOverviewPage(vm: VideoVM) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 contentPadding = PaddingValues(8.dp) + WindowInsets.navigationBars.asPaddingValues(),
             ) {
-                state.sourceError?.let { reason ->
+                // 本地回退时使用专门的摘要卡片展示原记录
+                if (state.isLocalFallback && state.localDownload != null) {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        LocalDownloadSummary(
+                            item = state.localDownload,
+                            isOnlineRemoved = state.isOnlineRemoved,
+                            sourceError = state.sourceError,
+                            vm = vm,
+                        )
+                    }
+                }
+
+                // 在线视频源解析失败时展示重试入口
+                if (state.video != null && state.sourceError != null && !state.isLocalPlayback) {
                     item(span = StaggeredGridItemSpan.FullLine) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = stringResource(R.string.video_source_load_failed, reason),
+                                text =
+                                    stringResource(
+                                        R.string.video_source_load_failed,
+                                        state.sourceError,
+                                    ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.weight(1f),
@@ -126,21 +155,110 @@ fun VideoOverviewPage(vm: VideoVM) {
                         }
                     }
                 }
-                state.video?.let {
-                    item(span = StaggeredGridItemSpan.FullLine) {
-                        VideoInfoCard(video = it, vm = vm)
+
+                // 无本地文件且在线视频加载失败时展示对应提示
+                if (state.video == null && !state.isLocalFallback && !state.loading) {
+                    if (state.isOnlineRemoved) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.DeleteOutline,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.video_online_removed),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                }
+                            }
+                        }
+                    } else if (state.sourceError != null) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.ErrorOutline,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                    Text(
+                                        text =
+                                            stringResource(
+                                                R.string.video_details_load_failed,
+                                                state.sourceError,
+                                            ),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.error,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                    Button(onClick = { vm.getVideo() }) {
+                                        Text(stringResource(R.string.retry))
+                                    }
+                                }
+                            }
+                        }
                     }
+                }
+
+                // 仅远端元数据真实存在时展示完整信息卡片
+                state.video?.let { video ->
                     item(span = StaggeredGridItemSpan.FullLine) {
-                        AuthorCard(user = it.user, onClickSub = { vm.followOrUnfollow() })
+                        VideoInfoCard(video = video, vm = vm)
                     }
 
-                    item(span = StaggeredGridItemSpan.FullLine) { TagRow(tags = state.video.tags) }
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        if (video.user == null || video.user.deletedAt != null) {
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.PersonOff,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.video_author_unavailable),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        } else {
+                            AuthorCard(user = video.user, onClickSub = { vm.followOrUnfollow() })
+                        }
+                    }
 
-                    val authorVideos = state.userMoreVideos.filter { video -> video.id != vm.id }
-                    val relatedVideos = state.relatedVideos.filter { video -> video.id != vm.id }
+                    if (video.tags.isNotEmpty()) {
+                        item(span = StaggeredGridItemSpan.FullLine) { TagRow(tags = video.tags) }
+                    }
+
+                    val authorVideos = state.userMoreVideos.filter { it.id != vm.id }
+                    val relatedVideos = state.relatedVideos.filter { it.id != vm.id }
 
                     if (
-                        it.user != null &&
+                        video.user != null &&
+                            video.user.deletedAt == null &&
                             (state.userMoreVideosLoading ||
                                 state.userMoreVideosError != null ||
                                 authorVideos.isNotEmpty())
@@ -182,12 +300,8 @@ fun VideoOverviewPage(vm: VideoVM) {
                                 }
                             }
                             else -> {
-                                // 使用分组前缀避免作者作品与相关推荐出现重复视频 ID 时产生列表 key 冲突
-                                items(
-                                    items = authorVideos,
-                                    key = { video -> "author_${video.id}" },
-                                ) { video ->
-                                    MediaCard(media = video)
+                                items(items = authorVideos, key = { v -> "author_${v.id}" }) { v ->
+                                    MediaCard(media = v)
                                 }
                             }
                         }
@@ -201,9 +315,8 @@ fun VideoOverviewPage(vm: VideoVM) {
                                 fontWeight = FontWeight.Bold,
                             )
                         }
-                        items(items = relatedVideos, key = { video -> "related_${video.id}" }) {
-                            video ->
-                            MediaCard(media = video)
+                        items(items = relatedVideos, key = { v -> "related_${v.id}" }) { v ->
+                            MediaCard(media = v)
                         }
                     }
                 }
@@ -268,8 +381,34 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(text = video.createdAt.toLocalDateTimeString())
+
+                    if (vm.state.isLocalPlayback) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.small,
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DownloadDone,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(12.dp),
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                                Text(
+                                    text = stringResource(R.string.video_local_playback),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                            }
+                        }
+                    }
 
                     Spacer(modifier = Modifier.weight(1f))
 
@@ -318,32 +457,38 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                     pendingDownloadOption = mode
                 }
 
-                Box {
-                    IconButton(enabled = !isDownloadBusy, onClick = { showDownloadMenu = true }) {
-                        Icon(Icons.Outlined.Download, null)
-                    }
-
-                    DropdownMenu(
-                        expanded = showDownloadMenu,
-                        onDismissRequest = { showDownloadMenu = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.download_method_app)) },
+                // 本地播放时隐藏下载入口，避免空地址弹窗
+                if (!vm.state.isLocalPlayback) {
+                    Box {
+                        IconButton(
                             enabled = !isDownloadBusy,
-                            onClick = {
-                                showDownloadMenu = false
-                                checkAndPrepareDownload(DownloadOptionMode.APP)
-                            },
-                        )
+                            onClick = { showDownloadMenu = true },
+                        ) {
+                            Icon(Icons.Outlined.Download, null)
+                        }
 
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.download_method_open_link)) },
-                            enabled = !isDownloadBusy,
-                            onClick = {
-                                showDownloadMenu = false
-                                checkAndPrepareDownload(DownloadOptionMode.EXTERNAL)
-                            },
-                        )
+                        DropdownMenu(
+                            expanded = showDownloadMenu,
+                            onDismissRequest = { showDownloadMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.download_method_app)) },
+                                enabled = !isDownloadBusy,
+                                onClick = {
+                                    showDownloadMenu = false
+                                    checkAndPrepareDownload(DownloadOptionMode.APP)
+                                },
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.download_method_open_link)) },
+                                enabled = !isDownloadBusy,
+                                onClick = {
+                                    showDownloadMenu = false
+                                    checkAndPrepareDownload(DownloadOptionMode.EXTERNAL)
+                                },
+                            )
+                        }
                     }
                 }
 
@@ -391,7 +536,6 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                                     }
 
                                     val directoryUri = downloadStorage.directoryUri()
-                                    // Android 8.0-9.0 未配置 SAF 目录时写入公共下载目录需要运行时存储权限
                                     if (
                                         Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                                             directoryUri.isBlank() &&
@@ -498,6 +642,133 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                         if (video.liked) stringResource(R.string.dislike)
                         else stringResource(R.string.like)
                     )
+                }
+            }
+        }
+    }
+}
+
+// 专门展示本地已下载视频信息的独立组件，避免伪造远端统计数据
+@Composable
+private fun LocalDownloadSummary(
+    item: DownloadItem,
+    isOnlineRemoved: Boolean,
+    sourceError: String?,
+    vm: VideoVM,
+) {
+    val context = LocalContext.current
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.video_local_details_hint),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    val statusText =
+                        if (isOnlineRemoved) {
+                            stringResource(R.string.video_online_removed)
+                        } else if (!sourceError.isNullOrBlank()) {
+                            stringResource(R.string.video_details_load_failed, sourceError)
+                        } else null
+                    if (statusText != null) {
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                if (item.thumbnail.isNotBlank()) {
+                    AsyncImage(
+                        model = item.thumbnail,
+                        contentDescription = null,
+                        modifier =
+                            Modifier.width(120.dp)
+                                .aspectRatio(16f / 9f)
+                                .clip(MaterialTheme.shapes.small),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = item.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (item.authorName.isNotBlank()) {
+                        Text(
+                            text = item.authorName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = item.time.toLocalDateTimeString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.DownloadDone,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        Text(
+                            text = stringResource(R.string.video_local_playback),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                IconButton(onClick = { context.shareLink("https://www.iwara.tv/video/${vm.id}") }) {
+                    Icon(Icons.Outlined.Share, null)
                 }
             }
         }

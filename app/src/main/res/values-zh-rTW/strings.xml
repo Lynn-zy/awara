@@ -164,4 +164,19 @@
     <string name="video_source_load_failed">影片畫質載入失敗：%1$s</string>
     <string name="download_quality_missing">此任務未儲存畫質，請取消後重新下載，避免拼接不同的影片檔案。</string>
     <string name="download_invalid_video">下載檔案沒有可讀取的影片軌道，未將其儲存為已完成影片。</string>
+    <string name="download_open_details">進入影片詳情頁</string>
+    <string name="download_focus_missing">該影片已不在已下載清單中</string>
+    <string name="download_task_pause_all">全部暫停</string>
+    <string name="download_task_cancel_all">全部取消</string>
+    <string name="download_task_cancel_all_title">取消全部下載</string>
+    <string name="download_task_cancel_all_message">確定要取消全部 %1$d 個下載任務嗎？已下載的部分檔案將被清理，已完成的影片不受影響。</string>
+    <string name="download_task_batch_failed">批次操作中有 %1$d 個任務失敗：%2$s</string>
+    <string name="download_task_actions">任務操作</string>
+    <string name="video_local_playback">本機影片</string>
+    <string name="video_online_removed">原影片或作者帳號已無法使用</string>
+    <string name="video_author_unavailable">作者帳號無法使用</string>
+    <string name="video_details_load_failed">影片詳情載入失敗：%1$s</string>
+    <string name="video_local_file_unavailable">本機檔案無法使用，正在嘗試線上播放。</string>
+    <string name="video_local_details_hint">已下載的影片仍可播放，線上詳情暫時無法使用。</string>
+    <string name="video_local_cast_unsupported">本機影片暫不支援投放</string>
 </resources>

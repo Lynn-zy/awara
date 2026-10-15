@@ -9,16 +9,17 @@ import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
@@ -34,69 +35,60 @@ import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
-    val appbarBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
+    val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val pagerState = rememberPagerState()
     val scope = rememberCoroutineScope()
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = {
-                    Text(stringResource(R.string.favorites))
+                    Text(
+                        text = stringResource(R.string.favorites),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 },
-                navigationIcon = {
-                    BackButton()
-                },
-                scrollBehavior = appbarBehavior
+                navigationIcon = { BackButton() },
+                scrollBehavior = appbarBehavior,
             )
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier.padding(innerPadding.excludeBottom())
-        ) {
-            BetterTabBar(
-                selectedTabIndex = pagerState.currentPage
-            ) {
+        Column(modifier = Modifier.padding(innerPadding.excludeBottom())) {
+            BetterTabBar(selectedTabIndex = pagerState.currentPage) {
                 Tab(
                     selected = pagerState.currentPage == 0,
                     onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
-                    text = {
-                        Text(stringResource(R.string.video))
-                    }
+                    text = { Text(stringResource(R.string.video)) },
                 )
 
                 Tab(
                     selected = pagerState.currentPage == 1,
                     onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
-                    text = {
-                        Text(stringResource(R.string.image))
-                    }
+                    text = { Text(stringResource(R.string.image)) },
                 )
             }
 
             HorizontalPager(
                 pageCount = 2,
                 state = pagerState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
+                modifier = Modifier.fillMaxWidth().weight(1f),
             ) { page ->
                 when (page) {
                     0 -> {
                         Column {
                             Spin(
                                 show = vm.state.videoLoading,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) {
                                 LazyVerticalStaggeredGrid(
                                     columns = DynamicStaggeredGridCells(),
                                     contentPadding = PaddingValues(8.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalItemSpacing = 8.dp,
-                                    modifier = Modifier
-                                        .matchParentSize()
-                                        .nestedScroll(appbarBehavior.nestedScrollConnection)
+                                    modifier =
+                                        Modifier.matchParentSize()
+                                            .nestedScroll(appbarBehavior.nestedScrollConnection),
                                 ) {
                                     items(vm.state.videoList) { video ->
                                         MediaCard(media = video.video)
@@ -108,10 +100,8 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                 page = vm.state.videoPage,
                                 limit = 32,
                                 total = vm.state.videoCount,
-                                onPageChange = {
-                                    vm.jumpToVideoPage(it)
-                                },
-                                contentPadding = innerPadding.onlyBottom()
+                                onPageChange = { vm.jumpToVideoPage(it) },
+                                contentPadding = innerPadding.onlyBottom(),
                             )
                         }
                     }
@@ -120,18 +110,16 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                         Column {
                             Spin(
                                 show = vm.state.imageLoading,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) {
                                 LazyVerticalStaggeredGrid(
                                     columns = DynamicStaggeredGridCells(),
                                     contentPadding = PaddingValues(8.dp),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalItemSpacing = 8.dp,
-                                    modifier = Modifier
-                                        .matchParentSize()
-                                        .nestedScroll(appbarBehavior.nestedScrollConnection)
+                                    modifier =
+                                        Modifier.matchParentSize()
+                                            .nestedScroll(appbarBehavior.nestedScrollConnection),
                                 ) {
                                     items(vm.state.imageList) { image ->
                                         MediaCard(media = image.image)
@@ -143,10 +131,8 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                 page = vm.state.imagePage,
                                 limit = 32,
                                 total = vm.state.imageCount,
-                                onPageChange = {
-                                    vm.jumpToImagePage(it)
-                                },
-                                contentPadding = innerPadding.onlyBottom()
+                                onPageChange = { vm.jumpToImagePage(it) },
+                                contentPadding = innerPadding.onlyBottom(),
                             )
                         }
                     }

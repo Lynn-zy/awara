@@ -54,31 +54,23 @@ fun CommentList(
     onBack: () -> Unit,
     onPush: (String) -> Unit,
     onPostReply: (CommentCreationDto) -> Unit,
+    canPostReply: Boolean = true,
 ) {
     val currentComment = state.stack.last()
-    var repling by remember {
-        mutableStateOf(false)
-    }
-    var replyTo by remember {
-        mutableStateOf<Comment?>(null)
-    }
+    var repling by remember { mutableStateOf(false) }
+    var replyTo by remember { mutableStateOf<Comment?>(null) }
 
     BackHandler(state.stack.size > 1) {
         onBack()
         replyTo = null
     }
 
-    Column(
-        modifier = modifier,
-    ) {
+    Column(modifier = modifier) {
         AnimatedVisibility(visible = state.stack.size > 1) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(),
-            ) {
+            Surface(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     IconButton(
                         onClick = {
@@ -94,17 +86,11 @@ fun CommentList(
             }
         }
 
-        Spin(
-            show = state.loading,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
+        Spin(show = state.loading, modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize(),
+                modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(8.dp)
+                contentPadding = PaddingValues(8.dp),
             ) {
                 items(currentComment.comments) { comment ->
                     CommentCard(
@@ -114,9 +100,11 @@ fun CommentList(
                             replyTo = it
                         },
                         onReply = {
-                            repling = true
-                            replyTo = it
-                        }
+                            if (canPostReply) {
+                                repling = true
+                                replyTo = it
+                            }
+                        },
                     )
                 }
             }
@@ -127,83 +115,70 @@ fun CommentList(
             label = "ReplyBar",
             transitionSpec = {
                 if (targetState) {
-                    slideInHorizontally(
-                        initialOffsetX = { -it }
-                    ) with slideOutHorizontally(
-                        targetOffsetX = { -it }
-                    )
+                    slideInHorizontally(initialOffsetX = { -it }) with
+                        slideOutHorizontally(targetOffsetX = { -it })
                 } else {
-                    slideInHorizontally(
-                        initialOffsetX = { it }
-                    ) with slideOutHorizontally(
-                        targetOffsetX = { it }
-                    )
+                    slideInHorizontally(initialOffsetX = { it }) with
+                        slideOutHorizontally(targetOffsetX = { it })
                 }
-            }
+            },
         ) {
             if (it) {
-                Surface(
-                    modifier = Modifier
-                        .imePadding()
-                        .fillMaxWidth(),
-                    tonalElevation = 4.dp,
-                ) {
+                Surface(modifier = Modifier.imePadding().fillMaxWidth(), tonalElevation = 4.dp) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .padding(contentPadding)
-                            .padding(6.dp)
-                            .fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier = Modifier.padding(contentPadding).padding(6.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         IconButton(onClick = { repling = false }) {
                             Icon(Icons.Outlined.Close, null)
                         }
 
-                        var body by remember {
-                            mutableStateOf("")
-                        }
+                        var body by remember { mutableStateOf("") }
                         TextField(
                             value = body,
+                            enabled = canPostReply,
                             onValueChange = { body = it },
-                            modifier = Modifier
-                                .weight(1f),
+                            modifier = Modifier.weight(1f),
                             placeholder = {
                                 Text(
-                                    text = if (replyTo == null) {
-                                        "回复"
-                                    } else {
-                                        "回复 ${replyTo?.user?.name}"
-                                    }
+                                    text =
+                                        if (replyTo == null) {
+                                            "回复"
+                                        } else {
+                                            "回复 ${replyTo?.user?.name}"
+                                        }
                                 )
                             },
-                            colors = TextFieldDefaults.textFieldColors(
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                            ),
-                            keyboardOptions = KeyboardOptions(
-                                autoCorrect = false,
-                                imeAction = ImeAction.Send,
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onSend = {
-                                    onPostReply(CommentCreationDto(
-                                        body = body,
-                                        parentId = replyTo?.id,
-                                    ))
-                                    body = ""
-                                }
-                            )
+                            colors =
+                                TextFieldDefaults.textFieldColors(
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                ),
+                            keyboardOptions =
+                                KeyboardOptions(autoCorrect = false, imeAction = ImeAction.Send),
+                            keyboardActions =
+                                KeyboardActions(
+                                    onSend = {
+                                        if (canPostReply) {
+                                            onPostReply(
+                                                CommentCreationDto(
+                                                    body = body,
+                                                    parentId = replyTo?.id,
+                                                )
+                                            )
+                                            body = ""
+                                        }
+                                    }
+                                ),
                         )
 
                         FilledTonalButton(
+                            enabled = canPostReply,
                             onClick = {
-                                onPostReply(CommentCreationDto(
-                                    body = body,
-                                    parentId = replyTo?.id,
-                                ))
+                                onPostReply(CommentCreationDto(body = body, parentId = replyTo?.id))
                                 body = ""
-                            }
+                            },
                         ) {
                             Icon(Icons.Outlined.Send, null)
                         }
@@ -215,18 +190,13 @@ fun CommentList(
                     limit = currentComment.limit,
                     total = currentComment.total,
                     onPageChange = onPageChange,
-                    modifier = Modifier
-                        .fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(),
                     contentPadding = contentPadding,
                     trailing = {
-                        FilledTonalButton(
-                            onClick = {
-                                repling = true
-                            },
-                        ) {
+                        FilledTonalButton(enabled = canPostReply, onClick = { repling = true }) {
                             Icon(
                                 imageVector = Icons.Outlined.ModeComment,
-                                contentDescription = null
+                                contentDescription = null,
                             )
                         }
                     },

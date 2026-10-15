@@ -202,4 +202,19 @@
     <string name="video_source_load_failed">Could not load video quality: %1$s</string>
     <string name="download_quality_missing">This task has no saved quality. Cancel it and create a new download to avoid mixing video files.</string>
     <string name="download_invalid_video">The downloaded file has no readable video track. It has not been saved as a completed download.</string>
+    <string name="download_open_details">Open video details</string>
+    <string name="download_focus_missing">This video is no longer in your downloads</string>
+    <string name="download_task_pause_all">Pause all</string>
+    <string name="download_task_cancel_all">Cancel all</string>
+    <string name="download_task_cancel_all_title">Cancel all downloads</string>
+    <string name="download_task_cancel_all_message">Cancel all %1$d download tasks? Partial files will be deleted. Completed videos will be kept.</string>
+    <string name="download_task_batch_failed">Could not process %1$d tasks: %2$s</string>
+    <string name="download_task_actions">Task actions</string>
+    <string name="video_local_playback">Local video</string>
+    <string name="video_online_removed">The original video or author account is no longer available</string>
+    <string name="video_author_unavailable">Author account unavailable</string>
+    <string name="video_details_load_failed">Could not load video details: %1$s</string>
+    <string name="video_local_file_unavailable">The local file is unavailable. Trying online playback.</string>
+    <string name="video_local_details_hint">The downloaded video can still be played. Online details are unavailable.</string>
+    <string name="video_local_cast_unsupported">Casting local videos is not supported</string>
 </resources>

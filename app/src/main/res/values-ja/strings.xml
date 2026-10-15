@@ -164,4 +164,19 @@
     <string name="video_source_load_failed">動画の画質を読み込めませんでした：%1$s</string>
     <string name="download_quality_missing">このタスクには画質が保存されていません。異なる動画の混在を防ぐため、キャンセルして新しくダウンロードしてください。</string>
     <string name="download_invalid_video">読み取れる動画トラックがありません。完了した動画として保存されていません。</string>
+    <string name="download_open_details">動画の詳細を開く</string>
+    <string name="download_focus_missing">この動画はダウンロード一覧にありません</string>
+    <string name="download_task_pause_all">すべて一時停止</string>
+    <string name="download_task_cancel_all">すべてキャンセル</string>
+    <string name="download_task_cancel_all_title">すべてのダウンロードをキャンセル</string>
+    <string name="download_task_cancel_all_message">%1$d 件のダウンロードをすべてキャンセルしますか？未完了のファイルを削除します。完了した動画は削除しません。</string>
+    <string name="download_task_batch_failed">一括操作で %1$d 件が失敗しました：%2$s</string>
+    <string name="download_task_actions">タスク操作</string>
+    <string name="video_local_playback">ローカル動画</string>
+    <string name="video_online_removed">元の動画または投稿者のアカウントは利用できません</string>
+    <string name="video_author_unavailable">投稿者のアカウントは利用できません</string>
+    <string name="video_details_load_failed">動画の詳細を読み込めませんでした：%1$s</string>
+    <string name="video_local_file_unavailable">ローカルファイルを利用できません。オンライン再生を試みています。</string>
+    <string name="video_local_details_hint">ダウンロード済み動画は再生できます。オンラインの詳細は利用できません。</string>
+    <string name="video_local_cast_unsupported">ローカル動画のキャストには対応していません</string>
 </resources>

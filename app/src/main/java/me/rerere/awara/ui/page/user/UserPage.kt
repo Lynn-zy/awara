@@ -292,7 +292,13 @@ fun UserPage(vm: UserVM = koinViewModel()) {
         topBar = {
             if (expand) {
                 ImageAppBar(
-                    title = { Text(text = profileState?.user?.name ?: "") },
+                    title = {
+                        Text(
+                            text = profileState?.user?.name ?: "",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     navigationIcon = { BackButton() },
                     actions = conversationActions,
                     image = {
@@ -307,7 +313,13 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                 )
             } else {
                 TopAppBar(
-                    title = { Text(text = profileState?.user?.name ?: "") },
+                    title = {
+                        Text(
+                            text = profileState?.user?.name ?: "",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     navigationIcon = { BackButton() },
                     actions = conversationActions,
                 )
@@ -393,7 +405,7 @@ private fun UserCard(
     onFriend: () -> Unit,
 ) {
     val context = LocalContext.current
-    Column(modifier = Modifier.padding(8.dp)) {
+    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
@@ -401,24 +413,33 @@ private fun UserCard(
         ) {
             Avatar(user = profileState?.user, modifier = Modifier.size(48.dp))
 
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = profileState?.user?.name ?: "",
                     style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
 
                 Text(
                     text = "@" + (profileState?.user?.username ?: ""),
                     style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
 
                 Spacer(modifier = Modifier.height(3.dp))
 
                 profileState?.user?.let { UserStatus(user = it) }
             }
+        }
 
-            Spacer(modifier = Modifier.weight(1f))
-
+        // 好友与关注按钮独立成行并居右排布，避免长昵称压缩头像与用户信息
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Button(
                 onClick = { onFriend() },
                 type =

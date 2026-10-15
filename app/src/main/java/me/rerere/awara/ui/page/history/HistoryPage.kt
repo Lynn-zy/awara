@@ -9,10 +9,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.material3.Card
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -37,17 +37,20 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val itemsPaged = vm.historyItems.collectAsLazyPagingItems()
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
         topBar = {
-            LargeTopAppBar(
+            TopAppBar(
                 title = {
-                    Text(stringResource(R.string.history))
+                    Text(
+                        text = stringResource(R.string.history),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 },
-                navigationIcon = {
-                    BackButton()
-                },
-                scrollBehavior = scrollBehavior
+                navigationIcon = { BackButton() },
+                scrollBehavior = scrollBehavior,
             )
         }
     ) {
@@ -56,11 +59,9 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
             contentPadding = it + PaddingValues(8.dp),
             columns = DynamicStaggeredGridCells(),
             verticalItemSpacing = 8.dp,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(itemsPaged) {
-                HistoryItem(it!!)
-            }
+            items(itemsPaged) { HistoryItem(it!!) }
         }
     }
 }
@@ -70,7 +71,7 @@ private fun HistoryItem(item: HistoryItem) {
     val router = LocalRouterProvider.current
     Card(
         onClick = {
-            when(item.type) {
+            when (item.type) {
                 HistoryType.VIDEO -> router.navigate("video/${item.resourceId}")
                 HistoryType.IMAGE -> router.navigate("image/${item.resourceId}")
                 else -> /* TODO */ {}
@@ -81,15 +82,13 @@ private fun HistoryItem(item: HistoryItem) {
             AsyncImage(
                 model = item.thumbnail,
                 contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(22 / 16f),
-                contentScale = ContentScale.Crop
+                modifier = Modifier.fillMaxWidth().aspectRatio(22 / 16f),
+                contentScale = ContentScale.Crop,
             )
 
             Column(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = item.title,

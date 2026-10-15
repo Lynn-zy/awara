@@ -164,4 +164,19 @@
     <string name="video_source_load_failed">视频清晰度加载失败：%1$s</string>
     <string name="download_quality_missing">此任务未保存清晰度，请取消后重新下载，避免拼接不同的视频文件。</string>
     <string name="download_invalid_video">下载文件中没有可读取的视频轨道，未将其保存为已完成视频。</string>
+    <string name="download_open_details">进入视频详情页</string>
+    <string name="download_focus_missing">该视频已不在已下载列表中</string>
+    <string name="download_task_pause_all">全部暂停</string>
+    <string name="download_task_cancel_all">全部取消</string>
+    <string name="download_task_cancel_all_title">取消全部下载</string>
+    <string name="download_task_cancel_all_message">确定要取消全部 %1$d 个下载任务吗？已下载的部分文件将被清理，已完成的视频不受影响。</string>
+    <string name="download_task_batch_failed">批量操作中有 %1$d 个任务失败：%2$s</string>
+    <string name="download_task_actions">任务操作</string>
+    <string name="video_local_playback">本地视频</string>
+    <string name="video_online_removed">原视频或作者账号已不可用</string>
+    <string name="video_author_unavailable">作者账号不可用</string>
+    <string name="video_details_load_failed">视频详情加载失败：%1$s</string>
+    <string name="video_local_file_unavailable">本地文件不可用，正在尝试在线播放。</string>
+    <string name="video_local_details_hint">已下载的视频仍可播放，在线详情暂不可用。</string>
+    <string name="video_local_cast_unsupported">本地视频暂不支持投屏</string>
 </resources>

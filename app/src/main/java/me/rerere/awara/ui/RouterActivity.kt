@@ -29,6 +29,7 @@ import androidx.navigation.navArgument
 import com.google.accompanist.navigation.animation.AnimatedNavHost
 import com.google.accompanist.navigation.animation.composable
 import com.google.accompanist.navigation.animation.rememberAnimatedNavController
+import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.ui.component.common.DialogProvider
 import me.rerere.awara.ui.component.common.MessageProvider
 import me.rerere.awara.ui.page.download.DownloadHubPage
@@ -59,15 +60,19 @@ import me.rerere.awara.ui.theme.AwaraTheme
 private const val TAG = "RouterActivity"
 
 class RouterActivity : ComponentActivity() {
-    private var openDownloadManager by mutableStateOf(false)
+    private var pendingDownloadRoute by mutableStateOf<String?>(null)
+    private var requestedDownloadResourceId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val splashScreen = installSplashScreen().apply { setKeepOnScreenCondition { true } }
         super.onCreate(savedInstanceState)
-        openDownloadManager =
-            savedInstanceState?.getBoolean("pending_download_manager")
-                ?: (intent?.getStringExtra("awara.download.route") == "download/manager")
+        if (savedInstanceState != null) {
+            pendingDownloadRoute = savedInstanceState.getString("pending_download_route")
+            requestedDownloadResourceId = savedInstanceState.getString("download_focus_resource")
+        } else {
+            readDownloadIntent(intent)
+        }
         setContent {
             AwaraTheme {
                 ContextProvider {
@@ -97,13 +102,28 @@ class RouterActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getStringExtra("awara.download.route") == "download/manager") {
-            openDownloadManager = true
-        }
+        readDownloadIntent(intent)
+    }
+
+    private fun readDownloadIntent(intent: Intent?) {
+        val route = intent?.getStringExtra(DownloadNotifications.EXTRA_ROUTE)
+        if (
+            route != DownloadNotifications.ROUTE_MANAGER &&
+                route != DownloadNotifications.ROUTE_VIDEOS
+        )
+            return
+        pendingDownloadRoute = route
+        requestedDownloadResourceId =
+            if (route == DownloadNotifications.ROUTE_VIDEOS) {
+                intent.getStringExtra(DownloadNotifications.EXTRA_RESOURCE_ID)?.takeIf {
+                    it.isNotBlank()
+                }
+            } else null
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean("pending_download_manager", openDownloadManager)
+        outState.putString("pending_download_route", pendingDownloadRoute)
+        outState.putString("download_focus_resource", requestedDownloadResourceId)
         super.onSaveInstanceState(outState)
     }
 
@@ -182,7 +202,12 @@ class RouterActivity : ComponentActivity() {
 
                 composable("download") { DownloadHubPage() }
                 composable("download/manager") { DownloadManagerPage() }
-                composable("download/videos") { DownloadPage() }
+                composable("download/videos") {
+                    DownloadPage(
+                        focusResourceId = requestedDownloadResourceId,
+                        onFocusHandled = { requestedDownloadResourceId = null },
+                    )
+                }
 
                 composable(
                     "friends/{userId}?self={self}",
@@ -222,14 +247,14 @@ class RouterActivity : ComponentActivity() {
                     NotificationsPage()
                 }
             }
-            LaunchedEffect(openDownloadManager) {
-                if (openDownloadManager) {
-                    if (navController.currentDestination?.route != "download/manager") {
-                        navController.navigate("download/manager") { launchSingleTop = true }
-                    }
-                    openDownloadManager = false
-                    intent?.removeExtra("awara.download.route")
+            LaunchedEffect(pendingDownloadRoute) {
+                val route = pendingDownloadRoute ?: return@LaunchedEffect
+                if (navController.currentDestination?.route != route) {
+                    navController.navigate(route) { launchSingleTop = true }
                 }
+                pendingDownloadRoute = null
+                intent?.removeExtra(DownloadNotifications.EXTRA_ROUTE)
+                intent?.removeExtra(DownloadNotifications.EXTRA_RESOURCE_ID)
             }
         }
     }

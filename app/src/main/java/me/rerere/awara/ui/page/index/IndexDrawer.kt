@@ -1,5 +1,6 @@
 package me.rerere.awara.ui.page.index
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,7 +64,14 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
         Avatar(
             modifier = Modifier.fillMaxHeight().aspectRatio(1f),
             user = userState.user,
-            onClick = { router.navigate("login") },
+            onClick = {
+                val user = userState.user
+                if (user != null) {
+                    router.navigate("user/${Uri.encode(user.username)}")
+                } else {
+                    router.navigate("login")
+                }
+            },
             showOnlineStatus = false,
         )
         Column {

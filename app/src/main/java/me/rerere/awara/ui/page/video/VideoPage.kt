@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.page.video
 
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,7 +34,6 @@ import com.google.android.exoplayer2.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
-import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.fixUrl
 import me.rerere.awara.data.entity.playableVideoFiles
 import me.rerere.awara.data.entity.qualityKey
@@ -86,12 +86,18 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
             state.pause()
             state.currentMediaItem?.let { mediaItem ->
                 scope.launch {
+                    val uri = mediaItem.localConfiguration?.uri
+                    val scheme = uri?.scheme?.lowercase()
+                    // 本地成品 content/file URI 禁止发送到远端 DLNA 设备
+                    if (vm.state.isLocalPlayback || scheme == "content" || scheme == "file") {
+                        message.error {
+                            Text(composeStringResource(R.string.video_local_cast_unsupported))
+                        }
+                        return@launch
+                    }
                     kotlin
                         .runCatching {
-                            dlnaCastState.playUrl(
-                                device = device,
-                                url = mediaItem.localConfiguration?.uri.toString(),
-                            )
+                            dlnaCastState.playUrl(device = device, url = uri.toString())
                             message.success { Text("已发送到 ${device.friendlyName}") }
                         }
                         .onFailure {
@@ -119,38 +125,67 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
         fullscreen = false
     }
     BackHandler(fullscreen) { exitFullScreen() }
-    fun applyUrls(urls: List<VideoFile>) {
-        val playable = urls.playableVideoFiles()
-        state.updatePlayerItems(
-            playable.map {
-                PlayerState.PlayerItem(
-                    quality = it.name,
-                    mediaItem =
-                        MediaItem.Builder()
-                            .setMediaId(vm.id)
-                            .setUri(it.src.view.fixUrl())
-                            .setMediaMetadata(
-                                MediaMetadata.Builder().setTitle(vm.state.video?.title).build()
-                            )
-                            .build(),
-                )
+
+    // 状态驱动播放器内容更新，避免 SharedFlow 漏订阅，同视频刷新保持现有位置与播放状态不变量
+    LaunchedEffect(vm.state.localDownload, vm.state.urls, vm.state.loading) {
+        val local = vm.state.localDownload
+        if (local != null) {
+            val localUri = runCatching { Uri.parse(local.uri) }.getOrNull()
+            if (localUri != null) {
+                val playerItem =
+                    PlayerState.PlayerItem(
+                        quality = "local",
+                        mediaItem =
+                            MediaItem.Builder()
+                                .setMediaId(vm.id)
+                                .setUri(localUri)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle(vm.state.video?.title ?: local.title)
+                                        .build()
+                                )
+                                .build(),
+                    )
+                state.updatePlayerItems(listOf(playerItem))
+                if (mmkvPreference.getBoolean("setting.auto_play", true)) {
+                    state.prepare()
+                }
             }
-        )
-        if (mmkvPreference.getBoolean("setting.auto_play", true)) {
-            state.prepare()
+        } else if (vm.state.urls.isNotEmpty()) {
+            val playable = vm.state.urls.playableVideoFiles()
+            state.updatePlayerItems(
+                playable.map {
+                    PlayerState.PlayerItem(
+                        quality = it.name,
+                        mediaItem =
+                            MediaItem.Builder()
+                                .setMediaId(vm.id)
+                                .setUri(it.src.view.fixUrl())
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder().setTitle(vm.state.video?.title).build()
+                                )
+                                .build(),
+                    )
+                }
+            )
+            if (mmkvPreference.getBoolean("setting.auto_play", true)) {
+                state.prepare()
+            }
+        } else if (!vm.state.loading) {
+            state.updatePlayerItems(emptyList())
         }
     }
 
-    // Handle VM Events
+    // 本地记录文件丢失或无权限读取时给予警告提示
+    LaunchedEffect(vm.state.localFileUnavailable) {
+        if (vm.state.localFileUnavailable) {
+            message.warning { Text(composeStringResource(R.string.video_local_file_unavailable)) }
+        }
+    }
+
     LaunchedEffect(Unit) {
-        applyUrls(vm.state.urls)
         vm.events.collectLatest {
             when (it) {
-                // URL加载完成，更新播放器
-                is VideoVM.VideoEvent.UrlLoaded -> {
-                    applyUrls(it.urls)
-                }
-
                 is VideoVM.VideoEvent.CommentPostException -> {
                     message.error {
                         Text(
@@ -186,7 +221,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     modifier = Modifier.fillMaxSize(),
                     navigationIcon = { BackButton() },
                     actions = {
-                        if (!fullscreen) {
+                        if (!fullscreen && !vm.state.isLocalPlayback) {
                             IconButton(onClick = { dlnaCastSheetShow = !dlnaCastSheetShow }) {
                                 Icon(Icons.Outlined.Cast, null)
                             }
@@ -207,51 +242,53 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                             }
                         }
 
-                        Box {
-                            var expandedVideoQuality by remember { mutableStateOf(false) }
-                            val playableUrls = vm.state.urls.playableVideoFiles()
-                            TextButton(onClick = { expandedVideoQuality = true }) {
+                        if (vm.state.isLocalPlayback) {
+                            // 本地播放显示静态标识，不提供下拉
+                            TextButton(onClick = {}, enabled = false) {
                                 Text(
-                                    text = videoQualityDisplayName(state.currentQuality),
+                                    text = composeStringResource(R.string.video_local_playback),
                                     color = Color.White,
                                 )
                             }
-                            DropdownMenu(
-                                expanded = expandedVideoQuality,
-                                onDismissRequest = { expandedVideoQuality = false },
-                            ) {
-                                if (playableUrls.isEmpty()) {
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                composeStringResource(
-                                                    R.string.video_quality_unavailable
-                                                )
-                                            )
-                                        },
-                                        enabled = false,
-                                        onClick = {},
-                                    )
-                                } else {
-                                    playableUrls.forEach { url ->
-                                        val isSelected =
-                                            matchVideoQuality(url.qualityKey, state.currentQuality)
-                                        DropdownMenuItem(
-                                            onClick = {
-                                                expandedVideoQuality = false
-                                                state.updateCurrentQuality(url.name)
-                                            },
-                                            text = { Text(videoQualityDisplayName(url.name)) },
-                                            trailingIcon =
-                                                if (isSelected) {
-                                                    {
-                                                        Icon(
-                                                            Icons.Outlined.Check,
-                                                            contentDescription = null,
-                                                        )
-                                                    }
-                                                } else null,
+                        } else if (!vm.state.loading) {
+                            // 仅当在线加载完成且存在多种可用画质时显示切换下拉
+                            val playableUrls = vm.state.urls.playableVideoFiles()
+                            if (playableUrls.size > 1 && state.currentQuality.isNotBlank()) {
+                                Box {
+                                    var expandedVideoQuality by remember { mutableStateOf(false) }
+                                    TextButton(onClick = { expandedVideoQuality = true }) {
+                                        Text(
+                                            text = videoQualityDisplayName(state.currentQuality),
+                                            color = Color.White,
                                         )
+                                    }
+                                    DropdownMenu(
+                                        expanded = expandedVideoQuality,
+                                        onDismissRequest = { expandedVideoQuality = false },
+                                    ) {
+                                        playableUrls.forEach { url ->
+                                            val isSelected =
+                                                matchVideoQuality(
+                                                    url.qualityKey,
+                                                    state.currentQuality,
+                                                )
+                                            DropdownMenuItem(
+                                                onClick = {
+                                                    expandedVideoQuality = false
+                                                    state.updateCurrentQuality(url.name)
+                                                },
+                                                text = { Text(videoQualityDisplayName(url.name)) },
+                                                trailingIcon =
+                                                    if (isSelected) {
+                                                        {
+                                                            Icon(
+                                                                Icons.Outlined.Check,
+                                                                contentDescription = null,
+                                                            )
+                                                        }
+                                                    } else null,
+                                            )
+                                        }
                                     }
                                 }
                             }

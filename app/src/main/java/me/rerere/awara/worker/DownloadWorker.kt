@@ -1,9 +1,7 @@
 package me.rerere.awara.worker
 
 import android.Manifest
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -19,7 +17,6 @@ import androidx.work.WorkerParameters
 import java.io.File
 import java.io.IOException
 import java.time.Instant
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -29,13 +26,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadManager
+import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.ResumableDownloader
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.data.entity.DownloadType
 import me.rerere.awara.di.AppDatabase
-import me.rerere.awara.ui.RouterActivity
 import me.rerere.awara.util.prettyFileSize
 import okhttp3.OkHttpClient
 import org.koin.core.component.KoinComponent
@@ -50,7 +47,6 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
     private val downloadStorage by inject<DownloadStorage>()
     private val downloadManager by inject<DownloadManager>()
     private val resumableDownloader = ResumableDownloader(okHttpClient)
-    private val notificationId = notificationIdCounter.getAndIncrement()
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
@@ -64,6 +60,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         ) {
             val task = appDatabase.downloadTaskDao().getTask(taskId)
             if (task?.workId == id.toString()) {
+                DownloadNotifications.cancelProgressNotification(appContext, taskId)
                 appDatabase
                     .downloadTaskDao()
                     .compareAndSetStatus(
@@ -177,9 +174,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                             ?: return@withLock Result.failure()
 
                     val notificationCompat = NotificationManagerCompat.from(appContext)
-                    val contentIntent = createContentIntent(taskId)
+                    val notificationId = DownloadNotifications.notificationIdForTask(taskId)
+                    val contentIntent =
+                        DownloadNotifications.createManagerPendingIntent(appContext, taskId)
                     val notificationBuilder =
-                        NotificationCompat.Builder(appContext, "download")
+                        NotificationCompat.Builder(appContext, DownloadNotifications.CHANNEL_ID)
                             .setContentTitle(currentTask.title)
                             .setSmallIcon(R.drawable.baseline_cloud_download_24)
                             .setOngoing(true)
@@ -357,7 +356,12 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     }
 
                     if (committed) {
-                        showSuccessNotification(taskForSaving.title, taskId)
+                        DownloadNotifications.showSuccessNotification(
+                            context = appContext,
+                            taskId = taskId,
+                            resourceId = taskForSaving.resourceId,
+                            title = taskForSaving.title,
+                        )
                         Result.success()
                     } else {
                         cleanupPartialDestination(destinationUri)
@@ -371,6 +375,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                             if (
                                 taskAfterCancel != null && taskAfterCancel.workId == id.toString()
                             ) {
+                                DownloadNotifications.cancelTaskNotification(appContext, taskId)
                                 when (taskAfterCancel.status) {
                                     DownloadTaskStatus.PAUSED -> {
                                         // 用户主动暂停，保留分块文件与 PAUSED 状态
@@ -435,7 +440,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                             destinationUri = retainedDest,
                                             error = err,
                                         )
-                                    showFailureNotification(taskAfterError.title, taskId)
+                                    DownloadNotifications.showFailureNotification(
+                                        context = appContext,
+                                        taskId = taskId,
+                                        title = taskAfterError.title,
+                                    )
                                 }
                             }
                         }
@@ -451,6 +460,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                 id.toString(),
                                 downloadManager.parts.file(taskId).length(),
                             )
+                        val latestTask = appDatabase.downloadTaskDao().getTask(taskId)
+                        // 过期 Worker 不得清除新一代任务的排队或进度通知。
+                        if (latestTask == null || latestTask.workId == id.toString()) {
+                            DownloadNotifications.cancelProgressNotification(appContext, taskId)
+                        }
                     }
                 }
             }
@@ -491,51 +505,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         }
     }
 
-    private fun createContentIntent(taskId: String): PendingIntent {
-        val intent =
-            Intent(appContext, RouterActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("awara.download.route", "download/manager")
-            }
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        return PendingIntent.getActivity(appContext, taskId.hashCode(), intent, flags)
-    }
-
-    private fun showSuccessNotification(title: String, taskId: String) {
-        runCatching {
-            NotificationManagerCompat.from(appContext)
-                .notify(
-                    notificationIdCounter.getAndIncrement(),
-                    NotificationCompat.Builder(appContext, "download")
-                        .setContentTitle(appContext.getString(R.string.download))
-                        .setContentText(appContext.getString(R.string.download_success, title))
-                        .setSmallIcon(R.drawable.baseline_cloud_download_24)
-                        .setContentIntent(createContentIntent(taskId))
-                        .setAutoCancel(true)
-                        .build(),
-                )
-        }
-    }
-
-    private fun showFailureNotification(title: String, taskId: String) {
-        runCatching {
-            NotificationManagerCompat.from(appContext)
-                .notify(
-                    notificationIdCounter.getAndIncrement(),
-                    NotificationCompat.Builder(appContext, "download")
-                        .setContentTitle(appContext.getString(R.string.download))
-                        .setContentText(appContext.getString(R.string.download_failed, title))
-                        .setSmallIcon(R.drawable.baseline_cloud_download_24)
-                        .setContentIntent(createContentIntent(taskId))
-                        .setAutoCancel(true)
-                        .build(),
-                )
-        }
-    }
-
     companion object {
-        private val notificationIdCounter = AtomicInteger(1)
-
         const val KEY_TASK_ID = "task_id"
     }
 }

@@ -1,5 +1,6 @@
 package me.rerere.awara.ui.page.video
 
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -9,11 +10,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.HistoryItem
 import me.rerere.awara.data.entity.HistoryType
 import me.rerere.awara.data.entity.Playlist
@@ -35,7 +40,6 @@ import me.rerere.awara.ui.component.iwara.comment.pop
 import me.rerere.awara.ui.component.iwara.comment.push
 import me.rerere.awara.ui.component.iwara.comment.updatePage
 import me.rerere.awara.ui.component.iwara.comment.updateTopStack
-import me.rerere.awara.util.JsonInstance
 
 private const val TAG = "VideoVM"
 
@@ -45,14 +49,46 @@ class VideoVM(
     private val userRepo: UserRepo,
     private val commentRepo: CommentRepo,
     private val appDatabase: AppDatabase,
+    private val downloadStorage: DownloadStorage,
 ) : ViewModel() {
     val id = checkNotNull(savedStateHandle.get<String>("id"))
     var state by mutableStateOf(VideoState())
         private set
 
     val events = MutableSharedFlow<VideoEvent>()
-    // 切换或重试时取消上一次请求，避免旧响应覆盖当前作者作品列表
     private var userMoreVideosJob: Job? = null
+
+    private val coordinator =
+        VideoPlaybackCoordinator(
+            object : VideoPlaybackDataSource {
+                override suspend fun getDownloadItem(id: String): DownloadItem? =
+                    appDatabase.downloadDao().getDownloadItem(resourceId = id)
+
+                override suspend fun isLocalFileAccessible(item: DownloadItem): Boolean =
+                    withContext(Dispatchers.IO) {
+                        val rawUri = item.uri.trim()
+                        if (rawUri.isEmpty()) return@withContext false
+                        val uri =
+                            try {
+                                Uri.parse(rawUri)
+                            } catch (e: Exception) {
+                                return@withContext false
+                            }
+                        try {
+                            downloadStorage.exists(uri)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+
+                override suspend fun getVideo(id: String): Video = mediaRepo.getVideo(id)
+
+                override suspend fun parseVideoUrl(video: Video): List<VideoFile> =
+                    mediaRepo.parseVideoUrl(video)
+            }
+        )
 
     init {
         getVideo()
@@ -65,65 +101,127 @@ class VideoVM(
 
     private fun writeHistory() {
         viewModelScope.launch {
-            kotlin
-                .runCatching {
-                    appDatabase
-                        .historyDao()
-                        .insertHistory(
-                            HistoryItem(
-                                time = Instant.now(),
-                                type = HistoryType.VIDEO,
-                                resourceId = id,
-                                title = state.video?.title ?: "",
-                                thumbnail = state.video?.thumbnailUrl() ?: "",
-                            )
+            try {
+                val title = state.video?.title ?: state.localDownload?.title ?: ""
+                val thumbnail = state.video?.thumbnailUrl() ?: state.localDownload?.thumbnail ?: ""
+                appDatabase
+                    .historyDao()
+                    .insertHistory(
+                        HistoryItem(
+                            time = Instant.now(),
+                            type = HistoryType.VIDEO,
+                            resourceId = id,
+                            title = title,
+                            thumbnail = thumbnail,
                         )
-                }
-                .onFailure { it.printStackTrace() }
+                    )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "writeHistory: $e")
+            }
         }
     }
 
     fun getVideo() {
         if (state.loading) return
-        state = state.copy(loading = true, private = false, sourceError = null)
+        state =
+            state.copy(loading = true, private = false, sourceError = null, isOnlineRemoved = false)
         viewModelScope.launch {
-            runAPICatching {
-                    val video = mediaRepo.getVideo(id)
-                    state = state.copy(video = video)
-                    val urls = mediaRepo.parseVideoUrl(video)
-                    video to urls
-                }
-                .onSuccess {
-                    state = state.copy(video = it.first, urls = it.second)
-                    events.emit(VideoEvent.UrlLoaded(it.second))
-
-                    loadUserMoreVideos()
-                    writeHistory()
-                }
-                .onError {
-                    Log.w(TAG, "getVideo: $it")
-                    state = state.copy(sourceError = it.message)
-
-                    if (it.message == "errors.privateVideo") {
+            try {
+                // 本地判定优先，不等网络请求
+                val decision = coordinator.resolvePlaybackDecision(id)
+                when (decision) {
+                    is PlaybackDecision.Local -> {
                         state =
                             state.copy(
-                                private = true,
-                                privateUser =
-                                    it.data?.get("user")?.let {
-                                        JsonInstance.decodeFromJsonElement(User.serializer(), it)
-                                    },
+                                localDownload = decision.item,
+                                video = null,
+                                urls = emptyList(),
+                                isLocalPlayback = true,
+                                localFileUnavailable = false,
+                            )
+                    }
+                    is PlaybackDecision.MissingLocal -> {
+                        state =
+                            state.copy(
+                                localDownload = null,
+                                isLocalPlayback = false,
+                                localFileUnavailable = true,
+                            )
+                    }
+                    PlaybackDecision.Online -> {
+                        state =
+                            state.copy(
+                                localDownload = null,
+                                isLocalPlayback = false,
+                                localFileUnavailable = false,
                             )
                     }
                 }
-                .onException {
-                    val reason =
-                        it.exception.message?.replace(Regex("https?://[^\\s]+")) { url ->
-                            url.value.substringBefore('?')
-                        } ?: it.exception.javaClass.simpleName
-                    Log.w(TAG, "getVideo: $reason")
-                    state = state.copy(sourceError = reason)
+
+                val detailsResult = coordinator.loadDetails(id, decision)
+                when (detailsResult) {
+                    is PlaybackDetailsResult.OnlineSuccess -> {
+                        state =
+                            state.copy(
+                                video = detailsResult.video,
+                                urls = detailsResult.urls,
+                                isLocalPlayback = false,
+                                isLocalFallback = false,
+                                sourceError = null,
+                                isOnlineRemoved = false,
+                            )
+                        loadUserMoreVideos()
+                        writeHistory()
+                    }
+                    is PlaybackDetailsResult.LocalOnlineSuccess -> {
+                        state =
+                            state.copy(
+                                video = detailsResult.video,
+                                urls = emptyList(),
+                                isLocalPlayback = true,
+                                isLocalFallback = false,
+                                sourceError = null,
+                                isOnlineRemoved = false,
+                            )
+                        loadUserMoreVideos()
+                        writeHistory()
+                    }
+                    is PlaybackDetailsResult.LocalFallback -> {
+                        state =
+                            state.copy(
+                                video = null,
+                                urls = emptyList(),
+                                isLocalPlayback = true,
+                                isLocalFallback = true,
+                                isOnlineRemoved = detailsResult.isOnlineRemoved,
+                                sourceError = detailsResult.errorReason,
+                            )
+                        writeHistory()
+                    }
+                    is PlaybackDetailsResult.OnlineFailure -> {
+                        state =
+                            state.copy(
+                                video = detailsResult.partialVideo,
+                                urls = emptyList(),
+                                isLocalPlayback = false,
+                                isLocalFallback = false,
+                                private = detailsResult.isPrivate,
+                                privateUser = detailsResult.privateUser,
+                                isOnlineRemoved = detailsResult.isOnlineRemoved,
+                                sourceError = detailsResult.errorReason,
+                            )
+                    }
                 }
-            state = state.copy(loading = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.w(TAG, "getVideo: $e")
+                state = state.copy(sourceError = e.message ?: e.javaClass.simpleName)
+            } finally {
+                state = state.copy(loading = false)
+            }
         }
 
         viewModelScope.launch {
@@ -133,13 +231,26 @@ class VideoVM(
                         state.copy(relatedVideos = it.results.filter { video -> video.id != id })
                 }
                 .onError { Log.w(TAG, "getRelatedVideos: $it") }
-                .onException { Log.w(TAG, "getRelatedVideos: ${it.exception}") }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "getRelatedVideos: ${it.exception}")
+                }
         }
     }
 
     fun loadUserMoreVideos() {
         userMoreVideosJob?.cancel()
-        val userId = state.video?.user?.id?.takeIf { it.isNotBlank() }
+        if (state.isLocalFallback || state.video == null) {
+            state =
+                state.copy(
+                    userMoreVideos = emptyList(),
+                    userMoreVideosLoading = false,
+                    userMoreVideosError = null,
+                )
+            return
+        }
+        val userId =
+            state.video?.user?.takeIf { it.deletedAt == null }?.id?.takeIf { it.isNotBlank() }
         if (userId == null) {
             state =
                 state.copy(
@@ -201,7 +312,10 @@ class VideoVM(
             runAPICatching { mediaRepo.createPlaylist(title) }
                 .onSuccess { loadPlaylistForVideo() }
                 .onError { Log.w(TAG, "createPlaylist: $it") }
-                .onException { Log.w(TAG, "createPlaylist: ${it.exception}") }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "createPlaylist: ${it.exception}")
+                }
         }
     }
 
@@ -213,11 +327,15 @@ class VideoVM(
                     state = state.copy(playlist = it)
                 }
                 .onError { Log.w(TAG, "loadPlaylistForVideo: $it") }
-                .onException { Log.w(TAG, "loadPlaylistForVideo: ${it.exception}") }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "loadPlaylistForVideo: ${it.exception}")
+                }
         }
     }
 
     fun likeOrUnlike() {
+        if (state.isLocalFallback || state.video == null) return
         viewModelScope.launch {
             state = state.copy(likeLoading = true)
             runAPICatching {
@@ -232,12 +350,21 @@ class VideoVM(
                         }
                 }
                 .onError { Log.w(TAG, "likeOrUnlike(error): $it") }
-                .onException { Log.w(TAG, "likeOrUnlike(exception)", it.exception) }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "likeOrUnlike(exception)", it.exception)
+                }
             state = state.copy(likeLoading = false)
         }
     }
 
     fun followOrUnfollow() {
+        if (
+            state.isLocalFallback ||
+                state.video?.user == null ||
+                state.video?.user?.deletedAt != null
+        )
+            return
         viewModelScope.launch {
             runAPICatching {
                     if (state.video?.user?.following == true) {
@@ -247,6 +374,7 @@ class VideoVM(
                     }
                 }
                 .onSuccess { getVideo() }
+                .onException { if (it.exception is CancellationException) throw it.exception }
         }
     }
 
@@ -285,7 +413,10 @@ class VideoVM(
                     Log.i(TAG, "loadComments: $it")
                 }
                 .onError { Log.w(TAG, "loadComments(error): $it") }
-                .onException { Log.w(TAG, "loadComments(exception)", it.exception) }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "loadComments(exception)", it.exception)
+                }
             state = state.copy(commentState = state.commentState.copy(loading = false))
         }
     }
@@ -300,12 +431,12 @@ class VideoVM(
     }
 
     fun postComment(it: CommentCreationDto) {
+        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return
         viewModelScope.launch {
             runAPICatching { commentRepo.postVideoComment(id, it.body, it.parentId) }
                 .onSuccess {
                     events.emit(VideoEvent.CommentPosted)
                     Log.i(TAG, "postComment: $it")
-                    // 重新加载评论
                     loadComments()
                 }
                 .onError {
@@ -313,6 +444,7 @@ class VideoVM(
                     Log.w(TAG, "postComment(error): $it")
                 }
                 .onException {
+                    if (it.exception is CancellationException) throw it.exception
                     events.emit(VideoEvent.CommentPostException(it.exception))
                     Log.w(TAG, "postComment(exception)", it.exception)
                 }
@@ -320,6 +452,7 @@ class VideoVM(
     }
 
     fun addVideoToPlaylist(playlistId: String) {
+        if (state.isLocalFallback || state.video == null) return
         viewModelScope.launch {
             state = state.copy(playlistLoading = true)
             runAPICatching {
@@ -328,12 +461,16 @@ class VideoVM(
                 }
                 .onSuccess { Log.i(TAG, "addVideoToPlaylist: $it") }
                 .onError { Log.w(TAG, "addVideoToPlaylist(error): $it") }
-                .onException { Log.w(TAG, "addVideoToPlaylist(exception)", it.exception) }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "addVideoToPlaylist(exception)", it.exception)
+                }
             state = state.copy(playlistLoading = false)
         }
     }
 
     fun removeVideoFromPlaylist(playlistId: String) {
+        if (state.isLocalFallback || state.video == null) return
         viewModelScope.launch {
             state = state.copy(playlistLoading = true)
             runAPICatching {
@@ -342,7 +479,10 @@ class VideoVM(
                 }
                 .onSuccess { Log.i(TAG, "removeVideoFromPlaylist: $it") }
                 .onError { Log.w(TAG, "removeVideoFromPlaylist(error): $it") }
-                .onException { Log.w(TAG, "removeVideoFromPlaylist(exception)", it.exception) }
+                .onException {
+                    if (it.exception is CancellationException) throw it.exception
+                    Log.w(TAG, "removeVideoFromPlaylist(exception)", it.exception)
+                }
             state = state.copy(playlistLoading = false)
         }
     }
@@ -362,11 +502,14 @@ class VideoVM(
         val commentState: CommentState = CommentState(),
         val playlist: List<Playlist> = emptyList(),
         val playlistLoading: Boolean = false,
+        val localDownload: DownloadItem? = null,
+        val isLocalPlayback: Boolean = false,
+        val isLocalFallback: Boolean = false,
+        val localFileUnavailable: Boolean = false,
+        val isOnlineRemoved: Boolean = false,
     )
 
     sealed class VideoEvent {
-        class UrlLoaded(val urls: List<VideoFile>) : VideoEvent()
-
         object CommentPosted : VideoEvent()
 
         class CommentPostFailed(val error: APIResult.Error) : VideoEvent()

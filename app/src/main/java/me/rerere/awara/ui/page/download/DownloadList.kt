@@ -1,11 +1,19 @@
 package me.rerere.awara.ui.page.download
 
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import me.rerere.awara.data.entity.DownloadItem
 
 const val PREFERENCE_KEY_DOWNLOAD_SORT = "setting.download_sort"
 const val PREFERENCE_KEY_DOWNLOAD_SORT_ASCENDING = "setting.download_sort_ascending"
 const val PREFERENCE_KEY_DOWNLOAD_GROUP_AUTHORS = "setting.download_group_authors"
+
+private val downloadDateFormatter = DateTimeFormatter.ofPattern("yy/MM/dd", Locale.ROOT)
+
+fun formatDownloadDate(time: Instant, zoneId: ZoneId = ZoneId.systemDefault()): String =
+    downloadDateFormatter.format(time.atZone(zoneId))
 
 enum class DownloadSortMode(val key: String, val defaultAscending: Boolean) {
     TIME("time", defaultAscending = false),

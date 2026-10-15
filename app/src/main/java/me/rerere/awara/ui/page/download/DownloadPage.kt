@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.FullscreenExit
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
@@ -94,6 +96,7 @@ import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.ui.LocalMessageProvider
+import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
@@ -104,7 +107,6 @@ import me.rerere.awara.ui.component.player.PlayerState
 import me.rerere.awara.ui.component.player.rememberPlayerState
 import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
 import me.rerere.awara.util.prettyFileSize
-import me.rerere.awara.util.toLocalDateString
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.androidx.compose.koinViewModel
@@ -112,12 +114,20 @@ import org.koin.compose.koinInject
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DownloadPage(vm: DownloadVM = koinViewModel()) {
+fun DownloadPage(
+    vm: DownloadVM = koinViewModel(),
+    focusResourceId: String? = null,
+    onFocusHandled: () -> Unit = {},
+) {
     val downloadedItems = vm.state.items
     val downloadStorage: DownloadStorage = koinInject()
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
+    val router = LocalRouterProvider.current
+    val videoListState = rememberLazyListState()
+    var pendingFocusId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var highlightedId by rememberSaveable { mutableStateOf<Int?>(null) }
 
     val internalPlayer by
         rememberStringPreference(key = "setting.download_player_internal", default = "internal")
@@ -185,6 +195,35 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
         remember(selectedIds, visibleVideoIds) { selectedIds.intersect(visibleVideoIds) }
     val allVisibleSelected = isAllVideosSelected(selectedIds, visibleVideoIds)
     val isDeleting = vm.state.deletingIds.isNotEmpty()
+
+    LaunchedEffect(focusResourceId, vm.state.uiState, downloadedItems, groupByAuthors) {
+        val resourceId = focusResourceId ?: return@LaunchedEffect
+        if (vm.state.uiState != UiState.Success && vm.state.uiState != UiState.Empty)
+            return@LaunchedEffect
+        val target = downloadedItems.firstOrNull { it.resourceId == resourceId }
+        if (target == null) {
+            message.warning { Text(stringResource(R.string.download_focus_missing)) }
+        } else {
+            selectedIds = emptySet()
+            selectedAuthorId = if (groupByAuthors) target.authorId.trim() else null
+            pendingFocusId = target.id
+        }
+        onFocusHandled()
+    }
+
+    LaunchedEffect(pendingFocusId, visibleItems) {
+        val targetId = pendingFocusId ?: return@LaunchedEffect
+        val index = visibleItems.indexOfFirst { it.id == targetId }
+        if (index >= 0) {
+            videoListState.scrollToItem(index)
+            highlightedId = targetId
+            pendingFocusId = null
+        }
+    }
+
+    LaunchedEffect(videoListState.isScrollInProgress) {
+        if (videoListState.isScrollInProgress) highlightedId = null
+    }
 
     LaunchedEffect(visibleVideoIds, vm.state.uiState, selectedAuthorId) {
         if (vm.state.uiState == UiState.Success || vm.state.uiState == UiState.Empty) {
@@ -674,6 +713,7 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                         }
                     } else {
                         LazyColumn(
+                            state = videoListState,
                             contentPadding = PaddingValues(vertical = 8.dp),
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -688,18 +728,23 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                                     isSelectionMode = isSelectionMode,
                                     isSelected = item.id in selectedIds,
                                     isDeleting = item.id in vm.state.deletingIds,
+                                    isHighlighted = item.id == highlightedId,
                                     onToggleSelect = {
                                         selectedIds = toggleSelection(selectedIds, item.id)
                                     },
                                     onDelete = { vm.delete(listOf(item)) },
                                     onClick = { playDownloadedItem(item) },
                                     onPlayExternal = { playExternal(item) },
+                                    onOpenDetails = {
+                                        router.navigate("video/${Uri.encode(item.resourceId)}")
+                                    },
                                 )
                             }
                         }
                     }
                 } else {
                     LazyColumn(
+                        state = videoListState,
                         contentPadding = PaddingValues(vertical = 8.dp),
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -714,12 +759,16 @@ fun DownloadPage(vm: DownloadVM = koinViewModel()) {
                                 isSelectionMode = isSelectionMode,
                                 isSelected = item.id in selectedIds,
                                 isDeleting = item.id in vm.state.deletingIds,
+                                isHighlighted = item.id == highlightedId,
                                 onToggleSelect = {
                                     selectedIds = toggleSelection(selectedIds, item.id)
                                 },
                                 onDelete = { vm.delete(listOf(item)) },
                                 onClick = { playDownloadedItem(item) },
                                 onPlayExternal = { playExternal(item) },
+                                onOpenDetails = {
+                                    router.navigate("video/${Uri.encode(item.resourceId)}")
+                                },
                             )
                         }
                     }
@@ -737,7 +786,7 @@ fun AuthorFolderRow(group: DownloadAuthorGroup, onClick: () -> Unit) {
             R.string.download_author_folder_stats,
             group.count,
             prettyFileSize(group.totalBytes),
-            group.latestDownloadTime.toLocalDateString(),
+            formatDownloadDate(group.latestDownloadTime),
         )
 
     Row(
@@ -811,6 +860,8 @@ fun DownloadItemRow(
     onDelete: () -> Unit,
     onClick: () -> Unit,
     onPlayExternal: () -> Unit,
+    onOpenDetails: () -> Unit,
+    isHighlighted: Boolean = false,
 ) {
     val displayTitle = item.title.ifBlank { item.resourceId }
     var showMenu by remember { mutableStateOf(false) }
@@ -847,7 +898,7 @@ fun DownloadItemRow(
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val thumbWidth = if (maxWidth >= 600.dp) 112.dp else 96.dp
         val rowBackground =
-            if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+            if (isSelected || isHighlighted) MaterialTheme.colorScheme.secondaryContainer
             else MaterialTheme.colorScheme.surface
         val selectedStateDesc = stringResource(R.string.download_selected_accessibility)
 
@@ -922,19 +973,27 @@ fun DownloadItemRow(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
                         text = prettyFileSize(item.sizeBytes),
-                        modifier = Modifier.weight(0.42f),
+                        modifier =
+                            Modifier.weight(0.46f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = item.time.toLocalDateString(),
-                        modifier = Modifier.weight(0.58f),
+                        text = formatDownloadDate(item.time),
+                        modifier =
+                            Modifier.weight(0.54f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -957,6 +1016,14 @@ fun DownloadItemRow(
                     }
 
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.download_open_details)) },
+                            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                            onClick = {
+                                showMenu = false
+                                onOpenDetails()
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.download_play_external)) },
                             leadingIcon = {

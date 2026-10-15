@@ -105,33 +105,43 @@ class DownloadManager(
                     error = null,
                 )
 
-            enqueueMutex.withLock {
-                database.withTransaction {
-                    // 重复下载保护：已完成与下载中
-                    if (database.downloadDao().getDownloadItem(video.id) != null) {
-                        throw IllegalStateException(context.getString(R.string.already_downloaded))
+            // 入库后任务立即对外可见，必须与暂停、取消共用命令锁直至完成调度。
+            getCommandMutex(taskId).withLock {
+                withContext(NonCancellable) {
+                    enqueueMutex.withLock {
+                        database.withTransaction {
+                            if (database.downloadDao().getDownloadItem(video.id) != null) {
+                                throw IllegalStateException(
+                                    context.getString(R.string.already_downloaded)
+                                )
+                            }
+                            if (database.downloadTaskDao().findByResourceId(video.id) != null) {
+                                throw IllegalStateException(
+                                    context.getString(R.string.already_downloading)
+                                )
+                            }
+                            database.downloadTaskDao().insert(task)
+                        }
                     }
-                    if (database.downloadTaskDao().findByResourceId(video.id) != null) {
-                        throw IllegalStateException(context.getString(R.string.already_downloading))
-                    }
-                    database.downloadTaskDao().insert(task)
-                }
-            }
 
-            try {
-                WorkManager.getInstance(context)
-                    .enqueueUniqueWork("download_$taskId", ExistingWorkPolicy.REPLACE, req)
-                    .result
-                    .await()
-            } catch (e: Exception) {
-                database
-                    .downloadTaskDao()
-                    .updateStatus(
-                        taskId = taskId,
-                        newStatus = DownloadTaskStatus.FAILED,
-                        error = "入队失败: ${e.message}",
-                    )
-                throw e
+                    DownloadNotifications.showQueuedNotification(context, taskId, task.title)
+                    try {
+                        WorkManager.getInstance(context)
+                            .enqueueUniqueWork("download_$taskId", ExistingWorkPolicy.REPLACE, req)
+                            .result
+                            .await()
+                    } catch (e: Exception) {
+                        DownloadNotifications.cancelTaskNotification(context, taskId)
+                        database
+                            .downloadTaskDao()
+                            .updateStatus(
+                                taskId = taskId,
+                                newStatus = DownloadTaskStatus.FAILED,
+                                error = "入队失败: ${e.message}",
+                            )
+                        throw e
+                    }
+                }
             }
         }
 
@@ -167,6 +177,7 @@ class DownloadManager(
                 withContext(NonCancellable) {
                     // 先取消活跃连接以阻断网络传输，再等待传输锁释放
                     cancelActiveCall(taskId)
+                    DownloadNotifications.cancelTaskNotification(context, taskId)
                     WorkManager.getInstance(context)
                         .cancelUniqueWork("download_$taskId")
                         .result
@@ -259,12 +270,16 @@ class DownloadManager(
                         }
                     check(resumed > 0) { "任务状态已变化，请重试" }
 
+                    // 恢复调度确认后立即显示排队等待通知
+                    DownloadNotifications.showQueuedNotification(context, taskId, task.title)
+
                     try {
                         WorkManager.getInstance(context)
                             .enqueueUniqueWork("download_$taskId", ExistingWorkPolicy.REPLACE, req)
                             .result
                             .await()
                     } catch (e: Exception) {
+                        DownloadNotifications.cancelTaskNotification(context, taskId)
                         database
                             .downloadTaskDao()
                             .updateStatus(
@@ -287,6 +302,7 @@ class DownloadManager(
                 withContext(NonCancellable) {
                     database.downloadTaskDao().updateStatus(taskId, DownloadTaskStatus.CANCELLING)
                     cancelActiveCall(taskId)
+                    DownloadNotifications.cancelTaskNotification(context, taskId)
 
                     WorkManager.getInstance(context)
                         .cancelUniqueWork("download_$taskId")
@@ -367,6 +383,7 @@ class DownloadManager(
                                     cleanupFailed = true
                                     cleanupError = "清理临时文件失败"
                                 }
+                                DownloadNotifications.cancelTaskNotification(context, task.taskId)
                                 if (cleanupFailed) {
                                     database
                                         .downloadTaskDao()
@@ -396,6 +413,7 @@ class DownloadManager(
                                         cleanupError = "清理目标文件失败: ${e.message}"
                                     }
                                 }
+                                DownloadNotifications.cancelTaskNotification(context, task.taskId)
                                 val destUriToRetain =
                                     if (cleanupSuccess) "" else task.destinationUri
                                 database
@@ -427,6 +445,7 @@ class DownloadManager(
                                         cleanupError = "清理目标文件失败: ${e.message}"
                                     }
                                 }
+                                DownloadNotifications.cancelTaskNotification(context, task.taskId)
                                 val destUriToRetain =
                                     if (cleanupSuccess) "" else task.destinationUri
                                 val targetStatus =
@@ -477,6 +496,7 @@ class DownloadManager(
                     try {
                         if (database.downloadTaskDao().getTask(taskId) == null) {
                             parts.delete(taskId)
+                            DownloadNotifications.cancelTaskNotification(context, taskId)
                         }
                     } finally {
                         transferMutex.unlock()
@@ -494,4 +514,66 @@ class DownloadManager(
         if (workId.isBlank() || !UUID_REGEX.matches(workId)) return null
         return workManager.getWorkInfoById(UUID.fromString(workId)).await()
     }
+
+    suspend fun pauseAll(tasksToPause: List<DownloadTask>? = null): BatchResult =
+        withContext(Dispatchers.IO) {
+            val candidateTasks = tasksToPause ?: database.downloadTaskDao().getAllTasksList()
+            val targets = filterPausableTasks(candidateTasks)
+            executeBatch(targets) { task -> pause(task.taskId) }
+        }
+
+    suspend fun cancelAll(tasksToCancel: List<DownloadTask>? = null): BatchResult =
+        withContext(Dispatchers.IO) {
+            val candidateTasks = tasksToCancel ?: database.downloadTaskDao().getAllTasksList()
+            val targets = filterCancellableTasks(candidateTasks)
+            executeBatch(targets) { task -> cancel(task.taskId) }
+        }
+
+    companion object {
+        // pauseAll 仅针对排队或下载中的任务，过滤跳过保存中、已暂停、已失败及取消中任务
+        fun filterPausableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
+            return tasks.filter {
+                it.status == DownloadTaskStatus.QUEUED || it.status == DownloadTaskStatus.RUNNING
+            }
+        }
+
+        // cancelAll 针对所有未完成任务
+        fun filterCancellableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
+            return tasks
+        }
+
+        // 真实批量路径执行器，逐项执行，失败收集并不中断其他任务执行
+        suspend fun executeBatch(
+            tasks: List<DownloadTask>,
+            action: suspend (DownloadTask) -> Unit,
+        ): BatchResult {
+            var succeeded = 0
+            val failures = mutableListOf<Pair<String, String>>()
+            for (task in tasks) {
+                try {
+                    action(task)
+                    succeeded++
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val msg =
+                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                    failures.add(task.taskId to msg)
+                }
+            }
+            return BatchResult(
+                total = tasks.size,
+                succeeded = succeeded,
+                failed = failures.size,
+                failures = failures,
+            )
+        }
+    }
 }
+
+data class BatchResult(
+    val total: Int,
+    val succeeded: Int,
+    val failed: Int,
+    val failures: List<Pair<String, String>> = emptyList(),
+)
