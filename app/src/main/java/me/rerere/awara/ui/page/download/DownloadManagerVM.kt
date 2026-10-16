@@ -116,6 +116,45 @@ class DownloadManagerVM(private val downloadManager: DownloadManager) : ViewMode
         }
     }
 
+    fun resumeAll() {
+        if (state.isBatchOperating || state.operatingIds.isNotEmpty()) return
+        val resumable = DownloadManager.filterResumableTasks(state.tasks)
+        if (resumable.isEmpty()) return
+        val targetIds = resumable.map { it.taskId }.toSet()
+        state = state.copy(isBatchOperating = true, operatingIds = state.operatingIds + targetIds)
+        viewModelScope.launch {
+            try {
+                val result =
+                    DownloadManager.executeBatch(resumable) { task ->
+                        downloadManager.resume(task.taskId)
+                    }
+                if (result.failed > 0) {
+                    val firstError = result.failures.firstOrNull()?.second ?: "未知错误"
+                    state =
+                        state.copy(
+                            batchError =
+                                BatchErrorInfo(
+                                    failedCount = result.failed,
+                                    sampleError = firstError,
+                                )
+                        )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val reason =
+                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                state = state.copy(operationError = reason)
+            } finally {
+                state =
+                    state.copy(
+                        isBatchOperating = false,
+                        operatingIds = state.operatingIds - targetIds,
+                    )
+            }
+        }
+    }
+
     fun cancelAll() {
         if (state.isBatchOperating || state.operatingIds.isNotEmpty()) return
         val cancellable = DownloadManager.filterCancellableTasks(state.tasks)

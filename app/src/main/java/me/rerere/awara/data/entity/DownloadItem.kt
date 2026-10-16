@@ -20,6 +20,9 @@ data class DownloadItem(
     @ColumnInfo(defaultValue = "''") val authorName: String = "",
     @ColumnInfo(defaultValue = "''") val authorAvatar: String = "",
     @ColumnInfo(defaultValue = "0") val sizeBytes: Long = 0,
+    @ColumnInfo(defaultValue = "''") val quality: String = "",
+    @ColumnInfo(defaultValue = "0") val durationMs: Long = 0L,
+    @ColumnInfo(defaultValue = "0") val publishedAtEpochSeconds: Long = 0L,
 )
 
 enum class DownloadType {

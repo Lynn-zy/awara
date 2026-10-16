@@ -17,6 +17,7 @@ data class DownloadTask(
     val authorId: String = "",
     val authorName: String = "",
     val authorAvatar: String = "",
+    @ColumnInfo(defaultValue = "0") val publishedAtEpochSeconds: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
     val status: String = DownloadTaskStatus.QUEUED,
     val downloadedBytes: Long = 0,

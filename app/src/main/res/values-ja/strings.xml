@@ -104,6 +104,12 @@
     <string name="download_enqueue_failed">ダウンロードを開始できませんでした：%1$s</string>
     <string name="download_failed">ダウンロード失敗：%1$s</string>
     <string name="setting_download">ダウンロード設定</string>
+    <string name="setting_download_auto_resume_title">未完了のダウンロードを自動再開</string>
+    <string name="setting_download_auto_resume_text">アプリ起動時に未完了のダウンロードを自動再開します</string>
+    <string name="download_unfinished_dialog_title">未完了のダウンロード</string>
+    <string name="download_unfinished_dialog_message">未完了のダウンロードがあります。続行しますか？</string>
+    <string name="download_unfinished_dialog_resume">続行</string>
+    <string name="download_unfinished_dialog_dismiss">今は続行しない</string>
     <string name="download_directory_title">保存先フォルダ</string>
     <string name="download_directory_choose">フォルダを選ぶ</string>
     <string name="download_directory_default">Download/Awara を使う</string>
@@ -167,16 +173,24 @@
     <string name="download_open_details">動画の詳細を開く</string>
     <string name="download_focus_missing">この動画はダウンロード一覧にありません</string>
     <string name="download_task_pause_all">すべて一時停止</string>
+    <string name="download_task_resume_all">すべて再開</string>
     <string name="download_task_cancel_all">すべてキャンセル</string>
     <string name="download_task_cancel_all_title">すべてのダウンロードをキャンセル</string>
     <string name="download_task_cancel_all_message">%1$d 件のダウンロードをすべてキャンセルしますか？未完了のファイルを削除します。完了した動画は削除しません。</string>
     <string name="download_task_batch_failed">一括操作で %1$d 件が失敗しました：%2$s</string>
     <string name="download_task_actions">タスク操作</string>
     <string name="video_local_playback">ローカル動画</string>
+    <string name="video_local_playback_quality">ローカル動画 · %1$s</string>
     <string name="video_online_removed">元の動画または投稿者のアカウントは利用できません</string>
     <string name="video_author_unavailable">投稿者のアカウントは利用できません</string>
     <string name="video_details_load_failed">動画の詳細を読み込めませんでした：%1$s</string>
     <string name="video_local_file_unavailable">ローカルファイルを利用できません。オンライン再生を試みています。</string>
     <string name="video_local_details_hint">ダウンロード済み動画は再生できます。オンラインの詳細は利用できません。</string>
     <string name="video_local_cast_unsupported">ローカル動画のキャストには対応していません</string>
+    <string name="time_just_now">たった今</string>
+    <string name="time_minutes_ago">%1$d分前</string>
+    <string name="time_hours_ago">%1$d時間前</string>
+    <string name="time_days_ago">%1$d日前</string>
+    <string name="user_followed">フォロー中</string>
+    <string name="user_follow">フォロー</string>
 </resources>

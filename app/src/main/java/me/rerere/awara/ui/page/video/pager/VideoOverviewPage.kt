@@ -94,6 +94,7 @@ import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.component.iwara.TagRow
 import me.rerere.awara.ui.component.player.VideoQualityDownloadDialog
+import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.util.openUrl
 import me.rerere.awara.util.shareLink
@@ -378,14 +379,20 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
             }
 
             ProvideTextStyle(MaterialTheme.typography.labelSmall) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(text = video.createdAt.toLocalDateTimeString())
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(text = video.createdAt.toLocalDateTimeString())
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(text = stringResource(R.string.num_likes, video.numLikes))
+                        Text(text = stringResource(R.string.num_views, video.numViews))
+                    }
 
                     if (vm.state.isLocalPlayback) {
+                        val quality = vm.state.localDownload?.quality.orEmpty()
                         Surface(
                             color = MaterialTheme.colorScheme.secondaryContainer,
                             shape = MaterialTheme.shapes.small,
@@ -402,19 +409,21 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                                     tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                 )
                                 Text(
-                                    text = stringResource(R.string.video_local_playback),
+                                    text =
+                                        if (quality.isBlank()) {
+                                            stringResource(R.string.video_local_playback)
+                                        } else {
+                                            stringResource(
+                                                R.string.video_local_playback_quality,
+                                                videoQualityDisplayName(quality),
+                                            )
+                                        },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 )
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    Text(text = stringResource(R.string.num_likes, video.numLikes))
-
-                    Text(text = stringResource(R.string.num_views, video.numViews))
                 }
             }
 
@@ -438,57 +447,66 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                 var showDownloadMenu by remember { mutableStateOf(false) }
                 var downloadEnqueueing by remember { mutableStateOf(false) }
                 var pendingDownloadOption by remember { mutableStateOf<DownloadOptionMode?>(null) }
-                val isDownloadBusy = downloadEnqueueing || vm.state.loading
+                val isDownloadBusy =
+                    downloadEnqueueing || vm.state.loading || vm.state.onlineUrlsLoading
                 val availableSources =
                     remember(vm.state.urls) { vm.state.urls.downloadableVideoFiles() }
                 LaunchedEffect(availableSources) {
-                    if (pendingDownloadOption != null && availableSources.isEmpty()) {
+                    if (
+                        pendingDownloadOption != null &&
+                            availableSources.isEmpty() &&
+                            !vm.state.onlineUrlsLoading
+                    ) {
                         pendingDownloadOption = null
                         message.error { Text(stringResource(R.string.download_url_unavailable)) }
+                    }
+                }
+
+                LaunchedEffect(vm.state.onlineUrlsError) {
+                    vm.state.onlineUrlsError?.let { err ->
+                        message.error {
+                            Text(stringResource(R.string.video_source_load_failed, err))
+                        }
                     }
                 }
 
                 fun checkAndPrepareDownload(mode: DownloadOptionMode) {
                     if (isDownloadBusy) return
                     if (availableSources.isEmpty()) {
-                        message.error { Text(stringResource(R.string.download_url_unavailable)) }
+                        // 在线源尚未拉取，按需发起解析并在成功后弹出清晰度选择
+                        vm.requestOnlineUrls { pendingDownloadOption = mode }
                         return
                     }
                     pendingDownloadOption = mode
                 }
 
-                // 本地播放时隐藏下载入口，避免空地址弹窗
-                if (!vm.state.isLocalPlayback) {
-                    Box {
-                        IconButton(
+                // 在线详情成功时提供下载入口（支持本地成品存在时下载更高清晰度覆盖）
+                Box {
+                    IconButton(enabled = !isDownloadBusy, onClick = { showDownloadMenu = true }) {
+                        Icon(Icons.Outlined.Download, null)
+                    }
+
+                    DropdownMenu(
+                        expanded = showDownloadMenu,
+                        onDismissRequest = { showDownloadMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.download_method_app)) },
                             enabled = !isDownloadBusy,
-                            onClick = { showDownloadMenu = true },
-                        ) {
-                            Icon(Icons.Outlined.Download, null)
-                        }
+                            onClick = {
+                                showDownloadMenu = false
+                                checkAndPrepareDownload(DownloadOptionMode.APP)
+                            },
+                        )
 
-                        DropdownMenu(
-                            expanded = showDownloadMenu,
-                            onDismissRequest = { showDownloadMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.download_method_app)) },
-                                enabled = !isDownloadBusy,
-                                onClick = {
-                                    showDownloadMenu = false
-                                    checkAndPrepareDownload(DownloadOptionMode.APP)
-                                },
-                            )
-
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.download_method_open_link)) },
-                                enabled = !isDownloadBusy,
-                                onClick = {
-                                    showDownloadMenu = false
-                                    checkAndPrepareDownload(DownloadOptionMode.EXTERNAL)
-                                },
-                            )
-                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.download_method_open_link)) },
+                            enabled = !isDownloadBusy,
+                            onClick = {
+                                showDownloadMenu = false
+                                checkAndPrepareDownload(DownloadOptionMode.EXTERNAL)
+                            },
+                        )
                     }
                 }
 

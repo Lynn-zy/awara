@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
+import me.rerere.awara.data.download.DownloadLaunchPolicy
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.Avatar
@@ -195,6 +196,20 @@ fun SettingPage() {
 
             item {
                 SettingItemCategory(title = { Text(stringResource(R.string.setting_download)) }) {
+                    val autoResume =
+                        rememberBooleanPreference(
+                            key = DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME,
+                            default = DownloadLaunchPolicy.DEFAULT_AUTO_RESUME,
+                        )
+                    SettingBooleanItem(
+                        state = autoResume,
+                        title = {
+                            Text(stringResource(R.string.setting_download_auto_resume_title))
+                        },
+                        text = { Text(stringResource(R.string.setting_download_auto_resume_text)) },
+                        icon = { Icon(Icons.Outlined.PlayCircle, null) },
+                    )
+
                     SettingLinkItem(
                         title = { Text(stringResource(R.string.download_directory_title)) },
                         text = { Text(directoryLabel) },

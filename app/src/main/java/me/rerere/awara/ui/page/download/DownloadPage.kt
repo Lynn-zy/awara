@@ -17,12 +17,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -34,7 +36,6 @@ import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FitScreen
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Info
@@ -52,6 +53,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -68,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -100,12 +103,13 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
-import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.player.Player
 import me.rerere.awara.ui.component.player.PlayerScaffold
 import me.rerere.awara.ui.component.player.PlayerState
 import me.rerere.awara.ui.component.player.rememberPlayerState
+import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
+import me.rerere.awara.util.formatDurationMs
 import me.rerere.awara.util.prettyFileSize
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
@@ -156,7 +160,6 @@ fun DownloadPage(
         }
     }
 
-    var showDirectoryDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
@@ -238,10 +241,6 @@ fun DownloadPage(
         val reason = vm.state.deleteError ?: return@LaunchedEffect
         message.error { Text(stringResource(R.string.download_delete_failed, reason)) }
         vm.clearDeleteError()
-    }
-
-    if (showDirectoryDialog) {
-        DownloadDirectoryDialog(onDismiss = { showDirectoryDialog = false })
     }
 
     if (showBatchDeleteConfirm) {
@@ -543,14 +542,6 @@ fun DownloadPage(
                                 )
                             }
                         } else {
-                            IconButton(onClick = { showDirectoryDialog = true }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Folder,
-                                    contentDescription =
-                                        stringResource(R.string.download_directory_title),
-                                )
-                            }
-
                             Box {
                                 IconButton(onClick = { showSortMenu = !showSortMenu }) {
                                     Icon(
@@ -695,6 +686,11 @@ fun DownloadPage(
                                     selectedAuthorId = group.authorId
                                     selectedIds = emptySet()
                                 },
+                                onAuthorClick = {
+                                    if (group.authorId.isNotBlank()) {
+                                        router.navigate("user/${Uri.encode(group.authorId)}")
+                                    }
+                                },
                             )
                         }
                     }
@@ -779,7 +775,11 @@ fun DownloadPage(
 }
 
 @Composable
-fun AuthorFolderRow(group: DownloadAuthorGroup, onClick: () -> Unit) {
+fun AuthorFolderRow(
+    group: DownloadAuthorGroup,
+    onClick: () -> Unit,
+    onAuthorClick: () -> Unit = {},
+) {
     val displayName = group.authorName.ifBlank { stringResource(R.string.download_unknown_author) }
     val statsText =
         stringResource(
@@ -800,7 +800,10 @@ fun AuthorFolderRow(group: DownloadAuthorGroup, onClick: () -> Unit) {
             AsyncImage(
                 model = group.avatar,
                 contentDescription = null,
-                modifier = Modifier.size(48.dp).clip(CircleShape),
+                modifier =
+                    Modifier.size(48.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = !group.isUnknownAuthor, onClick = onAuthorClick),
                 contentScale = ContentScale.Crop,
             )
         } else {
@@ -941,13 +944,36 @@ fun DownloadItemRow(
                 )
             }
 
-            AsyncImage(
-                model = item.thumbnail,
-                contentDescription = null,
+            Box(
                 modifier =
-                    Modifier.width(thumbWidth).aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop,
-            )
+                    Modifier.width(thumbWidth)
+                        .aspectRatio(220f / 160f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                AsyncImage(
+                    model = item.thumbnail,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+
+                val durationText = formatDurationMs(item.durationMs)
+                if (!durationText.isNullOrEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = Color.Black.copy(alpha = 0.65f),
+                        contentColor = Color.White,
+                        modifier = Modifier.padding(2.dp).align(Alignment.BottomEnd),
+                    ) {
+                        Text(
+                            text = durationText,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
+                }
+            }
 
             Column(
                 modifier = Modifier.weight(1f).padding(start = 12.dp, end = 4.dp),
@@ -960,13 +986,25 @@ fun DownloadItemRow(
                     overflow = TextOverflow.Ellipsis,
                 )
 
-                if (item.authorName.isNotBlank()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (item.authorAvatar.isNotBlank()) {
+                        me.rerere.awara.ui.component.common.Avatar(
+                            model = item.authorAvatar,
+                            modifier = Modifier.size(20.dp).clip(CircleShape),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+
                     Text(
-                        text = item.authorName.trim(),
+                        text = item.authorName.trim().ifEmpty { item.authorId },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
                 }
 
@@ -978,27 +1016,38 @@ fun DownloadItemRow(
                     Text(
                         text = prettyFileSize(item.sizeBytes),
                         modifier =
-                            Modifier.weight(0.46f)
+                            Modifier.wrapContentWidth()
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = formatDownloadDate(item.time),
                         modifier =
-                            Modifier.weight(0.54f)
+                            Modifier.wrapContentWidth()
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
                     )
+                    if (item.quality.isNotBlank()) {
+                        Text(
+                            text = videoQualityDisplayName(item.quality),
+                            modifier =
+                                Modifier.wrapContentWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
 

@@ -34,6 +34,12 @@ interface DownloadTaskDao {
     )
     suspend fun updateStatusFromQueuedOrRunning(taskId: String, newStatus: String): Int
 
+    // 原子操作：在未开启自动恢复且无授权时，将当前代 QUEUED 或 RUNNING 任务转为 PAUSED
+    @Query(
+        "UPDATE download_tasks SET status = 'PAUSED' WHERE taskId = :taskId AND workId = :workId AND (status = 'QUEUED' OR status = 'RUNNING')"
+    )
+    suspend fun pauseQueuedOrRunningTask(taskId: String, workId: String): Int
+
     @Query("UPDATE download_tasks SET status = :newStatus, error = :error WHERE taskId = :taskId")
     suspend fun updateStatus(taskId: String, newStatus: String, error: String? = null): Int
 

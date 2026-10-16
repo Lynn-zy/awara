@@ -66,6 +66,15 @@ class VideoSourceTest {
     }
 
     @Test
+    fun videoDurationFallsBackToFileMetadata() {
+        val video =
+            video("https://filesq.iwara.tv/file/test-file?expires=1700000000")
+                .copy(file = File("file-id", "video/mp4", "video.mp4", "/video.mp4", "video", 185))
+
+        assertEquals("03:05", video.formattedDuration)
+    }
+
+    @Test
     fun renewedSignatureAndRotatedCdnKeepRemoteFileIdentity() {
         val oldUrl = source("360").src.download + "&hash=old"
         val newUrl =

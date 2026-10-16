@@ -26,6 +26,7 @@ import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.thumbnailUrl
+import me.rerere.awara.data.entity.toAvatarUrl
 import me.rerere.awara.data.repo.CommentRepo
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
@@ -104,6 +105,24 @@ class VideoVM(
             try {
                 val title = state.video?.title ?: state.localDownload?.title ?: ""
                 val thumbnail = state.video?.thumbnailUrl() ?: state.localDownload?.thumbnail ?: ""
+                val authorId =
+                    state.video?.user?.username
+                        ?: state.video?.user?.id
+                        ?: state.localDownload?.authorId
+                        ?: ""
+                val authorName = state.video?.user?.name ?: state.localDownload?.authorName ?: ""
+                val authorAvatar =
+                    (state.video?.user?.avatar).toAvatarUrl().takeIf {
+                        state.video?.user?.avatar != null
+                    } ?: state.localDownload?.authorAvatar ?: ""
+                val publishedAt =
+                    state.video?.createdAt?.epochSecond
+                        ?: state.localDownload?.publishedAtEpochSeconds
+                        ?: 0L
+                val durationSeconds =
+                    state.video?.duration
+                        ?: state.video?.file?.duration
+                        ?: (state.localDownload?.durationMs?.div(1000L)?.toInt() ?: 0)
                 appDatabase
                     .historyDao()
                     .insertHistory(
@@ -113,6 +132,11 @@ class VideoVM(
                             resourceId = id,
                             title = title,
                             thumbnail = thumbnail,
+                            authorId = authorId,
+                            authorName = authorName,
+                            authorAvatar = authorAvatar,
+                            publishedAtEpochSeconds = publishedAt,
+                            durationSeconds = durationSeconds,
                         )
                     )
             } catch (e: CancellationException) {
@@ -487,6 +511,53 @@ class VideoVM(
         }
     }
 
+    // 仅在用户主动请求或切换在线清晰度时按需拉取网络源
+    fun requestOnlineUrls(onSuccess: (() -> Unit)? = null) {
+        if (state.onlineUrlsLoading) return
+        val currentVideo = state.video ?: return
+        if (state.urls.isNotEmpty()) {
+            onSuccess?.invoke()
+            return
+        }
+        viewModelScope.launch {
+            state = state.copy(onlineUrlsLoading = true, onlineUrlsError = null)
+            try {
+                runAPICatching { mediaRepo.parseVideoUrl(currentVideo) }
+                    .onSuccess { urls ->
+                        state = state.copy(urls = urls, onlineUrlsError = null)
+                        onSuccess?.invoke()
+                    }
+                    .onError { error ->
+                        Log.w(TAG, "requestOnlineUrls: $error")
+                        state = state.copy(onlineUrlsError = error.message)
+                    }
+                    .onException { exception ->
+                        if (exception.exception is CancellationException) throw exception.exception
+                        Log.w(TAG, "requestOnlineUrls: ${exception.exception}")
+                        state =
+                            state.copy(
+                                onlineUrlsError =
+                                    VideoPlaybackCoordinator.sanitizeReason(exception.exception)
+                            )
+                    }
+            } finally {
+                if (isActive) {
+                    state = state.copy(onlineUrlsLoading = false)
+                }
+            }
+        }
+    }
+
+    fun selectOnlinePlayback() {
+        if (!state.isLocalPlayback) return
+        state = state.copy(isLocalPlayback = false)
+    }
+
+    fun selectLocalPlayback() {
+        if (state.localDownload == null || state.isLocalPlayback) return
+        state = state.copy(isLocalPlayback = true)
+    }
+
     data class VideoState(
         val loading: Boolean = false,
         val video: Video? = null,
@@ -507,6 +578,8 @@ class VideoVM(
         val isLocalFallback: Boolean = false,
         val localFileUnavailable: Boolean = false,
         val isOnlineRemoved: Boolean = false,
+        val onlineUrlsLoading: Boolean = false,
+        val onlineUrlsError: String? = null,
     )
 
     sealed class VideoEvent {

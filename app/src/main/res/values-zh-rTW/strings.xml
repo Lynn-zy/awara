@@ -104,6 +104,12 @@
     <string name="download_enqueue_failed">啟動下載失敗：%1$s</string>
     <string name="download_failed">下載失敗：%1$s</string>
     <string name="setting_download">下載設定</string>
+    <string name="setting_download_auto_resume_title">自動開始未完成的下載任務</string>
+    <string name="setting_download_auto_resume_text">應用程式啟動時自動繼續未完成的下載任務</string>
+    <string name="download_unfinished_dialog_title">未完成的下載任務</string>
+    <string name="download_unfinished_dialog_message">偵測到存在未完成的下載任務，是否繼續下載？</string>
+    <string name="download_unfinished_dialog_resume">繼續下載</string>
+    <string name="download_unfinished_dialog_dismiss">暫不繼續</string>
     <string name="download_directory_title">下載資料夾</string>
     <string name="download_directory_choose">選擇資料夾</string>
     <string name="download_directory_default">使用 Download/Awara</string>
@@ -167,16 +173,24 @@
     <string name="download_open_details">進入影片詳情頁</string>
     <string name="download_focus_missing">該影片已不在已下載清單中</string>
     <string name="download_task_pause_all">全部暫停</string>
+    <string name="download_task_resume_all">全部恢復</string>
     <string name="download_task_cancel_all">全部取消</string>
     <string name="download_task_cancel_all_title">取消全部下載</string>
     <string name="download_task_cancel_all_message">確定要取消全部 %1$d 個下載任務嗎？已下載的部分檔案將被清理，已完成的影片不受影響。</string>
     <string name="download_task_batch_failed">批次操作中有 %1$d 個任務失敗：%2$s</string>
     <string name="download_task_actions">任務操作</string>
     <string name="video_local_playback">本機影片</string>
+    <string name="video_local_playback_quality">本機影片 · %1$s</string>
     <string name="video_online_removed">原影片或作者帳號已無法使用</string>
     <string name="video_author_unavailable">作者帳號無法使用</string>
     <string name="video_details_load_failed">影片詳情載入失敗：%1$s</string>
     <string name="video_local_file_unavailable">本機檔案無法使用，正在嘗試線上播放。</string>
     <string name="video_local_details_hint">已下載的影片仍可播放，線上詳情暫時無法使用。</string>
     <string name="video_local_cast_unsupported">本機影片暫不支援投放</string>
+    <string name="time_just_now">剛剛</string>
+    <string name="time_minutes_ago">%1$d分鐘前</string>
+    <string name="time_hours_ago">%1$d小時前</string>
+    <string name="time_days_ago">%1$d天前</string>
+    <string name="user_followed">已關注</string>
+    <string name="user_follow">關注</string>
 </resources>

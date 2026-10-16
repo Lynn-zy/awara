@@ -8,12 +8,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -414,12 +412,21 @@ private fun UserCard(
             Avatar(user = profileState?.user, modifier = Modifier.size(48.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = profileState?.user?.name ?: "",
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = profileState?.user?.name ?: "",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+
+                    profileState?.user?.let { UserStatus(user = it) }
+                }
 
                 Text(
                     text = "@" + (profileState?.user?.username ?: ""),
@@ -427,10 +434,6 @@ private fun UserCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-
-                Spacer(modifier = Modifier.height(3.dp))
-
-                profileState?.user?.let { UserStatus(user = it) }
             }
         }
 
@@ -467,7 +470,14 @@ private fun UserCard(
                     else ButtonType.Default,
                 loading = vm.state.followLoading,
             ) {
-                Text(text = if (profileState?.user?.following == true) "已关注" else "关注")
+                Text(
+                    text =
+                        if (profileState?.user?.following == true) {
+                            stringResource(R.string.user_followed)
+                        } else {
+                            stringResource(R.string.user_follow)
+                        }
+                )
             }
         }
 

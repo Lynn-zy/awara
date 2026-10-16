@@ -57,6 +57,19 @@ class DownloadBatchTest {
     }
 
     @Test
+    fun filterResumableTasksKeepsOnlyPausedTasks() {
+        val tasks =
+            listOf(
+                createTask("1", DownloadTaskStatus.QUEUED),
+                createTask("2", DownloadTaskStatus.RUNNING),
+                createTask("3", DownloadTaskStatus.PAUSED),
+                createTask("4", DownloadTaskStatus.FAILED),
+            )
+
+        assertEquals(listOf("3"), DownloadManager.filterResumableTasks(tasks).map { it.taskId })
+    }
+
+    @Test
     fun filterCancellableTasksRetainsAllUncompletedTasks() {
         val tasks =
             listOf(

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.storage.StorageManager
 import android.util.Log
 import com.google.android.exoplayer2.database.StandaloneDatabaseProvider
+import com.google.android.exoplayer2.upstream.DefaultDataSource
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
 import com.google.android.exoplayer2.upstream.cache.CacheDataSource
 import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
@@ -21,20 +22,28 @@ object PlayerCache {
             val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
             val maxBytes =
                 storageManager.getCacheQuotaBytes(storageManager.getUuidForPath(cacheFolder))
-            val cache = SimpleCache(
-                cacheFolder,
-                LeastRecentlyUsedCacheEvictor(maxBytes),
-                StandaloneDatabaseProvider(context)
-            )
-            val cacheFactory = CacheDataSource.Factory()
-                .setCache(cache)
-                .setUpstreamDataSourceFactory(DefaultHttpDataSource.Factory())
-                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-                .setCacheKeyFactory { dataSpec ->
-                    val filename = dataSpec.uri.getQueryParameter("filename")
-                    Log.i(TAG, "rememberPlayerState: ${dataSpec.key} || $filename || ${dataSpec.uri}")
-                    dataSpec.key ?: filename ?: dataSpec.uri.toString()
-                }
+            val cache =
+                SimpleCache(
+                    cacheFolder,
+                    LeastRecentlyUsedCacheEvictor(maxBytes),
+                    StandaloneDatabaseProvider(context),
+                )
+            // 上游数据源统一委托 DefaultDataSource 支持 http(s) 远端缓存与 content/file 本地流
+            val upstreamFactory =
+                DefaultDataSource.Factory(context, DefaultHttpDataSource.Factory())
+            val cacheFactory =
+                CacheDataSource.Factory()
+                    .setCache(cache)
+                    .setUpstreamDataSourceFactory(upstreamFactory)
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                    .setCacheKeyFactory { dataSpec ->
+                        val filename = dataSpec.uri.getQueryParameter("filename")
+                        Log.i(
+                            TAG,
+                            "rememberPlayerState: ${dataSpec.key} || $filename || ${dataSpec.uri}",
+                        )
+                        dataSpec.key ?: filename ?: dataSpec.uri.toString()
+                    }
             this.cacheFactory = cacheFactory
         }
         return this.cacheFactory

@@ -9,10 +9,11 @@ data class File(
     val name: String,
     val path: String,
     val type: String,
+    val duration: Int? = null,
 )
 
 fun File?.toHeaderUrl(): String {
-    return if(this != null) {
+    return if (this != null) {
         "https://files.iwara.tv/image/profileHeader/$id/$name"
     } else {
         "https://iwara.tv/images/default-background.jpg"
@@ -20,7 +21,7 @@ fun File?.toHeaderUrl(): String {
 }
 
 fun File?.toAvatarUrl(): String {
-    return if(this != null) {
+    return if (this != null) {
         "https://i.iwara.tv/image/avatar/$id/$name"
     } else {
         "https://iwara.tv/images/default-avatar.jpg"
@@ -28,7 +29,7 @@ fun File?.toAvatarUrl(): String {
 }
 
 fun File?.toImageLarge(): String? {
-    return if(this != null) {
+    return if (this != null) {
         "https://i.iwara.tv/image/large/$id/$name"
     } else {
         null

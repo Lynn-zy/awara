@@ -29,6 +29,7 @@ import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.ResumableDownloader
+import me.rerere.awara.data.download.shouldBlockAutomaticDownloadStart
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.data.entity.DownloadType
@@ -50,6 +51,28 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
+        val startupTask = appDatabase.downloadTaskDao().getTask(taskId)
+        if (startupTask == null || startupTask.workId != id.toString()) {
+            return Result.failure()
+        }
+        if (
+            startupTask.status == DownloadTaskStatus.QUEUED ||
+                startupTask.status == DownloadTaskStatus.RUNNING
+        ) {
+            val manuallyAuthorized =
+                downloadManager.consumeExecutionAuthorization(taskId, id.toString())
+            if (
+                shouldBlockAutomaticDownloadStart(
+                    status = startupTask.status,
+                    autoResumeEnabled = downloadManager.isAutoResumeEnabled(),
+                    manuallyAuthorized = manuallyAuthorized,
+                )
+            ) {
+                appDatabase.downloadTaskDao().pauseQueuedOrRunningTask(taskId, id.toString())
+                DownloadNotifications.cancelProgressNotification(appContext, taskId)
+                return Result.failure()
+            }
+        }
         // 仅在 Android 13+ 校验通知运行时权限
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -319,6 +342,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     downloadStorage.finish(createdUri)
 
                     // 事务中二次确认状态仍为 SAVING 且 workId 一致才入库，避免取消竞态
+                    var oldUriToClean: String? = null
                     withContext(NonCancellable) {
                         var saved = false
                         appDatabase.withTransaction {
@@ -328,6 +352,14 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     inTxTask.status == DownloadTaskStatus.SAVING &&
                                     inTxTask.workId == id.toString()
                             ) {
+                                // 替换同 resourceId 的旧记录，若事务失败则不影响旧记录
+                                val existingItem =
+                                    appDatabase.downloadDao().getDownloadItem(inTxTask.resourceId)
+                                if (existingItem != null) {
+                                    oldUriToClean = existingItem.uri
+                                    appDatabase.downloadDao().deleteDownloadItem(existingItem)
+                                }
+                                val durationMs = extractDurationMs(partFile)
                                 appDatabase
                                     .downloadDao()
                                     .insertDownloadItem(
@@ -341,7 +373,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                             authorId = inTxTask.authorId,
                                             authorName = inTxTask.authorName,
                                             authorAvatar = inTxTask.authorAvatar,
+                                            publishedAtEpochSeconds =
+                                                inTxTask.publishedAtEpochSeconds,
                                             sizeBytes = partFile.length(),
+                                            quality = inTxTask.quality,
+                                            durationMs = durationMs,
                                         )
                                     )
                                 appDatabase.downloadTaskDao().delete(taskId)
@@ -352,6 +388,13 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         if (committed) {
                             runCatching { downloadManager.parts.delete(taskId) }
                                 .onFailure { Log.w(TAG, "待回收下载分块 taskId=$taskId") }
+                            // 事务成功提交后安全清理旧物理 URI
+                            oldUriToClean?.let { oldUri ->
+                                if (oldUri.isNotBlank() && oldUri != createdUri.toString()) {
+                                    runCatching { downloadStorage.delete(Uri.parse(oldUri)) }
+                                        .onFailure { Log.w(TAG, "清理被覆盖的旧下载文件失败: $oldUri, $it") }
+                                }
+                            }
                         }
                     }
 
@@ -480,6 +523,21 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
             }
         } finally {
             metadata.release()
+        }
+    }
+
+    private fun extractDurationMs(file: File): Long {
+        val metadata = MediaMetadataRetriever()
+        return try {
+            metadata.setDataSource(file.absolutePath)
+            metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                ?: 0L
+        } catch (_: Exception) {
+            0L
+        } finally {
+            try {
+                metadata.release()
+            } catch (_: Exception) {}
         }
     }
 

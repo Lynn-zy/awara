@@ -6,7 +6,6 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -164,7 +163,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                     }
                 ) {
                     Text(
-                        text = stringResource(R.string.download_task_cancel),
+                        text = stringResource(R.string.confirm),
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
@@ -191,7 +190,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                     }
                 ) {
                     Text(
-                        text = stringResource(R.string.download_task_cancel_all),
+                        text = stringResource(R.string.confirm),
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
@@ -213,6 +212,10 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                         it.status == DownloadTaskStatus.QUEUED ||
                             it.status == DownloadTaskStatus.RUNNING
                     }
+                }
+            val resumableCount =
+                remember(vm.state.tasks) {
+                    vm.state.tasks.count { it.status == DownloadTaskStatus.PAUSED }
                 }
             val cancellableCount = vm.state.tasks.size
 
@@ -236,15 +239,25 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                             onDismissRequest = { menuExpanded = false },
                         ) {
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.download_task_pause_all)) },
+                                text = {
+                                    Text(
+                                        stringResource(
+                                            if (pausableCount > 0) {
+                                                R.string.download_task_pause_all
+                                            } else {
+                                                R.string.download_task_resume_all
+                                            }
+                                        )
+                                    )
+                                },
                                 onClick = {
                                     menuExpanded = false
-                                    vm.pauseAll()
+                                    if (pausableCount > 0) vm.pauseAll() else vm.resumeAll()
                                 },
                                 enabled =
                                     !vm.state.isBatchOperating &&
                                         vm.state.operatingIds.isEmpty() &&
-                                        pausableCount > 0,
+                                        (pausableCount > 0 || resumableCount > 0),
                             )
                             DropdownMenuItem(
                                 text = {
@@ -384,7 +397,7 @@ private fun DownloadTaskCard(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Top,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // 左侧 16:9 缩略图
                     AsyncImage(
@@ -417,85 +430,91 @@ private fun DownloadTaskCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                    }
+                }
 
-                        Row(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = statusLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor,
+                    )
+                    Text(
+                        text = progressText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                if (!task.error.isNullOrBlank()) {
+                    Text(
+                        text = task.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
+                val progressTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                when (task.status) {
+                    DownloadTaskStatus.RUNNING -> {
+                        if (hasKnownTotal) {
+                            LinearProgressIndicator(
+                                progress = progressFraction.toFloat(),
+                                modifier = Modifier.fillMaxWidth(),
+                                trackColor = progressTrackColor,
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                trackColor = progressTrackColor,
+                            )
+                        }
+                    }
+                    DownloadTaskStatus.PAUSED -> {
+                        LinearProgressIndicator(
+                            progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = statusLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = statusColor,
-                            )
-                            Text(
-                                text = progressText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-
-                        if (!task.error.isNullOrBlank()) {
-                            Text(
-                                text = task.error,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
+                            trackColor = progressTrackColor,
+                        )
+                    }
+                    DownloadTaskStatus.QUEUED,
+                    DownloadTaskStatus.SAVING,
+                    DownloadTaskStatus.CANCELLING -> {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            trackColor = progressTrackColor,
+                        )
+                    }
+                    DownloadTaskStatus.FAILED -> {
+                        LinearProgressIndicator(
+                            progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.error,
+                            trackColor = progressTrackColor,
+                        )
+                    }
+                    else -> {
+                        LinearProgressIndicator(
+                            progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
+                            modifier = Modifier.fillMaxWidth(),
+                            trackColor = progressTrackColor,
+                        )
                     }
                 }
 
                 Row(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                        when (task.status) {
-                            DownloadTaskStatus.RUNNING -> {
-                                if (hasKnownTotal) {
-                                    LinearProgressIndicator(
-                                        progress = progressFraction.toFloat(),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                } else {
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                            DownloadTaskStatus.PAUSED -> {
-                                LinearProgressIndicator(
-                                    progress =
-                                        if (hasKnownTotal) progressFraction.toFloat() else 0f,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                            DownloadTaskStatus.QUEUED,
-                            DownloadTaskStatus.SAVING,
-                            DownloadTaskStatus.CANCELLING -> {
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                            DownloadTaskStatus.FAILED -> {
-                                LinearProgressIndicator(
-                                    progress =
-                                        if (hasKnownTotal) progressFraction.toFloat() else 0f,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            else -> {
-                                LinearProgressIndicator(
-                                    progress =
-                                        if (hasKnownTotal) progressFraction.toFloat() else 0f,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                        }
-                    }
-
                     when (task.status) {
                         DownloadTaskStatus.RUNNING,
                         DownloadTaskStatus.QUEUED -> {

@@ -10,13 +10,13 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.data.entity.Playlist
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.repo.MediaRepo
+import me.rerere.awara.data.source.onError
+import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
 
-class PlaylistDetailVM(
-    savedStateHandle: SavedStateHandle,
-    private val mediaRepo: MediaRepo
-) : ViewModel() {
+class PlaylistDetailVM(savedStateHandle: SavedStateHandle, private val mediaRepo: MediaRepo) :
+    ViewModel() {
     val id = checkNotNull(savedStateHandle.get<String>("id"))
     var state by mutableStateOf(PlaylistDetailState())
         private set
@@ -30,21 +30,23 @@ class PlaylistDetailVM(
         loadPlaylistDetail()
     }
 
+    fun reload() = loadPlaylistDetail()
+
     private fun loadPlaylistDetail() {
         viewModelScope.launch {
             state = state.copy(loading = true)
-            runAPICatching {
-                mediaRepo.getPlaylistContent(
-                    playlistId = id,
-                    page = state.page - 1
-                )
-            }.onSuccess {
-                state = state.copy(
-                    count = it.count,
-                    list = it.results,
-                    playlist = it.playlist
-                )
-            }
+            runAPICatching { mediaRepo.getPlaylistContent(playlistId = id, page = state.page - 1) }
+                .onSuccess {
+                    state =
+                        state.copy(
+                            count = it.count,
+                            list = it.results,
+                            playlist = it.playlist,
+                            error = null,
+                        )
+                }
+                .onError { state = state.copy(error = it.message) }
+                .onException { state = state.copy(error = it.exception.message) }
             state = state.copy(loading = false)
         }
     }
@@ -55,5 +57,6 @@ class PlaylistDetailVM(
         val count: Int = 0,
         val list: List<Video> = emptyList(),
         val playlist: Playlist? = null,
+        val error: String? = null,
     )
 }

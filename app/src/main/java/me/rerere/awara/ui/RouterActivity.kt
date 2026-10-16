@@ -12,16 +12,23 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.navigation.NavType
@@ -29,7 +36,16 @@ import androidx.navigation.navArgument
 import com.google.accompanist.navigation.animation.AnimatedNavHost
 import com.google.accompanist.navigation.animation.composable
 import com.google.accompanist.navigation.animation.rememberAnimatedNavController
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import me.rerere.awara.R
+import me.rerere.awara.data.download.DownloadLaunchPolicy
+import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
+import me.rerere.awara.data.entity.DownloadTask
+import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.ui.component.common.DialogProvider
 import me.rerere.awara.ui.component.common.MessageProvider
 import me.rerere.awara.ui.page.download.DownloadHubPage
@@ -56,6 +72,7 @@ import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.UserStoreProvider
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.ui.theme.AwaraTheme
+import org.koin.compose.koinInject
 
 private const val TAG = "RouterActivity"
 
@@ -129,7 +146,130 @@ class RouterActivity : ComponentActivity() {
 
     @Composable
     private fun ContextProvider(content: @Composable () -> Unit) {
-        MessageProvider { DialogProvider { content() } }
+        MessageProvider {
+            DialogProvider {
+                content()
+                UnfinishedDownloadsDialog()
+            }
+        }
+    }
+
+    @Composable
+    private fun UnfinishedDownloadsDialog() {
+        val downloadManager: DownloadManager = koinInject()
+        val database: AppDatabase = koinInject()
+        val messageProvider = LocalMessageProvider.current
+        val coroutineScope = rememberCoroutineScope()
+        var hasPromptedUnfinishedTasks by rememberSaveable { mutableStateOf(false) }
+        var showDialog by remember { mutableStateOf(false) }
+        var candidateTasks by remember { mutableStateOf<List<DownloadTask>>(emptyList()) }
+
+        LaunchedEffect(Unit) {
+            if (!hasPromptedUnfinishedTasks) {
+                hasPromptedUnfinishedTasks = true
+                if (!downloadManager.isAutoResumeEnabled()) {
+                    val unfinished =
+                        withContext(Dispatchers.IO) {
+                            val allTasks = database.downloadTaskDao().getAllTasksList()
+                            DownloadLaunchPolicy.filterUnfinishedTasks(allTasks)
+                        }
+                    if (unfinished.isNotEmpty()) {
+                        candidateTasks = unfinished
+                        showDialog = true
+                    }
+                } else {
+                    val resumable =
+                        withContext(Dispatchers.IO) {
+                            val allTasks = database.downloadTaskDao().getAllTasksList()
+                            DownloadLaunchPolicy.filterResumableTasks(allTasks)
+                        }
+                    for (task in resumable) {
+                        try {
+                            downloadManager.safeResume(task.taskId)
+                        } catch (e: Exception) {
+                            val reason =
+                                e.localizedMessage?.takeIf { it.isNotBlank() }
+                                    ?: e.javaClass.simpleName
+                            messageProvider.error { Text("${task.title}: $reason") }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showDialog = false
+                    coroutineScope.launch {
+                        for (task in candidateTasks) {
+                            if (
+                                task.status == DownloadTaskStatus.RUNNING ||
+                                    task.status == DownloadTaskStatus.QUEUED
+                            ) {
+                                try {
+                                    downloadManager.pause(task.taskId)
+                                } catch (e: Exception) {
+                                    val reason =
+                                        e.localizedMessage?.takeIf { it.isNotBlank() }
+                                            ?: e.javaClass.simpleName
+                                    messageProvider.error { Text("${task.title}: $reason") }
+                                }
+                            }
+                        }
+                    }
+                },
+                title = { Text(stringResource(R.string.download_unfinished_dialog_title)) },
+                text = { Text(stringResource(R.string.download_unfinished_dialog_message)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showDialog = false
+                            coroutineScope.launch {
+                                for (task in candidateTasks) {
+                                    try {
+                                        downloadManager.safeResume(task.taskId)
+                                    } catch (e: Exception) {
+                                        val reason =
+                                            e.localizedMessage?.takeIf { it.isNotBlank() }
+                                                ?: e.javaClass.simpleName
+                                        messageProvider.error { Text("${task.title}: $reason") }
+                                    }
+                                }
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.download_unfinished_dialog_resume))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showDialog = false
+                            coroutineScope.launch {
+                                for (task in candidateTasks) {
+                                    if (
+                                        task.status == DownloadTaskStatus.RUNNING ||
+                                            task.status == DownloadTaskStatus.QUEUED
+                                    ) {
+                                        try {
+                                            downloadManager.pause(task.taskId)
+                                        } catch (e: Exception) {
+                                            val reason =
+                                                e.localizedMessage?.takeIf { it.isNotBlank() }
+                                                    ?: e.javaClass.simpleName
+                                            messageProvider.error { Text("${task.title}: $reason") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.download_unfinished_dialog_dismiss))
+                    }
+                },
+            )
+        }
     }
 
     @Composable

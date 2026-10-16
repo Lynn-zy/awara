@@ -56,15 +56,33 @@ fun PlaylistDetailPage(vm: PlaylistDetailVM = koinViewModel()) {
         },
     ) {
         Spin(show = vm.state.loading, modifier = Modifier.fillMaxSize().padding(it)) {
-            LazyVerticalStaggeredGrid(
-                columns = DynamicStaggeredGridCells(),
-                contentPadding = PaddingValues(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalItemSpacing = 8.dp,
-                modifier =
-                    Modifier.matchParentSize().nestedScroll(appbarBehavior.nestedScrollConnection),
-            ) {
-                items(vm.state.list) { video -> MediaCard(media = video) }
+            val error = vm.state.error
+            if (error != null) {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                ) {
+                    Text(
+                        text = error,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                    )
+                    androidx.compose.material3.TextButton(onClick = vm::reload) {
+                        Text(stringResource(R.string.retry))
+                    }
+                }
+            } else {
+                LazyVerticalStaggeredGrid(
+                    columns = DynamicStaggeredGridCells(),
+                    contentPadding = PaddingValues(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalItemSpacing = 8.dp,
+                    modifier =
+                        Modifier.matchParentSize()
+                            .nestedScroll(appbarBehavior.nestedScrollConnection),
+                ) {
+                    items(vm.state.list) { video -> MediaCard(media = video) }
+                }
             }
         }
     }

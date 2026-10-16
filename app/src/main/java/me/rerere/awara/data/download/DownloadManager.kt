@@ -31,13 +31,40 @@ import me.rerere.awara.data.entity.requireDownloadQuality
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.entity.toAvatarUrl
 import me.rerere.awara.data.entity.videoDownloadResourceKey
+import me.rerere.awara.data.entity.videoQualityRank
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.worker.DownloadWorker
+import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.Call
 
 private const val TAG = "DownloadManager"
 private val UUID_REGEX = Regex("^[0-9a-fA-F\\-]{36}$")
+
+// 仅当新清晰度高于旧清晰度（旧清晰度为空视为可替换）时允许覆盖下载
+fun canUpgradeDownloadQuality(newQuality: String, oldQuality: String?): Boolean {
+    if (oldQuality.isNullOrBlank()) return true
+    return videoQualityRank(newQuality) > videoQualityRank(oldQuality)
+}
+
+enum class DownloadEnqueueAction {
+    ALLOW,
+    REJECT_ALREADY_DOWNLOADING,
+    REJECT_ALREADY_DOWNLOADED,
+}
+
+fun evaluateDownloadEnqueue(
+    hasActiveTask: Boolean,
+    hasCompletedItem: Boolean,
+    existingQuality: String?,
+    newQuality: String,
+): DownloadEnqueueAction {
+    if (hasActiveTask) return DownloadEnqueueAction.REJECT_ALREADY_DOWNLOADING
+    if (hasCompletedItem && !canUpgradeDownloadQuality(newQuality, existingQuality)) {
+        return DownloadEnqueueAction.REJECT_ALREADY_DOWNLOADED
+    }
+    return DownloadEnqueueAction.ALLOW
+}
 
 class DownloadManager(
     private val context: Context,
@@ -52,6 +79,25 @@ class DownloadManager(
     private val commandLocks = ConcurrentHashMap<String, Mutex>()
     private val transferLocks = ConcurrentHashMap<String, Mutex>()
     private val activeCalls = ConcurrentHashMap<String, Call>()
+    val launchPolicy = DownloadLaunchPolicy()
+
+    fun isAutoResumeEnabled(): Boolean {
+        return runCatching {
+                mmkvPreference.getBoolean(
+                    DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME,
+                    DownloadLaunchPolicy.DEFAULT_AUTO_RESUME,
+                )
+            }
+            .getOrDefault(DownloadLaunchPolicy.DEFAULT_AUTO_RESUME)
+    }
+
+    fun grantExecutionAuthorization(taskId: String, workId: String) {
+        launchPolicy.grantAuthorization(taskId, workId)
+    }
+
+    fun consumeExecutionAuthorization(taskId: String, workId: String): Boolean {
+        return launchPolicy.consumeAuthorization(taskId, workId)
+    }
 
     fun getCommandMutex(taskId: String): Mutex = commandLocks.computeIfAbsent(taskId) { Mutex() }
 
@@ -82,6 +128,7 @@ class DownloadManager(
                     .addTag(video.id)
                     .addTag(taskId)
                     .build()
+            grantExecutionAuthorization(taskId, req.id.toString())
 
             val task =
                 DownloadTask(
@@ -92,9 +139,10 @@ class DownloadManager(
                     thumbnail = video.thumbnailUrl(),
                     directoryUri = directoryUri,
                     quality = selectedSource.qualityKey,
-                    authorId = video.user?.id.orEmpty(),
+                    authorId = video.user?.username ?: video.user?.id.orEmpty(),
                     authorName = video.user?.name.orEmpty(),
                     authorAvatar = authorAvatar,
+                    publishedAtEpochSeconds = video.createdAt.epochSecond,
                     createdAt = System.currentTimeMillis(),
                     status = DownloadTaskStatus.QUEUED,
                     downloadedBytes = 0,
@@ -110,15 +158,26 @@ class DownloadManager(
                 withContext(NonCancellable) {
                     enqueueMutex.withLock {
                         database.withTransaction {
-                            if (database.downloadDao().getDownloadItem(video.id) != null) {
-                                throw IllegalStateException(
-                                    context.getString(R.string.already_downloaded)
+                            val existingItem = database.downloadDao().getDownloadItem(video.id)
+                            val hasActiveTask =
+                                database.downloadTaskDao().findByResourceId(video.id) != null
+                            val action =
+                                evaluateDownloadEnqueue(
+                                    hasActiveTask = hasActiveTask,
+                                    hasCompletedItem = existingItem != null,
+                                    existingQuality = existingItem?.quality,
+                                    newQuality = selectedSource.qualityKey,
                                 )
-                            }
-                            if (database.downloadTaskDao().findByResourceId(video.id) != null) {
-                                throw IllegalStateException(
-                                    context.getString(R.string.already_downloading)
-                                )
+                            when (action) {
+                                DownloadEnqueueAction.REJECT_ALREADY_DOWNLOADING ->
+                                    throw IllegalStateException(
+                                        context.getString(R.string.already_downloading)
+                                    )
+                                DownloadEnqueueAction.REJECT_ALREADY_DOWNLOADED ->
+                                    throw IllegalStateException(
+                                        context.getString(R.string.already_downloaded)
+                                    )
+                                DownloadEnqueueAction.ALLOW -> {}
                             }
                             database.downloadTaskDao().insert(task)
                         }
@@ -247,6 +306,7 @@ class DownloadManager(
                         .addTag(task.resourceId)
                         .addTag(taskId)
                         .build()
+                grantExecutionAuthorization(taskId, req.id.toString())
 
                 withContext(NonCancellable) {
                     val resumed =
@@ -293,6 +353,19 @@ class DownloadManager(
             }
         }
 
+    suspend fun safeResume(taskId: String) =
+        withContext(Dispatchers.IO) {
+            val task = database.downloadTaskDao().getTask(taskId) ?: return@withContext
+            // 确保正在运行或排队的旧任务先安全释放，再发起带新授权的恢复
+            if (
+                task.status == DownloadTaskStatus.QUEUED ||
+                    task.status == DownloadTaskStatus.RUNNING
+            ) {
+                pause(taskId)
+            }
+            resume(taskId)
+        }
+
     suspend fun cancel(taskId: String) =
         withContext(Dispatchers.IO) {
             val cmdMutex = getCommandMutex(taskId)
@@ -301,6 +374,7 @@ class DownloadManager(
 
                 withContext(NonCancellable) {
                     database.downloadTaskDao().updateStatus(taskId, DownloadTaskStatus.CANCELLING)
+                    launchPolicy.revokeAuthorization(taskId)
                     cancelActiveCall(taskId)
                     DownloadNotifications.cancelTaskNotification(context, taskId)
 
@@ -530,11 +604,18 @@ class DownloadManager(
         }
 
     companion object {
+        const val PREFERENCE_KEY_AUTO_RESUME = DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME
+        const val DEFAULT_AUTO_RESUME = DownloadLaunchPolicy.DEFAULT_AUTO_RESUME
+
         // pauseAll 仅针对排队或下载中的任务，过滤跳过保存中、已暂停、已失败及取消中任务
         fun filterPausableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
             return tasks.filter {
                 it.status == DownloadTaskStatus.QUEUED || it.status == DownloadTaskStatus.RUNNING
             }
+        }
+
+        fun filterResumableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
+            return tasks.filter { it.status == DownloadTaskStatus.PAUSED }
         }
 
         // cancelAll 针对所有未完成任务

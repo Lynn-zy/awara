@@ -1,30 +1,41 @@
 package me.rerere.awara.ui.page.playlist
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.PlaylistPlay
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.Playlist
+import me.rerere.awara.data.entity.coverUrl
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.Spin
@@ -62,15 +73,32 @@ fun PlaylistsPage(vm: PlaylistsVM = koinViewModel()) {
         },
     ) {
         Spin(show = vm.state.loading, modifier = Modifier.fillMaxSize().padding(it)) {
-            LazyVerticalStaggeredGrid(
-                columns = DynamicStaggeredGridCells(),
-                contentPadding = PaddingValues(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalItemSpacing = 8.dp,
-                modifier =
-                    Modifier.matchParentSize().nestedScroll(appbarBehavior.nestedScrollConnection),
-            ) {
-                items(vm.state.list) { PlaylistCard(it) { router.navigate("playlist/${it.id}") } }
+            val error = vm.state.error
+            if (error != null) {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                ) {
+                    Text(text = error, color = MaterialTheme.colorScheme.error)
+                    androidx.compose.material3.TextButton(onClick = vm::reload) {
+                        Text(stringResource(R.string.retry))
+                    }
+                }
+            } else {
+                LazyVerticalStaggeredGrid(
+                    columns = DynamicStaggeredGridCells(),
+                    contentPadding = PaddingValues(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalItemSpacing = 8.dp,
+                    modifier =
+                        Modifier.matchParentSize()
+                            .nestedScroll(appbarBehavior.nestedScrollConnection),
+                ) {
+                    items(vm.state.list) {
+                        PlaylistCard(it) { router.navigate("playlist/${it.id}") }
+                    }
+                }
             }
         }
     }
@@ -79,16 +107,49 @@ fun PlaylistsPage(vm: PlaylistsVM = koinViewModel()) {
 @Composable
 private fun PlaylistCard(playlist: Playlist, onNavigateToPlaylistDetail: () -> Unit) {
     Card(onClick = onNavigateToPlaylistDetail) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(text = playlist.title, style = MaterialTheme.typography.titleLarge)
+        Column {
+            val coverUrl = playlist.coverUrl()
+            Box(
+                modifier =
+                    Modifier.fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (coverUrl != null) {
+                    AsyncImage(
+                        model = coverUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Outlined.PlaylistPlay,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+            }
 
-            Text(
-                text = stringResource(R.string.playlist_num_videos, playlist.numVideos),
-                style = MaterialTheme.typography.labelMedium,
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = playlist.title.trim(),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                Text(
+                    text = playlist.numVideos.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                )
+            }
         }
     }
 }

@@ -142,6 +142,12 @@
     <string name="download_enqueue_failed">Could not start download: %1$s</string>
     <string name="download_failed">Download failed: %1$s</string>
     <string name="setting_download">Downloads</string>
+    <string name="setting_download_auto_resume_title">Auto-resume unfinished downloads</string>
+    <string name="setting_download_auto_resume_text">Automatically resume pending download tasks when app launches</string>
+    <string name="download_unfinished_dialog_title">Unfinished Downloads</string>
+    <string name="download_unfinished_dialog_message">Unfinished download tasks detected. Do you want to continue downloading?</string>
+    <string name="download_unfinished_dialog_resume">Resume</string>
+    <string name="download_unfinished_dialog_dismiss">Not Now</string>
     <string name="download_directory_title">Download folder</string>
     <string name="download_directory_choose">Choose folder</string>
     <string name="download_directory_default">Use Download/Awara</string>
@@ -205,16 +211,24 @@
     <string name="download_open_details">Open video details</string>
     <string name="download_focus_missing">This video is no longer in your downloads</string>
     <string name="download_task_pause_all">Pause all</string>
+    <string name="download_task_resume_all">Resume all</string>
     <string name="download_task_cancel_all">Cancel all</string>
     <string name="download_task_cancel_all_title">Cancel all downloads</string>
     <string name="download_task_cancel_all_message">Cancel all %1$d download tasks? Partial files will be deleted. Completed videos will be kept.</string>
     <string name="download_task_batch_failed">Could not process %1$d tasks: %2$s</string>
     <string name="download_task_actions">Task actions</string>
     <string name="video_local_playback">Local video</string>
+    <string name="video_local_playback_quality">Local video · %1$s</string>
     <string name="video_online_removed">The original video or author account is no longer available</string>
     <string name="video_author_unavailable">Author account unavailable</string>
     <string name="video_details_load_failed">Could not load video details: %1$s</string>
     <string name="video_local_file_unavailable">The local file is unavailable. Trying online playback.</string>
     <string name="video_local_details_hint">The downloaded video can still be played. Online details are unavailable.</string>
     <string name="video_local_cast_unsupported">Casting local videos is not supported</string>
+    <string name="time_just_now">Just now</string>
+    <string name="time_minutes_ago">%1$d min ago</string>
+    <string name="time_hours_ago">%1$d hours ago</string>
+    <string name="time_days_ago">%1$d days ago</string>
+    <string name="user_followed">Followed</string>
+    <string name="user_follow">Follow</string>
 </resources>

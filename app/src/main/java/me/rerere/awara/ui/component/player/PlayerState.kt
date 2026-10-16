@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
+import com.google.android.exoplayer2.PlaybackException
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory
 import com.google.android.exoplayer2.ui.AspectRatioFrameLayout
@@ -78,6 +79,12 @@ fun rememberPlayerState(
                     super.onVideoSizeChanged(videoSize)
                     state.videoSize = PlayerState.VideoSize.from(videoSize)
                     state.duration = state.player.duration
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    super.onPlayerError(error)
+                    state.loading = false
+                    Log.e(TAG, "onPlayerError: ${error.errorCodeName} (${error.errorCode})", error)
                 }
             }
         state.player.addListener(playbackListener)

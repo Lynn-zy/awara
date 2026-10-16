@@ -47,55 +47,51 @@ fun DownloadDirectoryDialog(
 
     var directoryUri by
         rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = "")
+    var selectedDirectoryUri by remember { mutableStateOf(directoryUri) }
     var saving by remember { mutableStateOf(false) }
 
-    LaunchedEffect(downloadStorage) {
+    LaunchedEffect(downloadStorage, directoryUri) {
         val current = downloadStorage.directoryUri()
         if (directoryUri != current) {
             directoryUri = current
         }
+        selectedDirectoryUri = current
     }
 
     // 在 IO 线程解析目录显示名称，避免 SAF DocumentFile 查询阻塞主线程
     val currentDirectoryLabel by
         produceState(
             initialValue =
-                if (directoryUri.isBlank()) DownloadStorage.DEFAULT_DIRECTORY_LABEL
-                else directoryUri,
-            key1 = directoryUri,
+                if (selectedDirectoryUri.isBlank()) DownloadStorage.DEFAULT_DIRECTORY_LABEL
+                else selectedDirectoryUri,
+            key1 = selectedDirectoryUri,
             key2 = downloadStorage,
         ) {
-            value = withContext(Dispatchers.IO) { downloadStorage.directoryLabel(directoryUri) }
+            value =
+                withContext(Dispatchers.IO) { downloadStorage.directoryLabel(selectedDirectoryUri) }
         }
 
     val folderPickerLauncher =
         rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocumentTree()) {
             selectedUri: Uri? ->
-            // 用户取消目录选择时保留原目录配置且不报错
-            if (selectedUri == null || saving) return@rememberLauncherForActivityResult
-            scope.launch {
-                saving = true
-                try {
-                    val savedUri =
-                        withContext(Dispatchers.IO) {
-                            downloadStorage.setDirectory(selectedUri)
-                            downloadStorage.directoryUri()
-                        }
-                    directoryUri = savedUri
-                    currentOnDirectoryChanged(savedUri)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    val reason =
-                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                    message.error {
-                        Text(stringResource(R.string.download_directory_select_failed, reason))
-                    }
-                } finally {
-                    saving = false
+            if (selectedUri != null && !saving) selectedDirectoryUri = selectedUri.toString()
+        }
+
+    fun openFolderPicker() {
+        if (saving) return
+        val initialUri =
+            selectedDirectoryUri
+                .takeIf { it.isNotBlank() }
+                ?.let { raw -> runCatching { Uri.parse(raw) }.getOrNull() }
+        runCatching { folderPickerLauncher.launch(initialUri) }
+            .onFailure { e ->
+                val reason =
+                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                message.error {
+                    Text(stringResource(R.string.download_directory_select_failed, reason))
                 }
             }
-        }
+    }
 
     AlertDialog(
         onDismissRequest = {
@@ -122,37 +118,11 @@ fun DownloadDirectoryDialog(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 OutlinedButton(
-                    onClick = {
-                        if (saving) return@OutlinedButton
-                        scope.launch {
-                            saving = true
-                            try {
-                                withContext(Dispatchers.IO) { downloadStorage.resetDirectory() }
-                                directoryUri = ""
-                                currentOnDirectoryChanged("")
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Throwable) {
-                                val reason =
-                                    e.localizedMessage?.takeIf { it.isNotBlank() }
-                                        ?: e.javaClass.simpleName
-                                message.error {
-                                    Text(
-                                        stringResource(
-                                            R.string.download_directory_select_failed,
-                                            reason,
-                                        )
-                                    )
-                                }
-                            } finally {
-                                saving = false
-                            }
-                        }
-                    },
+                    onClick = ::openFolderPicker,
                     enabled = !saving,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(text = stringResource(R.string.download_directory_default))
+                    Text(text = stringResource(R.string.download_directory_choose))
                 }
             }
         },
@@ -160,12 +130,31 @@ fun DownloadDirectoryDialog(
             TextButton(
                 onClick = {
                     if (saving) return@TextButton
-                    val initialUri =
-                        directoryUri
-                            .takeIf { it.isNotBlank() }
-                            ?.let { raw -> runCatching { Uri.parse(raw) }.getOrNull() }
-                    runCatching { folderPickerLauncher.launch(initialUri) }
-                        .onFailure { e ->
+                    if (selectedDirectoryUri == directoryUri) {
+                        currentOnDismiss()
+                        return@TextButton
+                    }
+                    scope.launch {
+                        saving = true
+                        try {
+                            val savedUri =
+                                withContext(Dispatchers.IO) {
+                                    if (selectedDirectoryUri.isBlank()) {
+                                        downloadStorage.resetDirectory()
+                                    } else {
+                                        downloadStorage.setDirectory(
+                                            Uri.parse(selectedDirectoryUri)
+                                        )
+                                    }
+                                    downloadStorage.directoryUri()
+                                }
+                            directoryUri = savedUri
+                            selectedDirectoryUri = savedUri
+                            currentOnDirectoryChanged(savedUri)
+                            currentOnDismiss()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
                             val reason =
                                 e.localizedMessage?.takeIf { it.isNotBlank() }
                                     ?: e.javaClass.simpleName
@@ -177,11 +166,14 @@ fun DownloadDirectoryDialog(
                                     )
                                 )
                             }
+                        } finally {
+                            saving = false
                         }
+                    }
                 },
                 enabled = !saving,
             ) {
-                Text(text = stringResource(R.string.download_directory_choose))
+                Text(text = stringResource(R.string.confirm))
             }
         },
         dismissButton = {

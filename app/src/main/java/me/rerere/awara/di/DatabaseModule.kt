@@ -27,7 +27,7 @@ val databaseModule = module {
 
 @Database(
     entities = [HistoryItem::class, DownloadItem::class, DownloadTask::class],
-    version = 5,
+    version = 10,
     exportSchema = true,
     autoMigrations =
         [
@@ -35,6 +35,11 @@ val databaseModule = module {
             AutoMigration(from = 2, to = 3, spec = AppDatabase.Migration2To3::class),
             AutoMigration(from = 3, to = 4),
             AutoMigration(from = 4, to = 5),
+            AutoMigration(from = 5, to = 6),
+            AutoMigration(from = 6, to = 7),
+            AutoMigration(from = 7, to = 8),
+            AutoMigration(from = 8, to = 9),
+            AutoMigration(from = 9, to = 10),
         ],
 )
 abstract class AppDatabase : RoomDatabase() {

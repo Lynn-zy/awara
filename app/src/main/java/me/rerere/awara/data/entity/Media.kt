@@ -3,6 +3,7 @@ package me.rerere.awara.data.entity
 import java.time.Instant
 import kotlinx.serialization.Serializable
 import me.rerere.awara.util.InstantSerializer
+import me.rerere.awara.util.formatDurationSeconds
 import me.rerere.awara.util.sha1
 import me.rerere.awara.util.toHex
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -47,6 +48,7 @@ data class Video(
     val file: File?,
     val fileUrl: String?,
     val thumbnail: Int,
+    val duration: Int? = null,
 ) : Media
 
 @Serializable
@@ -96,3 +98,6 @@ val Video.signature: String
             .toHex()
             .lowercase()
     }
+
+val Video.formattedDuration: String?
+    get() = (duration ?: file?.duration)?.let { formatDurationSeconds(it.toLong()) }
