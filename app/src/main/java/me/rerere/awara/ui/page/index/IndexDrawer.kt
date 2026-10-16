@@ -67,7 +67,10 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
             onClick = {
                 val user = userState.user
                 if (user != null) {
-                    router.navigate("user/${Uri.encode(user.username)}")
+                    val profileId = user.profileIdentifier
+                    if (profileId != null) {
+                        router.navigate("user/${Uri.encode(profileId)}")
+                    }
                 } else {
                     router.navigate("login")
                 }
@@ -76,8 +79,16 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
         )
         Column {
             // User nick name
+            val displayName =
+                if (userState.user == null) {
+                    "未登录"
+                } else {
+                    userState.user.name?.takeIf { it.isNotBlank() }
+                        ?: userState.user.username?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.user_unknown)
+                }
             Text(
-                text = userState.user?.name ?: "未登录",
+                text = displayName,
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.primary,
                 overflow = TextOverflow.Ellipsis,
@@ -85,9 +96,9 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
             )
 
             // ID
-            if (userState.user?.username != null) {
+            if (!userState.user?.username.isNullOrBlank()) {
                 Text(
-                    text = "@${userState.user.username}",
+                    text = "@${userState.user?.username.orEmpty()}",
                     style = MaterialTheme.typography.titleMedium,
                 )
             }

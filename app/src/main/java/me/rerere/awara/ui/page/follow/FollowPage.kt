@@ -3,6 +3,7 @@ package me.rerere.awara.ui.page.follow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
@@ -25,7 +26,11 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
+import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.ext.onlyBottom
@@ -77,21 +82,36 @@ fun FollowPage(vm: FollowVM = koinViewModel()) {
                 when (page) {
                     0 -> {
                         Column {
-                            UiStateBox(
-                                state = vm.state.followingState,
+                            SwipeRefresh(
+                                state =
+                                    rememberSwipeRefreshState(
+                                        vm.state.followingState is UiState.Loading,
+                                        isError = vm.state.followingState is UiState.Error,
+                                    ),
+                                onRefresh = {
+                                    vm.loadFollowing(refresh = true)?.await()
+                                        ?: RefreshResult.Ignored
+                                },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) {
-                                LazyVerticalStaggeredGrid(
-                                    columns = DynamicStaggeredGridCells(),
-                                    contentPadding = PaddingValues(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalItemSpacing = 8.dp,
-                                    modifier =
-                                        Modifier.matchParentSize()
-                                            .nestedScroll(appbarBehavior.nestedScrollConnection),
+                                UiStateBox(
+                                    state = vm.state.followingState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onErrorRetry = { vm.loadFollowing(force = true) },
                                 ) {
-                                    items(vm.state.followingList) { user ->
-                                        UserCard(user = user.user)
+                                    LazyVerticalStaggeredGrid(
+                                        columns = DynamicStaggeredGridCells(),
+                                        contentPadding = PaddingValues(8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalItemSpacing = 8.dp,
+                                        modifier =
+                                            Modifier.matchParentSize()
+                                                .nestedScroll(appbarBehavior.nestedScrollConnection),
+                                    ) {
+                                        items(vm.state.followingList, key = { it.user.id }) { user
+                                            ->
+                                            UserCard(user = user.user)
+                                        }
                                     }
                                 }
                             }
@@ -108,21 +128,36 @@ fun FollowPage(vm: FollowVM = koinViewModel()) {
 
                     1 -> {
                         Column {
-                            UiStateBox(
-                                state = vm.state.followerState,
+                            SwipeRefresh(
+                                state =
+                                    rememberSwipeRefreshState(
+                                        vm.state.followerState is UiState.Loading,
+                                        isError = vm.state.followerState is UiState.Error,
+                                    ),
+                                onRefresh = {
+                                    vm.loadFollower(refresh = true)?.await()
+                                        ?: RefreshResult.Ignored
+                                },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) {
-                                LazyVerticalStaggeredGrid(
-                                    columns = DynamicStaggeredGridCells(),
-                                    contentPadding = PaddingValues(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalItemSpacing = 8.dp,
-                                    modifier =
-                                        Modifier.matchParentSize()
-                                            .nestedScroll(appbarBehavior.nestedScrollConnection),
+                                UiStateBox(
+                                    state = vm.state.followerState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onErrorRetry = { vm.loadFollower(force = true) },
                                 ) {
-                                    items(vm.state.followerList) { user ->
-                                        UserCard(user = user.follower)
+                                    LazyVerticalStaggeredGrid(
+                                        columns = DynamicStaggeredGridCells(),
+                                        contentPadding = PaddingValues(8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalItemSpacing = 8.dp,
+                                        modifier =
+                                            Modifier.matchParentSize()
+                                                .nestedScroll(appbarBehavior.nestedScrollConnection),
+                                    ) {
+                                        items(vm.state.followerList, key = { it.follower.id }) {
+                                            user ->
+                                            UserCard(user = user.follower)
+                                        }
                                     }
                                 }
                             }

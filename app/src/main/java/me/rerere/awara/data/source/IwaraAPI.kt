@@ -200,6 +200,7 @@ interface IwaraAPI {
         @Query("type") type: String,
         @Query("query") query: String,
         @Query("page") page: Int,
+        @Query("sort") sort: String,
     ): Pager<Video>
 
     @GET("/search")
@@ -207,6 +208,7 @@ interface IwaraAPI {
         @Query("type") type: String,
         @Query("query") query: String,
         @Query("page") page: Int,
+        @Query("sort") sort: String,
     ): Pager<Image>
 
     @GET("/search")
@@ -214,5 +216,6 @@ interface IwaraAPI {
         @Query("type") type: String,
         @Query("query") query: String,
         @Query("page") page: Int,
+        @Query("sort") sort: String,
     ): Pager<User>
 }

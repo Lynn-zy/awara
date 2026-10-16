@@ -190,7 +190,7 @@ private fun PlayerController(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (visible && state.loading) {
+            if (state.showLoading) {
                 CircularProgressIndicator(color = Color.White)
             }
 

@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.component.iwara.param
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Sort
@@ -28,43 +29,33 @@ fun SortButton(
 ) {
     var showPopup by remember { mutableStateOf(false) }
     val currentSort = sortOptions.fastFirstOrNull { it.name == sort } ?: sortOptions.first()
-    FilledTonalButton(
-        onClick = {
-            showPopup = !showPopup
-        },
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = modifier,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            if (currentSort.icon != null) {
-                currentSort.icon.invoke()
-            } else {
-                Icon(Icons.Outlined.Sort, "Sort")
+    // 使用 Box 作为稳定锚点并隔离 DropdownMenu，避免展开时向外部 Row 插入子节点导致间距抖动
+    Box(modifier = modifier) {
+        FilledTonalButton(onClick = { showPopup = !showPopup }) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (currentSort.icon != null) {
+                    currentSort.icon.invoke()
+                } else {
+                    Icon(Icons.Outlined.Sort, "Sort")
+                }
+                currentSort.label.invoke()
             }
-            currentSort.label.invoke()
         }
-    }
-    if (showPopup) {
-        DropdownMenu(
-            expanded = showPopup,
-            onDismissRequest = { showPopup = false }
-        ) {
+        DropdownMenu(expanded = showPopup, onDismissRequest = { showPopup = false }) {
             sortOptions.fastForEach { option ->
                 DropdownMenuItem(
-                    text = {
-                        option.label.invoke()
-                    },
+                    text = { option.label.invoke() },
                     onClick = {
                         onSortChange(option.name)
                         showPopup = false
                     },
-                    leadingIcon = if (option.icon != null) {
-                        {
-                            option.icon.invoke()
-                        }
-                    } else null
+                    leadingIcon =
+                        if (option.icon != null) {
+                            { option.icon.invoke() }
+                        } else null,
                 )
             }
         }

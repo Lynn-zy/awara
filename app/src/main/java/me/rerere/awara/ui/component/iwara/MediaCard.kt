@@ -23,7 +23,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,43 +87,24 @@ fun MediaCard(modifier: Modifier = Modifier, media: Media) {
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = Color.Black.copy(alpha = 0.65f),
-                    contentColor = Color.White,
+                MediaBadge(
                     modifier = Modifier.padding(4.dp).align(Alignment.TopEnd),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                    ) {
+                    icon = {
                         Icon(
                             imageVector = Icons.Outlined.FavoriteBorder,
                             contentDescription = null,
-                            modifier = Modifier.size(12.dp),
+                            modifier = Modifier.size(11.dp),
                         )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = media.numLikes.toString(),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
+                    },
+                    text = media.numLikes.toString(),
+                )
 
                 val durationText = (media as? Video)?.formattedDuration
                 if (!durationText.isNullOrEmpty()) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = Color.Black.copy(alpha = 0.65f),
-                        contentColor = Color.White,
+                    MediaBadge(
                         modifier = Modifier.padding(4.dp).align(Alignment.BottomEnd),
-                    ) {
-                        Text(
-                            text = durationText,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                        )
-                    }
+                        text = durationText,
+                    )
                 }
             }
 
@@ -139,40 +118,56 @@ fun MediaCard(modifier: Modifier = Modifier, media: Media) {
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                val authorUsername =
-                    media.user?.username?.takeIf { it.isNotBlank() } ?: media.user?.id.orEmpty()
+                // 账号注销时禁用导航，非注销状态保留用户名回退用户ID
+                val isDeleted = media.user?.deletedAt != null
+                val authorIdentifier =
+                    if (isDeleted) null
+                    else
+                        (media.user?.username?.takeIf { it.isNotBlank() }
+                            ?: media.user?.id?.takeIf { it.isNotBlank() })
+                val canNavigate = !authorIdentifier.isNullOrEmpty()
                 val onAuthorClick: () -> Unit = {
-                    if (authorUsername.isNotEmpty()) {
-                        router.navigate("user/${Uri.encode(authorUsername)}")
+                    if (canNavigate && authorIdentifier != null) {
+                        router.navigate("user/${Uri.encode(authorIdentifier)}")
                     }
                 }
+                val authorDisplayName =
+                    media.user?.name?.takeIf { it.isNotBlank() }
+                        ?: media.user?.username?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.download_unknown_author)
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable(enabled = canNavigate) { onAuthorClick() }
+                            .padding(vertical = 2.dp),
                 ) {
-                    me.rerere.awara.ui.component.common.Avatar(
-                        model = media.user?.avatar.toAvatarUrl(),
-                        modifier =
-                            Modifier.size(28.dp).clip(CircleShape).clickable(
-                                enabled = authorUsername.isNotEmpty()
-                            ) {
-                                onAuthorClick()
-                            },
-                    )
+                    // 头像采用纯展示无额外clickable包裹，避免吞掉整行ripple
+                    val avatarPainter =
+                        rememberAsyncImagePainter(model = media.user?.avatar.toAvatarUrl())
+                    SkeletonBox(
+                        show = avatarPainter.state is AsyncImagePainter.State.Loading,
+                        modifier = Modifier.size(28.dp).clip(CircleShape),
+                    ) {
+                        Image(
+                            painter = avatarPainter,
+                            contentDescription = "avatar",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
 
                     Spacer(modifier = Modifier.width(6.dp))
 
                     Column(
-                        modifier =
-                            Modifier.weight(1f).clickable(enabled = authorUsername.isNotEmpty()) {
-                                onAuthorClick()
-                            },
+                        modifier = Modifier.weight(1f),
                         verticalArrangement =
                             androidx.compose.foundation.layout.Arrangement.spacedBy(1.dp),
                     ) {
                         Text(
-                            text = media.user?.name.orEmpty().ifEmpty { authorUsername },
+                            text = authorDisplayName,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelMedium,

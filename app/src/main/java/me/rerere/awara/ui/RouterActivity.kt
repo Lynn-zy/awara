@@ -72,6 +72,8 @@ import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.UserStoreProvider
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.ui.theme.AwaraTheme
+import me.rerere.awara.util.openUrl
+import me.rerere.awara.util.parseIwaraRoute
 import org.koin.compose.koinInject
 
 private const val TAG = "RouterActivity"
@@ -79,6 +81,7 @@ private const val TAG = "RouterActivity"
 class RouterActivity : ComponentActivity() {
     private var pendingDownloadRoute by mutableStateOf<String?>(null)
     private var requestedDownloadResourceId by mutableStateOf<String?>(null)
+    private var pendingRoute by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -87,8 +90,11 @@ class RouterActivity : ComponentActivity() {
         if (savedInstanceState != null) {
             pendingDownloadRoute = savedInstanceState.getString("pending_download_route")
             requestedDownloadResourceId = savedInstanceState.getString("download_focus_resource")
-        } else {
+            pendingRoute = savedInstanceState.getString("pending_route")
+        }
+        if (savedInstanceState == null) {
             readDownloadIntent(intent)
+            readRouteIntent(intent)
         }
         setContent {
             AwaraTheme {
@@ -120,6 +126,7 @@ class RouterActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         readDownloadIntent(intent)
+        readRouteIntent(intent)
     }
 
     private fun readDownloadIntent(intent: Intent?) {
@@ -138,9 +145,22 @@ class RouterActivity : ComponentActivity() {
             } else null
     }
 
+    private fun readRouteIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val url = intent.data?.toString() ?: return
+        val route = parseIwaraRoute(url)
+        if (route != null) {
+            pendingRoute = route
+        } else {
+            openUrl(url)
+            intent.data = null
+        }
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("pending_download_route", pendingDownloadRoute)
         outState.putString("download_focus_resource", requestedDownloadResourceId)
+        outState.putString("pending_route", pendingRoute)
         super.onSaveInstanceState(outState)
     }
 
@@ -312,6 +332,13 @@ class RouterActivity : ComponentActivity() {
                 composable("user/{id}") { UserPage() }
 
                 composable(
+                    route = "user/{username}/playlists",
+                    arguments = listOf(navArgument("username") { type = NavType.StringType }),
+                ) {
+                    PlaylistsPage()
+                }
+
+                composable(
                     route = "user/{userId}/follow",
                     arguments = listOf(navArgument("userId") { type = NavType.StringType }),
                 ) {
@@ -395,6 +422,12 @@ class RouterActivity : ComponentActivity() {
                 pendingDownloadRoute = null
                 intent?.removeExtra(DownloadNotifications.EXTRA_ROUTE)
                 intent?.removeExtra(DownloadNotifications.EXTRA_RESOURCE_ID)
+            }
+            LaunchedEffect(pendingRoute) {
+                val route = pendingRoute ?: return@LaunchedEffect
+                navController.navigate(route) { launchSingleTop = true }
+                pendingRoute = null
+                intent?.data = null
             }
         }
     }

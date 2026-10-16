@@ -11,6 +11,9 @@ import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import me.rerere.awara.data.entity.Message
 import me.rerere.awara.data.repo.UserRepo
@@ -20,6 +23,7 @@ import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.ui.component.common.UiState
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 
 /** 管理单个会话的消息、输入草稿与发送状态。 */
 class MessageVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRepo) : ViewModel() {
@@ -29,43 +33,66 @@ class MessageVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
     var state by mutableStateOf(MessageState())
         private set
 
+    private var loadJob: Job? = null
+
     init {
         loadMessages()
     }
 
-    /** 刷新当前会话；最新消息排在首位，与反向列表的底部对应。 */
-    fun loadMessages() {
-        if (state.uiState == UiState.Loading || state.sending) return
-        viewModelScope.launch {
-            state = state.copy(uiState = UiState.Loading)
-            runAPICatching { userRepo.getMessages(conversationId, currentTimestamp()) }
-                .onSuccess {
-                    state =
-                        state.copy(
-                            uiState = if (it.results.isEmpty()) UiState.Empty else UiState.Success,
-                            messages =
-                                it.results.sortedByDescending { message -> message.createdAt },
-                        )
-                }
-                .onError {
-                    state =
-                        state.copy(
-                            uiState = UiState.Error(message = { Text(stringResource(error = it)) })
-                        )
-                }
-                .onException {
-                    if (it.exception is CancellationException) throw it.exception
-                    state =
-                        state.copy(
-                            uiState =
-                                UiState.Error(
-                                    message = {
-                                        Text(it.exception.localizedMessage ?: "Unknown Error")
-                                    }
-                                )
-                        )
-                }
+    /** 加载当前会话消息；手势刷新失败恢复旧状态保留原消息列表，非手势失败发布可重试错误 */
+    fun loadMessages(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
+        if (state.sending) return null
+        if (force) {
+            loadJob?.cancel()
+        } else if (state.uiState == UiState.Loading || loadJob?.isActive == true) {
+            return null
         }
+        val oldUiState = state.uiState
+        val oldMessages = state.messages
+        val deferred =
+            viewModelScope.async {
+                state = state.copy(uiState = UiState.Loading)
+                var outcome: RefreshResult = RefreshResult.Ignored
+                runAPICatching { userRepo.getMessages(conversationId, currentTimestamp()) }
+                    .onSuccess {
+                        state =
+                            state.copy(
+                                uiState =
+                                    if (it.results.isEmpty()) UiState.Empty else UiState.Success,
+                                messages =
+                                    it.results.sortedByDescending { message -> message.createdAt },
+                            )
+                        outcome = RefreshResult.Success
+                    }
+                    .onError { error ->
+                        if (refresh) {
+                            state = state.copy(uiState = oldUiState, messages = oldMessages)
+                        } else {
+                            state =
+                                state.copy(
+                                    uiState =
+                                        UiState.Error(
+                                            message = { Text(stringResource(error = error)) }
+                                        )
+                                )
+                        }
+                        outcome = RefreshResult.Failure { Text(stringResource(error = error)) }
+                    }
+                    .onException { exception ->
+                        if (exception.exception is CancellationException) throw exception.exception
+                        val errorMsg = exception.exception.localizedMessage ?: "Unknown Error"
+                        if (refresh) {
+                            state = state.copy(uiState = oldUiState, messages = oldMessages)
+                        } else {
+                            state =
+                                state.copy(uiState = UiState.Error(message = { Text(errorMsg) }))
+                        }
+                        outcome = RefreshResult.Failure { Text(errorMsg) }
+                    }
+                outcome
+            }
+        loadJob = deferred
+        return deferred
     }
 
     /** 更新未发送的草稿，发送期间保持请求正文不变。 */

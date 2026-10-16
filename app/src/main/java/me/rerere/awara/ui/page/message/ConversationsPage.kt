@@ -28,7 +28,11 @@ import me.rerere.awara.R
 import me.rerere.awara.data.entity.Conversation
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.stores.LocalUserStore
@@ -59,23 +63,33 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
             }
         },
     ) { innerPadding ->
-        UiStateBox(
-            state = vm.state.uiState,
+        SwipeRefresh(
+            state =
+                rememberSwipeRefreshState(
+                    vm.state.uiState is UiState.Loading,
+                    isError = vm.state.uiState is UiState.Error,
+                ),
+            onRefresh = { vm.loadConversations(refresh = true)?.await() ?: RefreshResult.Ignored },
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
-            onErrorRetry = vm::loadConversations,
         ) {
-            LazyColumn(
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            UiStateBox(
+                state = vm.state.uiState,
                 modifier = Modifier.fillMaxSize(),
+                onErrorRetry = { vm.loadConversations(force = true) },
             ) {
-                items(vm.state.conversations, key = { it.id }) { conversation ->
-                    ConversationCard(
-                        conversation = conversation,
-                        onClick = {
-                            navController.navigate("conversation/${conversation.id}/messages")
-                        },
-                    )
+                LazyColumn(
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(vm.state.conversations, key = { it.id }) { conversation ->
+                        ConversationCard(
+                            conversation = conversation,
+                            onClick = {
+                                navController.navigate("conversation/${conversation.id}/messages")
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -90,12 +104,17 @@ private fun ConversationCard(conversation: Conversation, onClick: () -> Unit) {
     val participant =
         conversation.participants.firstOrNull { it.id != selfId }
             ?: conversation.participants.firstOrNull()
+    val defaultUnknownAuthor = stringResource(R.string.user_unknown)
     // 只展示对方昵称；排除自己后为空时回退到全部参与者。
     val otherNames =
         conversation.participants
             .filter { it.id != selfId }
             .ifEmpty { conversation.participants }
-            .joinToString { it.name }
+            .joinToString {
+                it.name?.takeIf { n -> n.isNotBlank() }
+                    ?: it.username?.takeIf { u -> u.isNotBlank() }
+                    ?: defaultUnknownAuthor
+            }
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(
             modifier = Modifier.padding(12.dp),

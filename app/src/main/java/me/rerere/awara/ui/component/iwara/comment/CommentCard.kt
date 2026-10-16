@@ -24,7 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.iwara.Avatar
@@ -40,93 +42,80 @@ fun CommentCard(
     modifier: Modifier = Modifier,
     comment: Comment,
     onLoadReplies: (Comment) -> Unit,
-    onReply: (Comment) -> Unit
+    onReply: (Comment) -> Unit,
 ) {
     val context = LocalContext.current
     val user = LocalUserStore.current.collectAsState()
     val router = LocalRouterProvider.current
-    Card(
-        modifier = modifier,
-    ) {
+    Card(modifier = modifier) {
         Column(
-            modifier = Modifier
-                .animateContentSize()
-                .padding(8.dp)
-                .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier.animateContentSize().padding(8.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                val profileId = comment.user?.profileIdentifier
+                val onProfileClick: () -> Unit = { profileId?.let { router.navigate("user/$it") } }
                 Avatar(
                     user = comment.user,
                     modifier = Modifier.size(32.dp),
-                    onClick = {
-                        router.navigate("user/${comment.user?.username}")
-                    }
+                    onClick = onProfileClick,
                 )
                 Column {
+                    val displayName =
+                        comment.user?.name?.takeIf { it.isNotBlank() }
+                            ?: comment.user?.username?.takeIf { it.isNotBlank() }
+                            ?: stringResource(R.string.user_unknown)
+                    // 账号注销或缺少主页标识时禁用名称点击导航
                     Text(
-                        text = comment.user?.name ?: "",
+                        text = displayName,
                         color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.clickable {
-                            router.navigate("user/${comment.user?.username}")
-                        }
+                        modifier =
+                            Modifier.clickable(enabled = profileId != null) { onProfileClick() },
                     )
-                    Text(
-                        text = ("@" + comment.user?.username),
-                        style = MaterialTheme.typography.labelSmall
-                    )
+                    if (!comment.user?.username.isNullOrBlank()) {
+                        Text(
+                            text = ("@" + comment.user?.username.orEmpty()),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
                 }
 
-                comment.user?.let {
-                    UserStatus(user = it)
-                }
+                comment.user?.let { UserStatus(user = it) }
 
                 // "Me" Tag
-                if(comment.user?.id == user.user?.id) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        tonalElevation = 4.dp
-                    ) {
+                if (comment.user?.id == user.user?.id) {
+                    Surface(shape = RoundedCornerShape(4.dp), tonalElevation = 4.dp) {
                         Text(
                             text = "我",
                             style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp)
+                            modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp),
                         )
                     }
                 }
             }
 
-            RichText(
-                text = comment.body,
-                onLinkClick = {
-                    context.openUrl(it)
-                }
-            )
+            RichText(text = comment.body, onLinkClick = { context.openUrl(it) })
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             ) {
                 Text(
                     text = comment.createdAt.toLocalDateTimeString(),
-                    style = MaterialTheme.typography.labelMedium
+                    style = MaterialTheme.typography.labelMedium,
                 )
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                AnimatedVisibility(
-                    visible = comment.numReplies > 0
-                ) {
+                AnimatedVisibility(visible = comment.numReplies > 0) {
                     TextButton(
-                        onClick = {
-                            onLoadReplies(comment)
-                        },
+                        onClick = { onLoadReplies(comment) },
                         contentPadding = PaddingValues(4.dp),
                     ) {
                         Text(
@@ -137,17 +126,12 @@ fun CommentCard(
                     }
                 }
 
-                if(comment.parent == null) {
+                if (comment.parent == null) {
                     TextButton(
-                        onClick = {
-                            onReply(comment)
-                        },
-                        contentPadding = PaddingValues(4.dp)
+                        onClick = { onReply(comment) },
+                        contentPadding = PaddingValues(4.dp),
                     ) {
-                        Text(
-                            text = "回复",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
+                        Text(text = "回复", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }

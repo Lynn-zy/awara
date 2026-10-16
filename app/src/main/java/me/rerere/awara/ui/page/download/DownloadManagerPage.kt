@@ -2,6 +2,7 @@ package me.rerere.awara.ui.page.download
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,6 +63,7 @@ import me.rerere.awara.R
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.ui.LocalMessageProvider
+import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.util.prettyFileSize
@@ -340,6 +342,7 @@ private fun DownloadTaskCard(
     onCancel: () -> Unit,
     onRetryCleanup: () -> Unit,
 ) {
+    val router = LocalRouterProvider.current
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val thumbWidth = if (maxWidth >= 600.dp) 112.dp else 96.dp
         val hasKnownTotal = task.totalBytes > 0L
@@ -389,7 +392,14 @@ private fun DownloadTaskCard(
                 else -> task.status to MaterialTheme.colorScheme.onSurfaceVariant
             }
 
-        Card(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                if (task.resourceId.isNotBlank()) {
+                    router.navigate("video/${Uri.encode(task.resourceId)}")
+                }
+            },
+        ) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

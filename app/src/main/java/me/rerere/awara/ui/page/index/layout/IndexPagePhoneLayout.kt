@@ -63,10 +63,12 @@ fun IndexPagePhoneLayout(vm: IndexVM) {
     ) {
         Scaffold(
             topBar = {
+                val appTitle =
+                    userState.user?.name?.takeIf { it.isNotBlank() }
+                        ?: userState.user?.username?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.app_name)
                 TopAppBar(
-                    title = {
-                        Text(text = userState.user?.name ?: stringResource(R.string.app_name))
-                    },
+                    title = { Text(text = appTitle) },
                     navigationIcon = {
                         Avatar(
                             user = userState.user,

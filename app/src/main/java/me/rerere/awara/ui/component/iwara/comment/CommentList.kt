@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
@@ -38,8 +39,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
 import me.rerere.awara.data.entity.CommentCreationDto
 import me.rerere.awara.ui.component.common.Spin
@@ -93,19 +96,22 @@ fun CommentList(
                 contentPadding = PaddingValues(8.dp),
             ) {
                 items(currentComment.comments) { comment ->
-                    CommentCard(
-                        comment = comment,
-                        onLoadReplies = {
-                            onPush(it.id)
-                            replyTo = it
-                        },
-                        onReply = {
-                            if (canPostReply) {
-                                repling = true
+                    // 评论内容接入SelectionContainer支持系统长按复制
+                    SelectionContainer {
+                        CommentCard(
+                            comment = comment,
+                            onLoadReplies = {
+                                onPush(it.id)
                                 replyTo = it
-                            }
-                        },
-                    )
+                            },
+                            onReply = {
+                                if (canPostReply) {
+                                    repling = true
+                                    replyTo = it
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -141,12 +147,16 @@ fun CommentList(
                             onValueChange = { body = it },
                             modifier = Modifier.weight(1f),
                             placeholder = {
+                                val targetName =
+                                    replyTo?.user?.name?.takeIf { it.isNotBlank() }
+                                        ?: replyTo?.user?.username?.takeIf { it.isNotBlank() }
+                                        ?: stringResource(R.string.user_unknown)
                                 Text(
                                     text =
                                         if (replyTo == null) {
                                             "回复"
                                         } else {
-                                            "回复 ${replyTo?.user?.name}"
+                                            "回复 $targetName"
                                         }
                                 )
                             },

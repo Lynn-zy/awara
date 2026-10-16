@@ -10,7 +10,7 @@ const val PREFERENCE_KEY_DOWNLOAD_SORT = "setting.download_sort"
 const val PREFERENCE_KEY_DOWNLOAD_SORT_ASCENDING = "setting.download_sort_ascending"
 const val PREFERENCE_KEY_DOWNLOAD_GROUP_AUTHORS = "setting.download_group_authors"
 
-private val downloadDateFormatter = DateTimeFormatter.ofPattern("yy/MM/dd", Locale.ROOT)
+private val downloadDateFormatter = DateTimeFormatter.ofPattern("yy-MM-dd", Locale.ROOT)
 
 fun formatDownloadDate(time: Instant, zoneId: ZoneId = ZoneId.systemDefault()): String =
     downloadDateFormatter.format(time.atZone(zoneId))

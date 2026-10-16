@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlaylistPlay
 import androidx.compose.material3.Card
@@ -22,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -38,8 +41,13 @@ import me.rerere.awara.data.entity.Playlist
 import me.rerere.awara.data.entity.coverUrl
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.EmptyStatus
 import me.rerere.awara.ui.component.common.Spin
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
+import me.rerere.awara.ui.component.iwara.MediaBadge
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import org.koin.androidx.compose.koinViewModel
 
@@ -71,32 +79,56 @@ fun PlaylistsPage(vm: PlaylistsVM = koinViewModel()) {
                 contentPadding = WindowInsets.navigationBars.asPaddingValues(),
             )
         },
-    ) {
-        Spin(show = vm.state.loading, modifier = Modifier.fillMaxSize().padding(it)) {
-            val error = vm.state.error
-            if (error != null) {
-                androidx.compose.foundation.layout.Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                ) {
-                    Text(text = error, color = MaterialTheme.colorScheme.error)
-                    androidx.compose.material3.TextButton(onClick = vm::reload) {
-                        Text(stringResource(R.string.retry))
+    ) { innerPadding ->
+        SwipeRefresh(
+            state = rememberSwipeRefreshState(vm.state.loading, isError = vm.state.error != null),
+            onRefresh = { vm.reload(refresh = true)?.await() ?: RefreshResult.Ignored },
+            swipeEnabled = !vm.state.loading,
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+        ) {
+            Spin(show = vm.state.loading && vm.state.list.isEmpty()) {
+                val error = vm.state.error
+                if (error != null) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text(text = error, color = MaterialTheme.colorScheme.error)
+                            TextButton(
+                                onClick = {
+                                    if (!vm.state.loading) {
+                                        vm.reload()
+                                    }
+                                }
+                            ) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
                     }
-                }
-            } else {
-                LazyVerticalStaggeredGrid(
-                    columns = DynamicStaggeredGridCells(),
-                    contentPadding = PaddingValues(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalItemSpacing = 8.dp,
-                    modifier =
-                        Modifier.matchParentSize()
-                            .nestedScroll(appbarBehavior.nestedScrollConnection),
-                ) {
-                    items(vm.state.list) {
-                        PlaylistCard(it) { router.navigate("playlist/${it.id}") }
+                } else if (vm.state.list.isEmpty() && !vm.state.loading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        EmptyStatus()
+                    }
+                } else {
+                    LazyVerticalStaggeredGrid(
+                        columns = DynamicStaggeredGridCells(),
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalItemSpacing = 8.dp,
+                        modifier =
+                            Modifier.fillMaxSize()
+                                .nestedScroll(appbarBehavior.nestedScrollConnection),
+                    ) {
+                        items(vm.state.list, key = { it.id }) {
+                            PlaylistCard(it) { router.navigate("playlist/${it.id}") }
+                        }
                     }
                 }
             }
@@ -131,6 +163,11 @@ private fun PlaylistCard(playlist: Playlist, onNavigateToPlaylistDetail: () -> U
                         modifier = Modifier.size(36.dp),
                     )
                 }
+
+                MediaBadge(
+                    modifier = Modifier.padding(4.dp).align(Alignment.TopEnd),
+                    text = stringResource(R.string.playlist_num_videos_badge, playlist.numVideos),
+                )
             }
 
             Column(
@@ -142,12 +179,6 @@ private fun PlaylistCard(playlist: Playlist, onNavigateToPlaylistDetail: () -> U
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                )
-
-                Text(
-                    text = playlist.numVideos.toString(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 )
             }
         }

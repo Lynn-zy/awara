@@ -13,7 +13,7 @@ class DownloadListTest {
     @Test
     fun downloadDateUsesTwoDigitYearAndPaddedMonthAndDay() {
         assertEquals(
-            "26/01/09",
+            "26-01-09",
             formatDownloadDate(Instant.parse("2026-01-09T12:00:00Z"), ZoneId.of("UTC")),
         )
     }
@@ -21,7 +21,7 @@ class DownloadListTest {
     @Test
     fun downloadDateUsesLocalTimeZoneAtYearBoundary() {
         assertEquals(
-            "27/01/01",
+            "27-01-01",
             formatDownloadDate(Instant.parse("2026-12-31T20:00:00Z"), ZoneId.of("Asia/Shanghai")),
         )
     }

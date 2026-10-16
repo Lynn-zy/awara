@@ -248,6 +248,11 @@ class VideoVM(
             }
         }
 
+        loadRelatedVideos()
+    }
+
+    // 独立拉取相关视频推荐
+    fun loadRelatedVideos() {
         viewModelScope.launch {
             runAPICatching { mediaRepo.getRelatedVideos(id) }
                 .onSuccess {
@@ -524,7 +529,7 @@ class VideoVM(
             try {
                 runAPICatching { mediaRepo.parseVideoUrl(currentVideo) }
                     .onSuccess { urls ->
-                        state = state.copy(urls = urls, onlineUrlsError = null)
+                        state = state.copy(urls = urls, onlineUrlsError = null, sourceError = null)
                         onSuccess?.invoke()
                     }
                     .onError { error ->

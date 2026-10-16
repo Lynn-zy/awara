@@ -46,137 +46,111 @@ fun FilterAndSort(
     onFilterAdd: (FilterValue) -> Unit,
     onFilterRemove: (FilterValue) -> Unit,
     onFilterChooseDone: () -> Unit,
-    onFilterClear: () -> Unit
+    onFilterClear: () -> Unit,
 ) {
-    var showFilter by remember {
-        mutableStateOf(false)
-    }
+    var showFilter by remember { mutableStateOf(false) }
     val pagerState = rememberPagerState()
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        if (sortOptions.isNotEmpty()) {
-            SortButton(
-                modifier = modifier,
-                sort = sort,
-                onSortChange = onSortChange,
-                sortOptions = sortOptions
-            )
-        }
-        Box {
-            FilledTonalButton(
-                onClick = {
-                    showFilter = true
-                }
-            ) {
-                Icon(Icons.Outlined.FilterList, null)
-            }
-
-            if (filterValues.isNotEmpty()) {
-                Badge(
-                    modifier = Modifier.align(Alignment.TopEnd),
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ) {
-                    Text(filterValues.size.toString())
-                }
-            }
-        }
-    }
-
-    if (showFilter) {
-        ModalBottomSheet(
-            onDismissRequest = { showFilter = false },
-            sheetState = sheetState
+    // 外层使用 Box 统一约束，防止 ModalBottomSheet 泄漏到外部 Row 参与 item 测量导致间距抖动
+    Box(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(
-                    bottom = 32.dp,
-                    start = 16.dp,
-                    end = 16.dp
-                ),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                BetterTabBar(
-                    selectedTabIndex = pagerState.currentPage
-                ) {
-                    Tab(
-                        selected = pagerState.currentPage == 0,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
-                        text = {
-                            Text(stringResource(R.string.tag))
-                        }
-                    )
-                    Tab(
-                        selected = pagerState.currentPage == 1,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
-                        text = {
-                            Text(stringResource(R.string.date))
-                        }
-                    )
-                    Tab(
-                        selected = pagerState.currentPage == 2,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(2) } },
-                        text = {
-                            Text(stringResource(R.string.rating))
-                        }
-                    )
+            if (sortOptions.isNotEmpty()) {
+                SortButton(sort = sort, onSortChange = onSortChange, sortOptions = sortOptions)
+            }
+            Box {
+                FilledTonalButton(onClick = { showFilter = true }) {
+                    Icon(Icons.Outlined.FilterList, null)
                 }
 
-                HorizontalPager(
-                    pageCount = 3,
-                    state = pagerState,
-                    modifier = Modifier.height(500.dp)
-                ) {
-                    when (it) {
-                        0 -> {
-                            TagFilter(
-                                values = filterValues,
-                                onValueAdd = onFilterAdd,
-                                onValueRemove = onFilterRemove
-                            )
-                        }
-
-                        1 -> {
-                            DateFilter(
-                                values = filterValues,
-                                onValueAdd = onFilterAdd,
-                                onValueRemove = onFilterRemove
-                            )
-                        }
-
-                        2 -> {
-                            RatingFilter(
-                                values = filterValues,
-                                onValueAdd = onFilterAdd,
-                                onValueRemove = onFilterRemove
-                            )
-                        }
+                if (filterValues.isNotEmpty()) {
+                    Badge(
+                        modifier = Modifier.align(Alignment.TopEnd),
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ) {
+                        Text(filterValues.size.toString())
                     }
                 }
+            }
+        }
 
-                Row(
-                    modifier = Modifier.align(Alignment.End),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+        if (showFilter) {
+            ModalBottomSheet(onDismissRequest = { showFilter = false }, sheetState = sheetState) {
+                Column(
+                    modifier = Modifier.padding(bottom = 32.dp, start = 16.dp, end = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    FilledTonalButton(
-                        onClick = {
-                            onFilterClear()
-                        },
-                    ) {
-                        Icon(Icons.Outlined.ClearAll, null)
+                    BetterTabBar(selectedTabIndex = pagerState.currentPage) {
+                        Tab(
+                            selected = pagerState.currentPage == 0,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                            text = { Text(stringResource(R.string.tag)) },
+                        )
+                        Tab(
+                            selected = pagerState.currentPage == 1,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                            text = { Text(stringResource(R.string.date)) },
+                        )
+                        Tab(
+                            selected = pagerState.currentPage == 2,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(2) } },
+                            text = { Text(stringResource(R.string.rating)) },
+                        )
                     }
 
-                    FilledTonalButton(
-                        onClick = {
-                            showFilter = false
-                            onFilterChooseDone()
-                        },
+                    HorizontalPager(
+                        pageCount = 3,
+                        state = pagerState,
+                        modifier = Modifier.height(500.dp),
                     ) {
-                        Text(stringResource(id = R.string.confirm))
+                        when (it) {
+                            0 -> {
+                                TagFilter(
+                                    values = filterValues,
+                                    onValueAdd = onFilterAdd,
+                                    onValueRemove = onFilterRemove,
+                                )
+                            }
+
+                            1 -> {
+                                DateFilter(
+                                    values = filterValues,
+                                    onValueAdd = onFilterAdd,
+                                    onValueRemove = onFilterRemove,
+                                )
+                            }
+
+                            2 -> {
+                                RatingFilter(
+                                    values = filterValues,
+                                    onValueAdd = onFilterAdd,
+                                    onValueRemove = onFilterRemove,
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.align(Alignment.End),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilledTonalButton(onClick = { onFilterClear() }) {
+                            Icon(Icons.Outlined.ClearAll, null)
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                showFilter = false
+                                onFilterChooseDone()
+                            }
+                        ) {
+                            Text(stringResource(id = R.string.confirm))
+                        }
                     }
                 }
             }

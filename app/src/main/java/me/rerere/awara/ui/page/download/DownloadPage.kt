@@ -796,22 +796,22 @@ fun AuthorFolderRow(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 头像统一使用包含圆形裁剪和独立涟漪的修饰符，避免无头像占位时点击冒泡
+        val avatarModifier =
+            Modifier.size(48.dp)
+                .clip(CircleShape)
+                .clickable(enabled = !group.isUnknownAuthor, onClick = onAuthorClick)
+
         if (group.avatar.isNotBlank()) {
             AsyncImage(
                 model = group.avatar,
                 contentDescription = null,
-                modifier =
-                    Modifier.size(48.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = !group.isUnknownAuthor, onClick = onAuthorClick),
+                modifier = avatarModifier,
                 contentScale = ContentScale.Crop,
             )
         } else {
             Box(
-                modifier =
-                    Modifier.size(48.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                modifier = avatarModifier.background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

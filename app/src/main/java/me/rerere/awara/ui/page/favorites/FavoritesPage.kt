@@ -1,14 +1,18 @@
 package me.rerere.awara.ui.page.favorites
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -16,6 +20,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
@@ -25,7 +30,12 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
+import me.rerere.awara.ui.component.common.EmptyStatus
+import me.rerere.awara.ui.component.common.ErrorStatus
 import me.rerere.awara.ui.component.common.Spin
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.ext.onlyBottom
@@ -77,21 +87,59 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                 when (page) {
                     0 -> {
                         Column {
-                            Spin(
-                                show = vm.state.videoLoading,
+                            SwipeRefresh(
+                                state =
+                                    rememberSwipeRefreshState(
+                                        vm.state.videoLoading,
+                                        isError = vm.state.videoError != null,
+                                    ),
+                                onRefresh = {
+                                    vm.loadVideo(refresh = true)?.await() ?: RefreshResult.Ignored
+                                },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) {
-                                LazyVerticalStaggeredGrid(
-                                    columns = DynamicStaggeredGridCells(),
-                                    contentPadding = PaddingValues(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalItemSpacing = 8.dp,
-                                    modifier =
-                                        Modifier.matchParentSize()
-                                            .nestedScroll(appbarBehavior.nestedScrollConnection),
+                                Spin(
+                                    show = vm.state.videoLoading && vm.state.videoList.isEmpty(),
+                                    modifier = Modifier.fillMaxSize(),
                                 ) {
-                                    items(vm.state.videoList) { video ->
-                                        MediaCard(media = video.video)
+                                    val error = vm.state.videoError
+                                    if (error != null) {
+                                        Box(
+                                            Modifier.fillMaxSize()
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            ErrorStatus(
+                                                message = error,
+                                                onRetry = { vm.loadVideo() },
+                                            )
+                                        }
+                                    } else if (
+                                        vm.state.videoList.isEmpty() && !vm.state.videoLoading
+                                    ) {
+                                        Box(
+                                            modifier =
+                                                Modifier.fillMaxSize()
+                                                    .verticalScroll(rememberScrollState()),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            EmptyStatus()
+                                        }
+                                    } else {
+                                        LazyVerticalStaggeredGrid(
+                                            columns = DynamicStaggeredGridCells(),
+                                            contentPadding = PaddingValues(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalItemSpacing = 8.dp,
+                                            modifier =
+                                                Modifier.matchParentSize()
+                                                    .nestedScroll(
+                                                        appbarBehavior.nestedScrollConnection
+                                                    ),
+                                        ) {
+                                            items(vm.state.videoList, key = { it.id }) { video ->
+                                                MediaCard(media = video.video)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -108,21 +156,59 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
 
                     1 -> {
                         Column {
-                            Spin(
-                                show = vm.state.imageLoading,
+                            SwipeRefresh(
+                                state =
+                                    rememberSwipeRefreshState(
+                                        vm.state.imageLoading,
+                                        isError = vm.state.imageError != null,
+                                    ),
+                                onRefresh = {
+                                    vm.loadImages(refresh = true)?.await() ?: RefreshResult.Ignored
+                                },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) {
-                                LazyVerticalStaggeredGrid(
-                                    columns = DynamicStaggeredGridCells(),
-                                    contentPadding = PaddingValues(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalItemSpacing = 8.dp,
-                                    modifier =
-                                        Modifier.matchParentSize()
-                                            .nestedScroll(appbarBehavior.nestedScrollConnection),
+                                Spin(
+                                    show = vm.state.imageLoading && vm.state.imageList.isEmpty(),
+                                    modifier = Modifier.fillMaxSize(),
                                 ) {
-                                    items(vm.state.imageList) { image ->
-                                        MediaCard(media = image.image)
+                                    val error = vm.state.imageError
+                                    if (error != null) {
+                                        Box(
+                                            Modifier.fillMaxSize()
+                                                .verticalScroll(rememberScrollState())
+                                        ) {
+                                            ErrorStatus(
+                                                message = error,
+                                                onRetry = { vm.loadImages() },
+                                            )
+                                        }
+                                    } else if (
+                                        vm.state.imageList.isEmpty() && !vm.state.imageLoading
+                                    ) {
+                                        Box(
+                                            modifier =
+                                                Modifier.fillMaxSize()
+                                                    .verticalScroll(rememberScrollState()),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            EmptyStatus()
+                                        }
+                                    } else {
+                                        LazyVerticalStaggeredGrid(
+                                            columns = DynamicStaggeredGridCells(),
+                                            contentPadding = PaddingValues(8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalItemSpacing = 8.dp,
+                                            modifier =
+                                                Modifier.matchParentSize()
+                                                    .nestedScroll(
+                                                        appbarBehavior.nestedScrollConnection
+                                                    ),
+                                        ) {
+                                            items(vm.state.imageList, key = { it.id }) { image ->
+                                                MediaCard(media = image.image)
+                                            }
+                                        }
                                     }
                                 }
                             }

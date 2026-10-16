@@ -42,6 +42,7 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
 import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.iwara.Avatar
@@ -76,14 +77,18 @@ fun MessagePage(vm: MessageVM = koinViewModel()) {
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
             SwipeRefresh(
-                state = rememberSwipeRefreshState(vm.state.uiState == UiState.Loading),
-                onRefresh = vm::loadMessages,
+                state =
+                    rememberSwipeRefreshState(
+                        vm.state.uiState == UiState.Loading,
+                        isError = vm.state.uiState is UiState.Error,
+                    ),
+                onRefresh = { vm.loadMessages(refresh = true)?.await() ?: RefreshResult.Ignored },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
                 UiStateBox(
                     state = vm.state.uiState,
                     modifier = Modifier.fillMaxSize(),
-                    onErrorRetry = vm::loadMessages,
+                    onErrorRetry = { vm.loadMessages(force = true) },
                 ) {
                     // 按时间升序按日期和发送者聚合，并逆序供反向列表渲染。
                     val timelineItems =
@@ -227,16 +232,14 @@ private fun DateSeparatorRow(date: String) {
 private fun MessageGroupRow(messages: List<Message>, self: Boolean) {
     val router = LocalRouterProvider.current
     val user = messages.first().user
+    val profileId = user.profileIdentifier
+    val onProfileClick: () -> Unit = { profileId?.let { router.navigate("user/$it") } }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         horizontalArrangement = if (self) Arrangement.End else Arrangement.Start,
     ) {
         if (!self) {
-            Avatar(
-                user = user,
-                modifier = Modifier.size(36.dp),
-                onClick = { router.navigate("user/${user.username}") },
-            )
+            Avatar(user = user, modifier = Modifier.size(36.dp), onClick = onProfileClick)
             Spacer(modifier = Modifier.width(8.dp))
         }
 
@@ -245,8 +248,12 @@ private fun MessageGroupRow(messages: List<Message>, self: Boolean) {
             horizontalAlignment = if (self) Alignment.End else Alignment.Start,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            val displayName =
+                user.name?.takeIf { it.isNotBlank() }
+                    ?: user.username?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.user_unknown)
             Text(
-                text = user.name,
+                text = displayName,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier =
@@ -262,11 +269,7 @@ private fun MessageGroupRow(messages: List<Message>, self: Boolean) {
 
         if (self) {
             Spacer(modifier = Modifier.width(8.dp))
-            Avatar(
-                user = user,
-                modifier = Modifier.size(36.dp),
-                onClick = { router.navigate("user/${user.username}") },
-            )
+            Avatar(user = user, modifier = Modifier.size(36.dp), onClick = onProfileClick)
         }
     }
 }

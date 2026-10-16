@@ -6,7 +6,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Cast
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.material.icons.outlined.Fullscreen
@@ -242,11 +241,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     modifier = Modifier.fillMaxSize(),
                     navigationIcon = { BackButton() },
                     actions = {
-                        if (!fullscreen && !vm.state.isLocalPlayback) {
-                            IconButton(onClick = { dlnaCastSheetShow = !dlnaCastSheetShow }) {
-                                Icon(Icons.Outlined.Cast, null)
-                            }
-                        }
+                        // 保留DLNA投屏状态与选择逻辑，顶部投屏按钮按需求隐藏展示
                         if (fullscreen) {
                             IconButton(
                                 onClick = {

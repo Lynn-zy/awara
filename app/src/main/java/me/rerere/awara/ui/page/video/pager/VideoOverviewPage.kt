@@ -6,18 +6,15 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,7 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
@@ -69,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import coil.compose.AsyncImage
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -113,6 +111,7 @@ fun VideoOverviewPage(vm: VideoVM) {
             }
         }
     } else {
+        // 视频概览区域保留初始加载与网格展示，移除下拉刷新容器与刷新状态
         Spin(show = state.loading, modifier = Modifier.fillMaxSize()) {
             LazyVerticalStaggeredGrid(
                 modifier = Modifier.fillMaxSize(),
@@ -264,6 +263,10 @@ fun VideoOverviewPage(vm: VideoVM) {
                                 state.userMoreVideosError != null ||
                                 authorVideos.isNotEmpty())
                     ) {
+                        // 加大作者其他视频区域与上方内容的间距
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
                         item(span = StaggeredGridItemSpan.FullLine) {
                             Text(
                                 text = stringResource(R.string.video_author_more),
@@ -309,6 +312,10 @@ fun VideoOverviewPage(vm: VideoVM) {
                     }
 
                     if (relatedVideos.isNotEmpty()) {
+                        // 加大类似视频区域与上方内容的间距
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
                         item(span = StaggeredGridItemSpan.FullLine) {
                             Text(
                                 text = stringResource(R.string.video_related),
@@ -340,6 +347,7 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
     val scope = rememberCoroutineScope()
     val downloadStorage: DownloadStorage = koinInject()
     val downloadManager: DownloadManager = koinInject()
+    val hasBody = !video.body.isNullOrBlank()
     Card(modifier = Modifier.animateContentSize().fillMaxWidth()) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -347,34 +355,47 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
         ) {
             Column {
                 Row(
-                    modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 视频标题由16sp微调至18sp并配比合理行高，完整常驻不截断
                     Text(
                         text = video.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        maxLines = if (expand) Int.MAX_VALUE else 1,
+                        style =
+                            MaterialTheme.typography.titleMedium.copy(
+                                fontSize = 18.sp,
+                                lineHeight = 24.sp,
+                            ),
                         modifier = Modifier.weight(1f),
                     )
-                    Icon(
-                        imageVector =
-                            if (expand) Icons.Outlined.KeyboardArrowUp
-                            else Icons.Outlined.KeyboardArrowDown,
-                        contentDescription = "More",
-                        modifier =
-                            Modifier.clip(CircleShape).fillMaxHeight().aspectRatio(1f).clickable {
-                                setExpand(!expand)
-                            },
-                    )
+                    if (hasBody) {
+                        IconButton(onClick = { setExpand(!expand) }) {
+                            Icon(
+                                imageVector =
+                                    if (expand) Icons.Outlined.KeyboardArrowUp
+                                    else Icons.Outlined.KeyboardArrowDown,
+                                contentDescription =
+                                    stringResource(
+                                        if (expand) R.string.hide_description
+                                        else R.string.show_description
+                                    ),
+                            )
+                        }
+                    }
                 }
 
-                if (!video.body.isNullOrBlank() && expand) {
-                    RichText(
-                        text = video.body.trim(),
-                        style = MaterialTheme.typography.bodySmall,
-                        overflow = TextOverflow.Ellipsis,
-                        onLinkClick = { context.openUrl(it) },
-                    )
+                if (hasBody && expand) {
+                    // 展开简介前增大与标题的垂直间距
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SelectionContainer {
+                        RichText(
+                            text = video.body.orEmpty().trim(),
+                            style = MaterialTheme.typography.bodySmall,
+                            overflow = TextOverflow.Ellipsis,
+                            onLinkClick = { context.openUrl(it) },
+                        )
+                    }
                 }
             }
 
@@ -732,9 +753,14 @@ private fun LocalDownloadSummary(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                    // 本地离线记录标题与主标题保持相同角色字体层级
                     Text(
                         text = item.title,
-                        style = MaterialTheme.typography.titleMedium,
+                        style =
+                            MaterialTheme.typography.titleMedium.copy(
+                                fontSize = 18.sp,
+                                lineHeight = 24.sp,
+                            ),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )

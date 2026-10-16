@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
@@ -44,7 +47,11 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
+import me.rerere.awara.ui.component.common.ErrorStatus
 import me.rerere.awara.ui.component.common.Spin
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.common.zoomable.rememberZoomState
 import me.rerere.awara.ui.component.common.zoomable.zoomable
 import me.rerere.awara.ui.component.iwara.AuthorCard
@@ -62,63 +69,47 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        text = state.state?.title ?: "Image",
-                        maxLines = 1
-                    )
-                },
-                navigationIcon = {
-                    BackButton()
-                }
+                title = { Text(text = state.state?.title ?: "Image", maxLines = 1) },
+                navigationIcon = { BackButton() },
             )
         },
         bottomBar = {
             Surface {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier
-                        .navigationBarsPadding()
-                        .animateContentSize()
-                        .padding(16.dp),
+                    modifier = Modifier.navigationBarsPadding().animateContentSize().padding(16.dp),
                 ) {
                     Card {
-                        Column(
-                            modifier = Modifier.padding(8.dp)
-                        ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
                             var expaned by remember { mutableStateOf(false) }
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(
                                     text = state.state?.title ?: "",
                                     style = MaterialTheme.typography.titleLarge,
                                     maxLines = if (expaned) Int.MAX_VALUE else 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f),
                                 )
                                 Icon(
-                                    if (expaned) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                                    if (expaned) Icons.Outlined.KeyboardArrowUp
+                                    else Icons.Outlined.KeyboardArrowDown,
                                     contentDescription = null,
-                                    modifier = Modifier
-                                        .clickable {
-                                            expaned = !expaned
-                                        }
-                                        .padding(4.dp)
+                                    modifier =
+                                        Modifier.clickable { expaned = !expaned }.padding(4.dp),
                                 )
                             }
 
                             if (expaned) {
-                                RichText(
-                                    text = state.state?.body ?: "",
-                                    overflow = TextOverflow.Ellipsis,
-                                    onLinkClick = {
-                                        context.openUrl(it)
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth(),
-                                    maxLines = if (expaned) Int.MAX_VALUE else 2,
-                                )
+                                // 图片简介接入SelectionContainer支持系统长按复制
+                                SelectionContainer {
+                                    RichText(
+                                        text = state.state?.body ?: "",
+                                        overflow = TextOverflow.Ellipsis,
+                                        onLinkClick = { context.openUrl(it) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        maxLines = if (expaned) Int.MAX_VALUE else 2,
+                                    )
+                                }
                             }
 
                             Row(
@@ -127,25 +118,33 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
                             ) {
                                 Text(
                                     text = state.state?.createdAt?.toLocalDateTimeString() ?: "",
-                                    style = MaterialTheme.typography.labelMedium
+                                    style = MaterialTheme.typography.labelMedium,
                                 )
 
                                 Spacer(modifier = Modifier.weight(1f))
 
                                 Text(
-                                    text = stringResource(R.string.num_likes, state.state?.numLikes ?: 0),
-                                    style = MaterialTheme.typography.labelMedium
+                                    text =
+                                        stringResource(
+                                            R.string.num_likes,
+                                            state.state?.numLikes ?: 0,
+                                        ),
+                                    style = MaterialTheme.typography.labelMedium,
                                 )
 
                                 Text(
-                                    text = stringResource(R.string.num_views, state.state?.numViews ?: 0),
-                                    style = MaterialTheme.typography.labelMedium
+                                    text =
+                                        stringResource(
+                                            R.string.num_views,
+                                            state.state?.numViews ?: 0,
+                                        ),
+                                    style = MaterialTheme.typography.labelMedium,
                                 )
                             }
 
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
                                 IconButton(
                                     onClick = {
@@ -159,13 +158,16 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
 
                                 Button(
                                     onClick = { vm.likeOrDislike() },
-                                    type = if (state.state?.liked == true) ButtonType.Outlined else ButtonType.Default,
-                                    loading = state.likeLoading
+                                    type =
+                                        if (state.state?.liked == true) ButtonType.Outlined
+                                        else ButtonType.Default,
+                                    loading = state.likeLoading,
                                 ) {
                                     Text(
-                                        text = if (state.state?.liked == true) stringResource(R.string.dislike) else stringResource(
-                                            R.string.like
-                                        )
+                                        text =
+                                            if (state.state?.liked == true)
+                                                stringResource(R.string.dislike)
+                                            else stringResource(R.string.like)
                                     )
                                 }
                             }
@@ -175,39 +177,49 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
                     AuthorCard(user = state.state?.user, onClickSub = { vm.followOrUnfollow() })
                 }
             }
-        }
+        },
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(it)
+        // 图像详情展示区域支持下拉刷新，空状态或加载异常时允许滚动拉取
+        SwipeRefresh(
+            state =
+                rememberSwipeRefreshState(
+                    isRefreshing = state.loading,
+                    isError = state.error != null,
+                ),
+            onRefresh = { vm.load(refresh = true)?.await() ?: RefreshResult.Ignored },
+            modifier = Modifier.fillMaxSize().padding(it),
         ) {
+            val fileCount = state.state?.files?.size ?: 0
             Spin(
-                modifier = Modifier
-                    .background(Color.Black)
-                    .fillMaxSize(),
-                show = state.loading
+                modifier =
+                    Modifier.background(Color.Black).fillMaxSize().let { mod ->
+                        if (fileCount == 0) mod.verticalScroll(rememberScrollState()) else mod
+                    },
+                show = state.loading && state.state == null,
             ) {
                 val pagerState = rememberPagerState()
-                HorizontalPager(
-                    pageCount = state.state?.files?.size ?: 0,
-                    state = pagerState
-                ) {
+                HorizontalPager(pageCount = fileCount, state = pagerState) {
                     AsyncImage(
                         model = state.state!!.files[it].toImageLarge(),
                         contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .zoomable(rememberZoomState())
+                        modifier = Modifier.fillMaxSize().zoomable(rememberZoomState()),
                     )
                 }
 
-                Text(
-                    text = "${pagerState.currentPage + 1}/${state.state?.files?.size}",
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter),
-                    color = Color.White
-                )
+                if (fileCount > 0) {
+                    Text(
+                        text = "${pagerState.currentPage + 1}/$fileCount",
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        color = Color.White,
+                    )
+                }
+                state.error?.let { error ->
+                    ErrorStatus(
+                        message = error,
+                        onRetry = { vm.load() },
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
             }
         }
     }

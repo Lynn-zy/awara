@@ -29,7 +29,13 @@
     <string name="history">History</string>
     <string name="playlist">Playlist</string>
     <string name="playlist_num_videos">Total %d videos</string>
+    <string name="playlist_num_videos_badge">%d个</string>
+    <string name="show_description">展开简介</string>
+    <string name="hide_description">收起简介</string>
+    <string name="link_open_unavailable">未找到可打开此链接的应用</string>
     <string name="search">Search</string>
+    <string name="search_sort_relevance">相关性</string>
+    <string name="search_sort_date">最新</string>
     <string name="favorites">Favorites</string>
     <string name="follow">Follow</string>
     <string name="unfollow">Unfollow</string>
@@ -231,4 +237,7 @@
     <string name="time_days_ago">%1$d days ago</string>
     <string name="user_followed">Followed</string>
     <string name="user_follow">Follow</string>
+    <string name="user_unknown">未知用户</string>
+    <string name="refresh_failed">刷新失败，请重试</string>
+    <string name="refresh_succeeded">刷新成功</string>
 </resources>

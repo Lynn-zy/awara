@@ -40,55 +40,8 @@ fun rememberPlayerState(
     val context = LocalContext.current
     val state by remember { mutableStateOf(PlayerState(builder(context))) }
     DisposableEffect(context) {
-        val playbackListener =
-            object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    super.onPlaybackStateChanged(playbackState)
-                    state.state =
-                        when (playbackState) {
-                            Player.STATE_IDLE -> PlayerState.State.IDLE
-                            Player.STATE_BUFFERING -> PlayerState.State.BUFFERING
-                            Player.STATE_READY -> PlayerState.State.READY
-                            Player.STATE_ENDED -> PlayerState.State.ENDED
-                            else ->
-                                PlayerState.State.IDLE.also {
-                                    Log.w(
-                                        TAG,
-                                        "onPlaybackStateChanged: unknown state $playbackState",
-                                    )
-                                }
-                        }
-                    if (playbackState == Player.STATE_READY) {
-                        state.duration = state.player.duration
-                        state.currentMediaItem = state.player.currentMediaItem
-                    }
-                }
-
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    super.onIsPlayingChanged(isPlaying)
-                    state.playing = isPlaying
-                    state.duration = state.player.duration
-                }
-
-                override fun onIsLoadingChanged(isLoading: Boolean) {
-                    super.onIsLoadingChanged(isLoading)
-                    state.loading = isLoading
-                }
-
-                override fun onVideoSizeChanged(videoSize: VideoSize) {
-                    super.onVideoSizeChanged(videoSize)
-                    state.videoSize = PlayerState.VideoSize.from(videoSize)
-                    state.duration = state.player.duration
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    super.onPlayerError(error)
-                    state.loading = false
-                    Log.e(TAG, "onPlayerError: ${error.errorCodeName} (${error.errorCode})", error)
-                }
-            }
-        state.player.addListener(playbackListener)
         state.playing = state.player.isPlaying
+        state.isLoading = state.player.isLoading
         state.state =
             when (state.player.playbackState) {
                 Player.STATE_IDLE -> PlayerState.State.IDLE
@@ -108,7 +61,7 @@ fun rememberPlayerState(
         Log.i(TAG, "rememberPlayerState: Init")
         onDispose {
             state.player.run {
-                removeListener(playbackListener)
+                removeListener(state.playbackListener)
                 release()
             }
             Log.i(TAG, "rememberPlayerState: Dispose")
@@ -128,7 +81,58 @@ class PlayerState(
 ) {
     var playing by mutableStateOf(false)
     var state by mutableStateOf(State.IDLE)
-    var loading by mutableStateOf(false)
+    var isLoading by mutableStateOf(false)
+
+    val showLoading: Boolean
+        get() = !playing && (state == State.BUFFERING || isLoading)
+
+    val playbackListener: Player.Listener =
+        object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                super.onPlaybackStateChanged(playbackState)
+                this@PlayerState.state =
+                    when (playbackState) {
+                        Player.STATE_IDLE -> State.IDLE
+                        Player.STATE_BUFFERING -> State.BUFFERING
+                        Player.STATE_READY -> State.READY
+                        Player.STATE_ENDED -> State.ENDED
+                        else -> State.IDLE
+                    }
+                if (playbackState == Player.STATE_READY) {
+                    duration = player.duration
+                    currentMediaItem = player.currentMediaItem
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                super.onIsPlayingChanged(isPlaying)
+                this@PlayerState.playing = isPlaying
+                duration = player.duration
+            }
+
+            override fun onIsLoadingChanged(loading: Boolean) {
+                super.onIsLoadingChanged(loading)
+                this@PlayerState.isLoading = loading
+            }
+
+            override fun onVideoSizeChanged(
+                videoSize: com.google.android.exoplayer2.video.VideoSize
+            ) {
+                super.onVideoSizeChanged(videoSize)
+                this@PlayerState.videoSize = VideoSize.from(videoSize)
+                duration = player.duration
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                super.onPlayerError(error)
+                this@PlayerState.isLoading = false
+                Log.e(TAG, "onPlayerError: ${error.errorCodeName} (${error.errorCode})", error)
+            }
+        }
+
+    init {
+        player.addListener(playbackListener)
+    }
 
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
     var duration by mutableStateOf(0L)

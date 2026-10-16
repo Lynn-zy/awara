@@ -13,39 +13,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import me.rerere.awara.ui.component.common.pullrefresh.LocalRefreshContainerRefreshing
 
 @Composable
-fun Spin(
-    modifier: Modifier = Modifier,
-    show: Boolean,
-    content: @Composable BoxScope.() -> Unit
-) {
+fun Spin(modifier: Modifier = Modifier, show: Boolean, content: @Composable BoxScope.() -> Unit) {
+    val shouldShow = show && !LocalRefreshContainerRefreshing.current
     Box(
         modifier = modifier,
         content = {
             content()
             AnimatedVisibility(
-                visible = show,
+                visible = shouldShow,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.matchParentSize(),
             ) {
                 Box(
-                    modifier = Modifier
-                        .clip(MaterialTheme.shapes.small)
-                        .background(
-                            color = MaterialTheme.colorScheme.background.copy(
-                                alpha = 0.15f
+                    modifier =
+                        Modifier.clip(MaterialTheme.shapes.small)
+                            .background(
+                                color = MaterialTheme.colorScheme.background.copy(alpha = 0.15f)
                             )
-                        )
-                        .fillMaxSize()
+                            .fillMaxSize()
                 ) {
                     CircularProgressIndicator(
-                        modifier = Modifier
-                            .align(Alignment.Center)
+                        modifier = Modifier.align(Alignment.Center).testTag("spin_loading")
                     )
                 }
             }
-        }
+        },
     )
 }

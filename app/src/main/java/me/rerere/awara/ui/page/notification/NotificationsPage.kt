@@ -30,7 +30,11 @@ import me.rerere.awara.R
 import me.rerere.awara.data.entity.Notification
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.util.toLocalDateTimeString
 import org.koin.androidx.compose.koinViewModel
 
@@ -45,17 +49,27 @@ fun NotificationsPage(vm: NotificationsVM = koinViewModel()) {
             )
         }
     ) { padding ->
-        UiStateBox(
-            state = vm.state.uiState,
+        SwipeRefresh(
+            state =
+                rememberSwipeRefreshState(
+                    vm.state.uiState is UiState.Loading,
+                    isError = vm.state.uiState is UiState.Error,
+                ),
+            onRefresh = { vm.load(refresh = true)?.await() ?: RefreshResult.Ignored },
             modifier = Modifier.padding(padding).fillMaxSize(),
-            onErrorRetry = vm::load,
         ) {
-            LazyColumn(
+            UiStateBox(
+                state = vm.state.uiState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                onErrorRetry = { vm.load(force = true) },
             ) {
-                items(vm.state.data, key = { it.id }) { NotificationCard(it) }
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(vm.state.data, key = { it.id }) { NotificationCard(it) }
+                }
             }
         }
     }
@@ -68,21 +82,17 @@ private fun NotificationCard(notification: Notification) {
     val destination =
         when (notification.type) {
             "newReply" -> notification.video?.id?.let { "video/$it" }
-            "newComment" -> notification.profile?.username?.let { "user/$it" }
+            "newComment" -> notification.profile?.profileIdentifier?.let { "user/$it" }
             else -> null
         }
+    val authorName =
+        notification.comment?.user?.name?.takeIf { it.isNotBlank() }
+            ?: notification.comment?.user?.username?.takeIf { it.isNotBlank() }
+            ?: stringResource(R.string.user_unknown)
     val headline =
         when (notification.type) {
-            "newReply" ->
-                stringResource(
-                    R.string.notification_new_reply,
-                    notification.comment?.user?.name.orEmpty(),
-                )
-            "newComment" ->
-                stringResource(
-                    R.string.notification_new_comment,
-                    notification.comment?.user?.name.orEmpty(),
-                )
+            "newReply" -> stringResource(R.string.notification_new_reply, authorName)
+            "newComment" -> stringResource(R.string.notification_new_comment, authorName)
             else -> stringResource(R.string.notification_unsupported, notification.type)
         }
     val icon =

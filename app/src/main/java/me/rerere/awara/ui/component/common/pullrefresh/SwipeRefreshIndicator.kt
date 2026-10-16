@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.contentColorFor
@@ -27,8 +30,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import me.rerere.awara.R
 
 /**
  * A class to encapsulate details of different indicator sizes.
@@ -48,27 +54,25 @@ private data class SwipeRefreshIndicatorSizes(
     val arrowHeight: Dp,
 )
 
-/**
- * The default/normal size values for [SwipeRefreshIndicator].
- */
-private val DefaultSizes = SwipeRefreshIndicatorSizes(
-    size = 40.dp,
-    arcRadius = 7.5.dp,
-    strokeWidth = 2.5.dp,
-    arrowWidth = 10.dp,
-    arrowHeight = 5.dp,
-)
+/** The default/normal size values for [SwipeRefreshIndicator]. */
+private val DefaultSizes =
+    SwipeRefreshIndicatorSizes(
+        size = 40.dp,
+        arcRadius = 7.5.dp,
+        strokeWidth = 2.5.dp,
+        arrowWidth = 10.dp,
+        arrowHeight = 5.dp,
+    )
 
-/**
- * The 'large' size values for [SwipeRefreshIndicator].
- */
-private val LargeSizes = SwipeRefreshIndicatorSizes(
-    size = 56.dp,
-    arcRadius = 11.dp,
-    strokeWidth = 3.dp,
-    arrowWidth = 12.dp,
-    arrowHeight = 6.dp,
-)
+/** The 'large' size values for [SwipeRefreshIndicator]. */
+private val LargeSizes =
+    SwipeRefreshIndicatorSizes(
+        size = 56.dp,
+        arcRadius = 11.dp,
+        strokeWidth = 3.dp,
+        arrowWidth = 12.dp,
+        arrowHeight = 6.dp,
+    )
 
 /**
  * Indicator composable which is typically used in conjunction with [SwipeRefresh].
@@ -113,11 +117,12 @@ fun SwipeRefreshIndicator(
     val indicatorHeight = with(LocalDensity.current) { sizes.size.roundToPx() }
     val refreshingOffsetPx = with(LocalDensity.current) { refreshingOffset.toPx() }
 
-    val slingshot = rememberUpdatedSlingshot(
-        offsetY = state.indicatorOffset,
-        maxOffsetY = indicatorRefreshTrigger,
-        height = indicatorHeight,
-    )
+    val slingshot =
+        rememberUpdatedSlingshot(
+            offsetY = state.indicatorOffset,
+            maxOffsetY = indicatorRefreshTrigger,
+            height = indicatorHeight,
+        )
 
     var offset by remember { mutableStateOf(0f) }
 
@@ -126,60 +131,61 @@ fun SwipeRefreshIndicator(
         offset = slingshot.offset.toFloat()
     } else {
         // If there's no swipe currently in progress, animate to the correct resting position
-        LaunchedEffect(state.isRefreshing) {
+        LaunchedEffect(state.isIndicatorPinned) {
             animate(
                 initialValue = offset,
-                targetValue = when {
-                    state.isRefreshing -> indicatorHeight + refreshingOffsetPx
-                    else -> 0f
-                }
+                targetValue =
+                    when {
+                        state.isIndicatorPinned -> indicatorHeight + refreshingOffsetPx
+                        else -> 0f
+                    },
             ) { value, _ ->
                 offset = value
             }
         }
     }
 
-    val adjustedElevation = when {
-        state.isRefreshing -> elevation
-        offset > 0.5f -> elevation
-        else -> 0.dp
-    }
+    val adjustedElevation =
+        when {
+            state.isIndicatorPinned -> elevation
+            offset > 0.5f -> elevation
+            else -> 0.dp
+        }
 
     Surface(
-        modifier = modifier
-            .size(size = sizes.size)
-            .graphicsLayer {
+        modifier =
+            modifier.size(size = sizes.size).testTag("swipe_refresh_indicator").graphicsLayer {
                 // Translate the indicator according to the slingshot
                 translationY = offset - indicatorHeight
 
-                val scaleFraction = if (scale && !state.isRefreshing) {
-                    val progress = offset / indicatorRefreshTrigger.coerceAtLeast(1f)
+                val scaleFraction =
+                    if (scale && !state.isIndicatorPinned) {
+                        val progress = offset / indicatorRefreshTrigger.coerceAtLeast(1f)
 
-                    // We use LinearOutSlowInEasing to speed up the scale in
-                    LinearOutSlowInEasing
-                        .transform(progress)
-                        .coerceIn(0f, 1f)
-                } else 1f
+                        // We use LinearOutSlowInEasing to speed up the scale in
+                        LinearOutSlowInEasing.transform(progress).coerceIn(0f, 1f)
+                    } else 1f
 
                 scaleX = scaleFraction
                 scaleY = scaleFraction
             },
         shape = shape,
         color = backgroundColor,
-        tonalElevation = adjustedElevation
+        tonalElevation = adjustedElevation,
     ) {
         val painter = remember { CircularProgressPainter() }
         painter.arcRadius = sizes.arcRadius
         painter.strokeWidth = sizes.strokeWidth
         painter.arrowWidth = sizes.arrowWidth
         painter.arrowHeight = sizes.arrowHeight
-        painter.arrowEnabled = arrowEnabled && !state.isRefreshing
+        painter.arrowEnabled = arrowEnabled && !state.isIndicatorPinned
         painter.color = contentColor
-        val alpha = if (fade) {
-            (state.indicatorOffset / indicatorRefreshTrigger).coerceIn(0f, 1f)
-        } else {
-            1f
-        }
+        val alpha =
+            if (fade) {
+                (state.indicatorOffset / indicatorRefreshTrigger).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
         painter.alpha = alpha
 
         painter.startTrim = slingshot.startTrim
@@ -190,15 +196,19 @@ fun SwipeRefreshIndicator(
         // This shows either an Image with CircularProgressPainter or a CircularProgressIndicator,
         // depending on refresh state
         Crossfade(
-            targetState = state.isRefreshing,
+            targetState = if (state.isIndicatorRunning) RefreshPhase.Refreshing else state.phase,
             animationSpec = tween(durationMillis = CrossfadeDurationMs),
-            label = "Refreshing"
-        ) { refreshing ->
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                if (refreshing) {
+            label = "Refreshing",
+        ) { phase ->
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (phase == RefreshPhase.Success) {
+                    Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = stringResource(R.string.refresh_succeeded),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp).testTag("swipe_refresh_success"),
+                    )
+                } else if (phase == RefreshPhase.Refreshing) {
                     val circleSize = (sizes.arcRadius + sizes.strokeWidth) * 2
                     CircularProgressIndicator(
                         color = contentColor,
@@ -206,10 +216,7 @@ fun SwipeRefreshIndicator(
                         modifier = Modifier.size(circleSize),
                     )
                 } else {
-                    Image(
-                        painter = painter,
-                        contentDescription = "Refreshing"
-                    )
+                    Image(painter = painter, contentDescription = "Refreshing")
                 }
             }
         }

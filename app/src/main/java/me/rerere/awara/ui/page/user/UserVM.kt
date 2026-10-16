@@ -44,6 +44,9 @@ class UserVM(
 
     // 页面事件流，通知界面操作结果（评论发布成功/失败、会话创建成功/失败等）
     val events = MutableSharedFlow<UserVMEvent>()
+    private var profileJob: Job? = null
+    private var videoLoadJob: Job? = null
+    private var imageLoadJob: Job? = null
     // 层级或页码改变时取消旧请求，避免旧响应覆盖新栈顶。
     private var commentLoadJob: Job? = null
 
@@ -51,23 +54,46 @@ class UserVM(
         loadUser()
     }
 
-    private fun loadUser() {
-        viewModelScope.launch {
-            state = state.copy(loading = true, friendLoading = true)
-            runAPICatching { state = state.copy(profile = userRepo.getProfile(id)) }
-                .onSuccess {
-                    loadVideoList()
-                    loadImageList()
-                    loadFriendsStatus()
-                    // 用户资料加载成功后加载主页留言列表
-                    loadComments()
+    fun loadUser() {
+        if (state.loading) return
+        profileJob?.cancel()
+        profileJob =
+            viewModelScope.launch {
+                state = state.copy(loading = true, friendLoading = true, profileError = null)
+                try {
+                    runAPICatching { userRepo.getProfile(id) }
+                        .onSuccess { profile ->
+                            state = state.copy(profile = profile, profileError = null)
+                            loadFriendsStatus()
+                            loadVideoList()
+                            loadImageList()
+                            // 用户资料加载成功后加载主页留言列表
+                            loadComments()
+                        }
+                        .onError { error ->
+                            state = state.copy(profileError = "加载失败")
+                            events.emit(UserVMEvent.ProfileLoadFailed(error))
+                        }
+                        .onException { exception ->
+                            if (exception.exception is CancellationException)
+                                throw exception.exception
+                            state =
+                                state.copy(
+                                    profileError = exception.exception.localizedMessage ?: "加载失败"
+                                )
+                            events.emit(UserVMEvent.ProfileLoadException(exception.exception))
+                        }
+                } finally {
+                    if (isActive) {
+                        state = state.copy(loading = false, friendLoading = false)
+                    }
                 }
-            state = state.copy(loading = false, friendLoading = false)
-        }
+            }
     }
 
     private suspend fun loadFriendsStatus() {
-        runAPICatching { userRepo.getFriendsStatus(state.profile?.user?.id ?: "") }
+        val targetUserId = state.profile?.user?.id ?: return
+        runAPICatching { userRepo.getFriendsStatus(targetUserId) }
             .onSuccess { state = state.copy(friendStatus = FriendStatus.parse(it.status)) }
     }
 
@@ -75,14 +101,18 @@ class UserVM(
         if (state.followLoading) {
             return
         }
+        val targetUserId = state.profile?.user?.id
+        if (targetUserId.isNullOrEmpty()) {
+            return
+        }
 
         viewModelScope.launch {
             state = state.copy(followLoading = true)
             runAPICatching {
                 if (state.profile?.user?.following == true) {
-                    userRepo.unfollowUser(state.profile?.user?.id ?: "")
+                    userRepo.unfollowUser(targetUserId)
                 } else {
-                    userRepo.followUser(state.profile?.user?.id ?: "")
+                    userRepo.followUser(targetUserId)
                 }
                 state = state.copy(profile = userRepo.getProfile(id))
             }
@@ -92,60 +122,108 @@ class UserVM(
 
     fun changeVideoPage(page: Int) {
         state = state.copy(videoPage = page)
-        loadVideoList()
+        loadVideoList(force = true)
     }
 
-    fun loadVideoList() {
-        viewModelScope.launch {
-            state = state.copy(videoLoading = true)
-            runAPICatching {
-                val result =
-                    mediaRepo.getVideoList(
-                        mapOf(
-                            "page" to (state.videoPage - 1).toString(),
-                            "sort" to "date",
-                            "user" to (state.profile?.user?.id ?: ""),
-                            "limit" to "32",
-                        )
-                    )
-                state = state.copy(videoCount = result.count, videoList = result.results)
-            }
-            state = state.copy(videoLoading = false)
+    fun loadVideoList(force: Boolean = false) {
+        if (state.videoLoading && !force) return
+        val targetUserId = state.profile?.user?.id
+        if (targetUserId.isNullOrEmpty()) {
+            return
         }
+        videoLoadJob?.cancel()
+        state = state.copy(videoLoading = true)
+        videoLoadJob =
+            viewModelScope.launch {
+                try {
+                    runAPICatching {
+                            mediaRepo.getVideoList(
+                                mapOf(
+                                    "page" to (state.videoPage - 1).toString(),
+                                    "sort" to "date",
+                                    "user" to targetUserId,
+                                    "limit" to "32",
+                                )
+                            )
+                        }
+                        .onSuccess { result ->
+                            state =
+                                state.copy(videoCount = result.count, videoList = result.results)
+                        }
+                        .onError { error -> events.emit(UserVMEvent.VideoLoadFailed(error)) }
+                        .onException { exception ->
+                            if (exception.exception is CancellationException) {
+                                throw exception.exception
+                            }
+                            events.emit(UserVMEvent.VideoLoadException(exception.exception))
+                        }
+                } finally {
+                    // 协程取消时不清除新任务设置的loading
+                    if (isActive) {
+                        state = state.copy(videoLoading = false)
+                    }
+                }
+            }
     }
 
     fun changeImagePage(page: Int) {
         state = state.copy(imagePage = page)
-        loadImageList()
+        loadImageList(force = true)
     }
 
-    fun loadImageList() {
-        viewModelScope.launch {
-            state = state.copy(imageLoading = true)
-            runAPICatching {
-                val result =
-                    mediaRepo.getImageList(
-                        mapOf(
-                            "page" to (state.imagePage - 1).toString(),
-                            "sort" to "date",
-                            "user" to (state.profile?.user?.id ?: ""),
-                            "limit" to "32",
-                        )
-                    )
-                state = state.copy(imageCount = result.count, imageList = result.results)
-            }
-            state = state.copy(imageLoading = false)
+    fun loadImageList(force: Boolean = false) {
+        if (state.imageLoading && !force) return
+        val targetUserId = state.profile?.user?.id
+        if (targetUserId.isNullOrEmpty()) {
+            return
         }
+        imageLoadJob?.cancel()
+        state = state.copy(imageLoading = true)
+        imageLoadJob =
+            viewModelScope.launch {
+                try {
+                    runAPICatching {
+                            mediaRepo.getImageList(
+                                mapOf(
+                                    "page" to (state.imagePage - 1).toString(),
+                                    "sort" to "date",
+                                    "user" to targetUserId,
+                                    "limit" to "32",
+                                )
+                            )
+                        }
+                        .onSuccess { result ->
+                            state =
+                                state.copy(imageCount = result.count, imageList = result.results)
+                        }
+                        .onError { error -> events.emit(UserVMEvent.ImageLoadFailed(error)) }
+                        .onException { exception ->
+                            if (exception.exception is CancellationException) {
+                                throw exception.exception
+                            }
+                            events.emit(UserVMEvent.ImageLoadException(exception.exception))
+                        }
+                } finally {
+                    // 协程取消时不清除新任务设置的loading
+                    if (isActive) {
+                        state = state.copy(imageLoading = false)
+                    }
+                }
+            }
     }
 
     fun addOrRemoveFriend() {
+        val targetUserId = state.profile?.user?.id
+        if (targetUserId.isNullOrEmpty()) {
+            return
+        }
         viewModelScope.launch {
             state = state.copy(friendLoading = true)
             runAPICatching {
                 if (state.friendStatus == FriendStatus.NONE) {
-                    userRepo.addFriend(state.profile?.user?.id ?: "")
+                    userRepo.addFriend(targetUserId)
                 } else {
-                    userRepo.removeFriend(state.profile?.user?.id ?: "")
+                    userRepo.removeFriend(targetUserId)
                 }
                 loadFriendsStatus()
             }
@@ -331,12 +409,25 @@ class UserVM(
         class ConversationCreateFailed(val error: APIResult.Error) : UserVMEvent()
 
         class ConversationCreateException(val throwable: Throwable) : UserVMEvent()
+
+        class ProfileLoadFailed(val error: APIResult.Error) : UserVMEvent()
+
+        class ProfileLoadException(val throwable: Throwable) : UserVMEvent()
+
+        class VideoLoadFailed(val error: APIResult.Error) : UserVMEvent()
+
+        class VideoLoadException(val throwable: Throwable) : UserVMEvent()
+
+        class ImageLoadFailed(val error: APIResult.Error) : UserVMEvent()
+
+        class ImageLoadException(val throwable: Throwable) : UserVMEvent()
     }
 
     data class UserVMState(
         val loading: Boolean = false,
         val followLoading: Boolean = false,
         val profile: ProfileDto? = null,
+        val profileError: String? = null,
         val friendStatus: FriendStatus = FriendStatus.NONE,
         val friendLoading: Boolean = false,
         val videoPage: Int = 1,

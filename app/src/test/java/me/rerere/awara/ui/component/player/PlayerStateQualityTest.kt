@@ -21,11 +21,24 @@ class PlayerStateQualityTest {
         var lastSetMediaItem: MediaItem? = null
         var lastSetPositionMs: Long? = null
         var prepareCount: Int = 0
+        val listeners = mutableListOf<Player.Listener>()
+        var isPlayingValue: Boolean = false
+        var isLoadingValue: Boolean = false
 
         override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
             val name = method.name
             val argCount = args?.size ?: 0
             when {
+                name == "addListener" && argCount == 1 -> {
+                    listeners.add(args!![0] as Player.Listener)
+                    return null
+                }
+                name == "removeListener" && argCount == 1 -> {
+                    listeners.remove(args!![0] as Player.Listener)
+                    return null
+                }
+                name == "isPlaying" && argCount == 0 -> return isPlayingValue
+                name == "isLoading" && argCount == 0 -> return isLoadingValue
                 name == "getCurrentPosition" && argCount == 0 -> return currentPositionValue
                 name == "getPlayWhenReady" && argCount == 0 -> return playWhenReadyValue
                 name == "setPlayWhenReady" && argCount == 1 -> {
@@ -236,5 +249,44 @@ class PlayerStateQualityTest {
         assertNull(state.currentMediaItem)
         assertEquals("", state.currentQuality)
         assertTrue(state.playerItems.isEmpty())
+    }
+
+    @Test
+    fun playerStateLoadingStrategyOnlyShowsWhenNotPlayingAndBufferingOrLoading() {
+        val (player, handler) = createMockPlayer()
+        val state =
+            PlayerState(player = player, initialQuality = "Source", saveQualityPreference = {})
+        val listener = state.playbackListener
+
+        // 初始状态未播放且无缓冲加载
+        assertFalse(state.playing)
+        assertFalse(state.showLoading)
+
+        // 触发缓冲且未处于播放态：显示加载反馈
+        listener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+        listener.onIsPlayingChanged(false)
+        assertTrue(state.showLoading)
+
+        // 进入正常播放：即使后台下载缓冲块，也不在播放画面绘制中心圈
+        listener.onPlaybackStateChanged(Player.STATE_READY)
+        listener.onIsPlayingChanged(true)
+        listener.onIsLoadingChanged(true)
+        assertTrue(state.playing)
+        assertTrue(state.isLoading)
+        assertFalse(state.showLoading)
+
+        // 播放中遇网络抖动卡顿缓冲：playWhenReady 仍为 true，但 ExoPlayer 实际 isPlaying 为 false
+        handler.playWhenReadyValue = true
+        listener.onIsPlayingChanged(false)
+        listener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+        assertFalse(state.playing)
+        assertTrue(state.showLoading)
+
+        // 主动暂停且处于 READY：已就绪无需再转中心圈
+        listener.onPlaybackStateChanged(Player.STATE_READY)
+        listener.onIsLoadingChanged(false)
+        listener.onIsPlayingChanged(false)
+        assertFalse(state.playing)
+        assertFalse(state.showLoading)
     }
 }

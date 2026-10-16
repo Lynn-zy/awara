@@ -23,46 +23,32 @@ import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
 
 @Composable
-fun AuthorCard(
-    user: User?,
-    onClickSub: (() -> Unit)?
-) {
+fun AuthorCard(user: User?, onClickSub: (() -> Unit)?) {
     val router = LocalRouterProvider.current
     if (user != null) {
-        Card(
-            onClick = {
-                router.navigate("user/${user.username}")
-            }
-        ) {
-            Row(
-                modifier = Modifier.padding(8.dp)
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
+        val profileId = user.profileIdentifier
+        val onProfileClick: () -> Unit = { profileId?.let { router.navigate("user/$it") } }
+        // 注销账号或缺少主页标识时禁用卡片点击导航
+        Card(enabled = profileId != null, onClick = onProfileClick) {
+            Row(modifier = Modifier.padding(8.dp)) {
+                Column(modifier = Modifier.weight(1f)) {
                     Row(
-                        modifier = Modifier
-                            .height(IntrinsicSize.Min),
+                        modifier = Modifier.height(IntrinsicSize.Min),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Avatar(
                             user = user,
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .aspectRatio(1f),
-                            onClick = {
-                                router.navigate("user/${user.username}")
-                            }
+                            modifier = Modifier.fillMaxHeight().aspectRatio(1f),
+                            onClick = onProfileClick,
                         )
 
-                        Column(
-                            modifier = Modifier
-                        ) {
-                            Text(
-                                text = user.name,
-                                style = MaterialTheme.typography.titleMedium,
-                            )
+                        Column(modifier = Modifier) {
+                            val displayName =
+                                user.name?.takeIf { it.isNotBlank() }
+                                    ?: user.username?.takeIf { it.isNotBlank() }
+                                    ?: stringResource(R.string.video_author_unavailable)
+                            Text(text = displayName, style = MaterialTheme.typography.titleMedium)
                             UserStatus(user = user, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
@@ -71,12 +57,11 @@ fun AuthorCard(
                 onClickSub?.let {
                     Button(
                         onClick = onClickSub,
-                        type = if (user.following) ButtonType.Outlined else ButtonType.Default
+                        type = if (user.following) ButtonType.Outlined else ButtonType.Default,
                     ) {
                         Text(
-                            if (user.following) stringResource(R.string.unfollow) else stringResource(
-                                R.string.follow
-                            )
+                            if (user.following) stringResource(R.string.unfollow)
+                            else stringResource(R.string.follow)
                         )
                     }
                 }
