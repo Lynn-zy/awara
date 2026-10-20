@@ -53,6 +53,7 @@ class PlaylistDetailVM(savedStateHandle: SavedStateHandle, private val mediaRepo
         } else if (loadJob?.isActive == true) {
             return null
         }
+        val requestedPage = state.page
         val oldError = state.error
         val oldList = state.list
         val oldCount = state.count
@@ -63,7 +64,7 @@ class PlaylistDetailVM(savedStateHandle: SavedStateHandle, private val mediaRepo
                 var outcome: RefreshResult = RefreshResult.Success
                 try {
                     runAPICatching {
-                            mediaRepo.getPlaylistContent(playlistId = id, page = state.page - 1)
+                            mediaRepo.getPlaylistContent(playlistId = id, page = requestedPage - 1)
                         }
                         .onSuccess {
                             state =
@@ -72,6 +73,7 @@ class PlaylistDetailVM(savedStateHandle: SavedStateHandle, private val mediaRepo
                                     list = it.results,
                                     playlist = it.playlist,
                                     error = null,
+                                    loadedPage = requestedPage,
                                 )
                             outcome = RefreshResult.Success
                         }
@@ -123,6 +125,8 @@ class PlaylistDetailVM(savedStateHandle: SavedStateHandle, private val mediaRepo
     data class PlaylistDetailState(
         val loading: Boolean = false,
         val page: Int = 1,
+        /** 记录已成功渲染的播单详情页码，仅在数据更新时触发回顶。 */
+        val loadedPage: Int? = null,
         val count: Int = 0,
         val list: List<Video> = emptyList(),
         val playlist: Playlist? = null,

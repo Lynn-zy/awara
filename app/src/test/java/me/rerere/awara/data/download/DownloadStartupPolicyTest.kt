@@ -11,6 +11,7 @@ class DownloadStartupPolicyTest {
         assertTrue(isStartupResumeCandidate(DownloadTaskStatus.QUEUED))
         assertTrue(isStartupResumeCandidate(DownloadTaskStatus.RUNNING))
         assertTrue(isStartupResumeCandidate(DownloadTaskStatus.PAUSED))
+        assertTrue(isStartupResumeCandidate(DownloadTaskStatus.RETRYING))
         assertFalse(isStartupResumeCandidate(DownloadTaskStatus.FAILED))
         assertFalse(isStartupResumeCandidate(DownloadTaskStatus.SAVING))
         assertFalse(isStartupResumeCandidate(DownloadTaskStatus.CANCELLING))

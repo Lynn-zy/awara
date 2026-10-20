@@ -20,7 +20,11 @@ fun VideoCommentPage(vm: VideoVM) {
         onPageChange = vm::jumpCommentPage,
         onPush = { vm.pushComment(it) },
         onBack = { vm.popComment() },
-        canPostReply = !vm.state.isLocalFallback && vm.state.video != null,
+        canPostReply =
+            !vm.state.isLocalFallback && !vm.state.isOnlineRemoved && vm.state.video != null,
         onPostReply = vm::postComment,
+        onEditComment = vm::editComment,
+        onDeleteComment = vm::deleteComment,
+        isLocalFallback = vm.state.isLocalFallback,
     )
 }

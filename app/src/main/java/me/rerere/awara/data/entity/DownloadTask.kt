@@ -18,6 +18,7 @@ data class DownloadTask(
     val authorName: String = "",
     val authorAvatar: String = "",
     @ColumnInfo(defaultValue = "0") val publishedAtEpochSeconds: Long = 0L,
+    @ColumnInfo(defaultValue = "0") val retryCount: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val status: String = DownloadTaskStatus.QUEUED,
     val downloadedBytes: Long = 0,
@@ -33,6 +34,7 @@ object DownloadTaskStatus {
     const val RUNNING = "RUNNING"
     const val PAUSED = "PAUSED"
     const val SAVING = "SAVING"
+    const val RETRYING = "RETRYING"
     const val FAILED = "FAILED"
     const val CANCELLING = "CANCELLING"
 }

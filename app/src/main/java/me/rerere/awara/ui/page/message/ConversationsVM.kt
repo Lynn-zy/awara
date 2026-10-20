@@ -45,6 +45,7 @@ class ConversationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
         } else if (loadJob?.isActive == true) {
             return null
         }
+        val requestedPage = state.page
         val oldUiState = state.uiState
         val oldConversations = state.conversations
         val oldCount = state.count
@@ -56,7 +57,7 @@ class ConversationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
                     state = state.copy(uiState = UiState.Loading)
                 }
                 var outcome: RefreshResult = RefreshResult.Success
-                runAPICatching { userRepo.getConversations(userId, state.page - 1) }
+                runAPICatching { userRepo.getConversations(userId, requestedPage - 1) }
                     .onSuccess {
                         state =
                             state.copy(
@@ -65,6 +66,7 @@ class ConversationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
                                 conversations = it.results,
                                 count = it.count,
                                 limit = it.limit,
+                                loadedPage = requestedPage,
                             )
                         outcome = RefreshResult.Success
                     }
@@ -122,6 +124,8 @@ class ConversationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
     data class ConversationsState(
         val uiState: UiState = UiState.Initial,
         val page: Int = 1,
+        /** 记录已成功渲染的会话页码，仅在数据更新时触发回顶。 */
+        val loadedPage: Int? = null,
         val count: Int = 0,
         val limit: Int = 32,
         val conversations: List<Conversation> = emptyList(),

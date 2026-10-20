@@ -1,6 +1,7 @@
 package me.rerere.awara.data.repo
 
 import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.entity.CommentUpdateDto
 import me.rerere.awara.data.source.IwaraAPI
 
 class CommentRepo(private val iwaraAPI: IwaraAPI) {
@@ -46,4 +47,25 @@ class CommentRepo(private val iwaraAPI: IwaraAPI) {
             id = id,
             dto = CommentCreationDto(body = content, parentId = parent),
         )
+
+    /**
+     * 修改评论正文。 服务端响应非 2xx 时必须抛出异常，绝不把 Response 当作成功。
+     *
+     * @param id 待修改的评论 ID
+     * @param content 修改后的评论正文
+     */
+    suspend fun updateComment(id: String, content: String) {
+        val response = iwaraAPI.updateComment(id, CommentUpdateDto(body = content))
+        check(response.isSuccessful) { "更新评论失败: ${response.code()}" }
+    }
+
+    /**
+     * 删除指定评论。 服务端响应非 2xx 时必须抛出异常，绝不把 Response 当作成功。
+     *
+     * @param id 待删除的评论 ID
+     */
+    suspend fun deleteComment(id: String) {
+        val response = iwaraAPI.deleteComment(id)
+        check(response.isSuccessful) { "删除评论失败: ${response.code()}" }
+    }
 }

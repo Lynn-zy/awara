@@ -1,0 +1,181 @@
+package me.rerere.awara.ui.component.iwara.comment
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.dp
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.google.accompanist.navigation.animation.rememberAnimatedNavController
+import java.time.Instant
+import me.rerere.awara.R
+import me.rerere.awara.data.entity.Comment
+import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.entity.User
+import me.rerere.awara.ui.LocalRouterProvider
+import me.rerere.awara.ui.component.common.DialogProvider
+import me.rerere.awara.ui.component.common.MessageProvider
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/** 使用真实评论组件和假回调验证写操作交互，不访问主站写接口。 */
+@RunWith(AndroidJUnit4::class)
+class CommentActionsTest {
+    @get:Rule val compose = createComposeRule()
+    private val context
+        get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Test
+    fun failedReplyKeepsDraftAndUsesCurrentParent() {
+        var sent: CommentCreationDto? = null
+        compose.setContent {
+            Content(
+                parent = "root",
+                onPost = {
+                    sent = it
+                    false
+                },
+            )
+        }
+        compose
+            .onNodeWithContentDescription(context.getString(R.string.comment_reply))
+            .performClick()
+        compose.onNode(hasSetTextAction()).performTextReplacement("回复草稿")
+        compose
+            .onNodeWithContentDescription(context.getString(R.string.comment_send))
+            .performClick()
+        compose.onNodeWithText(context.getString(R.string.comment_post_failed)).assertExists()
+        compose.onNode(hasSetTextAction()).assertTextEquals("回复草稿")
+        compose.runOnIdle { assertEquals("root", sent?.parentId) }
+    }
+
+    @Test
+    fun failedEditKeepsEditedBody() {
+        var submittedBody: String? = null
+        compose.setContent {
+            Content(
+                onEdit = { _, body ->
+                    submittedBody = body
+                    false
+                }
+            )
+        }
+        compose
+            .onNodeWithContentDescription(context.getString(R.string.comment_action_more))
+            .performClick()
+        compose.onNodeWithText(context.getString(R.string.comment_action_edit)).performClick()
+        compose.onNode(hasSetTextAction()).assertTextEquals("原评论")
+        compose.onNode(hasSetTextAction()).performTextReplacement("修改草稿")
+        compose.onNodeWithText(context.getString(R.string.comment_save)).performClick()
+        compose.onNodeWithText(context.getString(R.string.comment_edit_failed)).assertExists()
+        compose.onNode(hasSetTextAction()).assertTextEquals("修改草稿")
+        compose.runOnIdle { assertEquals("修改草稿", submittedBody) }
+    }
+
+    @Test
+    fun deletionRequiresConfirmationAndFailureKeepsComment() {
+        var deletionCalled = false
+        compose.setContent {
+            Content(
+                onDelete = {
+                    deletionCalled = true
+                    false
+                }
+            )
+        }
+        compose
+            .onNodeWithContentDescription(context.getString(R.string.comment_action_more))
+            .performClick()
+        val deleteText = context.getString(R.string.comment_action_delete)
+        compose.onNodeWithText(deleteText).performClick()
+        compose.onNodeWithText(context.getString(R.string.comment_delete_confirm)).assertExists()
+        compose.runOnIdle { assertFalse(deletionCalled) }
+        compose.onNode(hasText(deleteText) and hasClickAction()).performClick()
+        compose.onNodeWithText(context.getString(R.string.comment_delete_failed)).assertExists()
+        compose.onNodeWithText("原评论").assertExists()
+        compose.runOnIdle { assertTrue(deletionCalled) }
+    }
+
+    @Composable
+    private fun Content(
+        parent: String? = null,
+        onPost: suspend (CommentCreationDto) -> Boolean = { false },
+        onEdit: suspend (String, String) -> Boolean = { _, _ -> false },
+        onDelete: suspend (String) -> Boolean = { false },
+    ) {
+        val router = rememberAnimatedNavController()
+        CompositionLocalProvider(LocalRouterProvider provides router) {
+            MaterialTheme {
+                MessageProvider {
+                    DialogProvider {
+                        Box(Modifier.size(width = 360.dp, height = 480.dp)) {
+                            CommentList(
+                                modifier = Modifier.fillMaxSize(),
+                                state =
+                                    CommentState(
+                                        stack =
+                                            listOf(
+                                                CommentStateItem(
+                                                    parent = parent,
+                                                    comments = listOf(comment()),
+                                                    total = 1,
+                                                )
+                                            )
+                                    ),
+                                onPageChange = {},
+                                onBack = {},
+                                onPush = {},
+                                onPostReply = onPost,
+                                onEditComment = onEdit,
+                                onDeleteComment = onDelete,
+                                currentUserId = "owner",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun comment(): Comment =
+        Comment(
+            id = "comment",
+            body = "原评论",
+            createdAt = Instant.EPOCH,
+            updatedAt = Instant.EPOCH,
+            numReplies = 0,
+            user =
+                User(
+                    id = "owner",
+                    name = "测试用户",
+                    username = "owner",
+                    createdAt = Instant.EPOCH,
+                    updatedAt = Instant.EPOCH,
+                    deletedAt = null,
+                    followedBy = false,
+                    following = false,
+                    friend = false,
+                    premium = false,
+                    role = "user",
+                    seenAt = null,
+                    avatar = null,
+                ),
+        )
+}

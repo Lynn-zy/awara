@@ -74,12 +74,16 @@ class SearchVM(private val mediaRepo: MediaRepo) : ViewModel() {
                                             uiState = UiState.Empty,
                                             count = pager.count,
                                             videoList = emptyList(),
+                                            loadedPage = requestedPage + 1,
+                                            loadedSearchType = requestedType,
                                         )
                                     } else {
                                         state.copy(
                                             uiState = UiState.Success,
                                             count = pager.count,
                                             videoList = pager.results,
+                                            loadedPage = requestedPage + 1,
+                                            loadedSearchType = requestedType,
                                         )
                                     }
                             }
@@ -97,12 +101,16 @@ class SearchVM(private val mediaRepo: MediaRepo) : ViewModel() {
                                             uiState = UiState.Empty,
                                             count = pager.count,
                                             imageList = emptyList(),
+                                            loadedPage = requestedPage + 1,
+                                            loadedSearchType = requestedType,
                                         )
                                     } else {
                                         state.copy(
                                             uiState = UiState.Success,
                                             count = pager.count,
                                             imageList = pager.results,
+                                            loadedPage = requestedPage + 1,
+                                            loadedSearchType = requestedType,
                                         )
                                     }
                             }
@@ -120,12 +128,16 @@ class SearchVM(private val mediaRepo: MediaRepo) : ViewModel() {
                                             uiState = UiState.Empty,
                                             count = pager.count,
                                             userList = emptyList(),
+                                            loadedPage = requestedPage + 1,
+                                            loadedSearchType = requestedType,
                                         )
                                     } else {
                                         state.copy(
                                             uiState = UiState.Success,
                                             count = pager.count,
                                             userList = pager.results,
+                                            loadedPage = requestedPage + 1,
+                                            loadedSearchType = requestedType,
                                         )
                                     }
                             }
@@ -217,6 +229,8 @@ class SearchVM(private val mediaRepo: MediaRepo) : ViewModel() {
         val searchType: String = "video",
         val sort: String = "relevance",
         val page: Int = 1,
+        val loadedPage: Int? = null,
+        val loadedSearchType: String? = null,
         val count: Int = 0,
         val videoList: List<Video> = emptyList(),
         val imageList: List<Image> = emptyList(),

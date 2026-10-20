@@ -50,7 +50,8 @@ class PlaylistsVM(
     fun loadPlaylist(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
         if (loadJob?.isActive == true && !force) return null
         loadJob?.cancel()
-        val page = state.page - 1
+        val requestedPage = state.page
+        val page = requestedPage - 1
         val oldError = state.error
         val oldList = state.list
         val oldCount = state.count
@@ -73,7 +74,13 @@ class PlaylistsVM(
                             mediaRepo.getPlaylists(userId = userId, page = page)
                         }
                         .onSuccess {
-                            state = state.copy(list = it.results, count = it.count, error = null)
+                            state =
+                                state.copy(
+                                    list = it.results,
+                                    count = it.count,
+                                    error = null,
+                                    loadedPage = requestedPage,
+                                )
                             outcome = RefreshResult.Success
                         }
                         .onError {
@@ -109,6 +116,8 @@ class PlaylistsVM(
     data class PlaylistsState(
         val loading: Boolean = false,
         val page: Int = 1,
+        /** 记录已成功渲染的播单列表页码，仅在数据更新时触发回顶。 */
+        val loadedPage: Int? = null,
         val count: Int = 0,
         val list: List<Playlist> = emptyList(),
         val error: String? = null,

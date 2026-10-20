@@ -64,7 +64,8 @@ class DownloadLaunchPolicy {
             return tasks.filter {
                 it.status == DownloadTaskStatus.PAUSED ||
                     it.status == DownloadTaskStatus.QUEUED ||
-                    it.status == DownloadTaskStatus.RUNNING
+                    it.status == DownloadTaskStatus.RUNNING ||
+                    it.status == DownloadTaskStatus.RETRYING
             }
         }
     }

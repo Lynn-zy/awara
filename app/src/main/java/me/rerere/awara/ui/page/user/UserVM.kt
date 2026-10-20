@@ -25,9 +25,12 @@ import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
+import me.rerere.awara.ui.component.iwara.comment.CommentActionPolicy
 import me.rerere.awara.ui.component.iwara.comment.CommentState
 import me.rerere.awara.ui.component.iwara.comment.pop
 import me.rerere.awara.ui.component.iwara.comment.push
+import me.rerere.awara.ui.component.iwara.comment.removeComment
+import me.rerere.awara.ui.component.iwara.comment.updateCommentBody
 import me.rerere.awara.ui.component.iwara.comment.updatePage
 import me.rerere.awara.ui.component.iwara.comment.updateTopStack
 
@@ -64,11 +67,11 @@ class UserVM(
                     runAPICatching { userRepo.getProfile(id) }
                         .onSuccess { profile ->
                             state = state.copy(profile = profile, profileError = null)
-                            loadFriendsStatus()
                             loadVideoList()
                             loadImageList()
                             // 用户资料加载成功后加载主页留言列表
                             loadComments()
+                            loadFriendsStatus()
                         }
                         .onError { error ->
                             state = state.copy(profileError = "加载失败")
@@ -131,6 +134,7 @@ class UserVM(
         if (targetUserId.isNullOrEmpty()) {
             return
         }
+        val requestedPage = state.videoPage
         videoLoadJob?.cancel()
         state = state.copy(videoLoading = true)
         videoLoadJob =
@@ -139,7 +143,7 @@ class UserVM(
                     runAPICatching {
                             mediaRepo.getVideoList(
                                 mapOf(
-                                    "page" to (state.videoPage - 1).toString(),
+                                    "page" to (requestedPage - 1).toString(),
                                     "sort" to "date",
                                     "user" to targetUserId,
                                     "limit" to "32",
@@ -148,7 +152,11 @@ class UserVM(
                         }
                         .onSuccess { result ->
                             state =
-                                state.copy(videoCount = result.count, videoList = result.results)
+                                state.copy(
+                                    videoCount = result.count,
+                                    videoList = result.results,
+                                    videoLoadedPage = requestedPage,
+                                )
                         }
                         .onError { error -> events.emit(UserVMEvent.VideoLoadFailed(error)) }
                         .onException { exception ->
@@ -177,6 +185,7 @@ class UserVM(
         if (targetUserId.isNullOrEmpty()) {
             return
         }
+        val requestedPage = state.imagePage
         imageLoadJob?.cancel()
         state = state.copy(imageLoading = true)
         imageLoadJob =
@@ -185,7 +194,7 @@ class UserVM(
                     runAPICatching {
                             mediaRepo.getImageList(
                                 mapOf(
-                                    "page" to (state.imagePage - 1).toString(),
+                                    "page" to (requestedPage - 1).toString(),
                                     "sort" to "date",
                                     "user" to targetUserId,
                                     "limit" to "32",
@@ -194,7 +203,11 @@ class UserVM(
                         }
                         .onSuccess { result ->
                             state =
-                                state.copy(imageCount = result.count, imageList = result.results)
+                                state.copy(
+                                    imageCount = result.count,
+                                    imageList = result.results,
+                                    imageLoadedPage = requestedPage,
+                                )
                         }
                         .onError { error -> events.emit(UserVMEvent.ImageLoadFailed(error)) }
                         .onException { exception ->
@@ -282,17 +295,24 @@ class UserVM(
                             }
                         }
                         .onSuccess { pager ->
-                            state =
-                                state.copy(
-                                    commentState =
-                                        state.commentState.updateTopStack(
-                                            currentCommentState.copy(
-                                                comments = pager.results,
-                                                limit = pager.limit,
-                                                total = pager.count,
+                            // 仅在当前栈顶层级仍与发出请求时匹配时提交更新，避免旧结果污染新栈
+                            if (
+                                state.commentState.stack.lastOrNull()?.parent ==
+                                    currentCommentState.parent
+                            ) {
+                                state =
+                                    state.copy(
+                                        commentState =
+                                            state.commentState.updateTopStack(
+                                                currentCommentState.copy(
+                                                    comments = pager.results,
+                                                    limit = pager.limit,
+                                                    total = pager.count,
+                                                    loadedPage = currentCommentState.page,
+                                                )
                                             )
-                                        )
-                                )
+                                    )
+                            }
                             Log.i(TAG, "loadComments: $pager")
                         }
                         .onError { error ->
@@ -319,41 +339,118 @@ class UserVM(
      * 在当前用户主页发表留言或回复某条评论。
      *
      * @param dto 评论创建参数，包含正文及可选的父评论 ID
+     * @return 是否发表成功
      */
-    fun postComment(dto: CommentCreationDto) {
-        val targetUserId = state.profile?.user?.id ?: return
-        if (state.commentPosting) return
+    suspend fun postComment(dto: CommentCreationDto): Boolean {
+        val targetUserId = state.profile?.user?.id ?: return false
+        if (state.commentPosting) return false
         state = state.copy(commentPosting = true)
-        viewModelScope.launch {
-            try {
-                runAPICatching {
-                        commentRepo.postProfileComment(
-                            id = targetUserId,
-                            content = dto.body,
-                            parent = dto.parentId,
-                        )
+        var success = false
+        try {
+            runAPICatching {
+                    commentRepo.postProfileComment(
+                        id = targetUserId,
+                        content = dto.body,
+                        parent = dto.parentId,
+                    )
+                }
+                .onSuccess {
+                    events.emit(UserVMEvent.CommentPosted)
+                    Log.i(TAG, "postComment: $it")
+                    loadComments()
+                    success = true
+                }
+                .onError {
+                    events.emit(UserVMEvent.CommentPostFailed(it))
+                    Log.w(TAG, "postComment(error): $it")
+                }
+                .onException {
+                    // 协程取消异常必须继续向外抛出
+                    if (it.exception is CancellationException) {
+                        throw it.exception
                     }
-                    .onSuccess {
-                        events.emit(UserVMEvent.CommentPosted)
-                        Log.i(TAG, "postComment: $it")
-                        loadComments()
-                    }
-                    .onError {
-                        events.emit(UserVMEvent.CommentPostFailed(it))
-                        Log.w(TAG, "postComment(error): $it")
-                    }
-                    .onException {
-                        // 协程取消异常必须继续向外抛出
-                        if (it.exception is CancellationException) {
-                            throw it.exception
-                        }
-                        events.emit(UserVMEvent.CommentPostException(it.exception))
-                        Log.w(TAG, "postComment(exception)", it.exception)
-                    }
-            } finally {
-                state = state.copy(commentPosting = false)
-            }
+                    events.emit(UserVMEvent.CommentPostException(it.exception))
+                    Log.w(TAG, "postComment(exception)", it.exception)
+                }
+        } finally {
+            state = state.copy(commentPosting = false)
         }
+        return success
+    }
+
+    /**
+     * 编辑指定评论的正文。
+     *
+     * @param commentId 待修改的评论 ID
+     * @param content 修改后的评论正文
+     * @return 是否修改成功
+     */
+    suspend fun editComment(commentId: String, content: String): Boolean {
+        if (state.commentPosting) return false
+        state = state.copy(commentPosting = true)
+        var success = false
+        try {
+            runAPICatching { commentRepo.updateComment(commentId, content) }
+                .onSuccess {
+                    Log.i(TAG, "editComment: success")
+                    state =
+                        state.copy(
+                            commentState = state.commentState.updateCommentBody(commentId, content)
+                        )
+                    loadComments()
+                    success = true
+                }
+                .onError { Log.w(TAG, "editComment(error): $it") }
+                .onException {
+                    if (it.exception is CancellationException) {
+                        throw it.exception
+                    }
+                    Log.w(TAG, "editComment(exception)", it.exception)
+                }
+        } finally {
+            state = state.copy(commentPosting = false)
+        }
+        return success
+    }
+
+    /**
+     * 删除指定评论。 若删除的是当前页最后一条且当前页码大于 1，则自动回退到上一页刷新。
+     *
+     * @param commentId 待删除的评论 ID
+     * @return 是否删除成功
+     */
+    suspend fun deleteComment(commentId: String): Boolean {
+        if (state.commentPosting) return false
+        state = state.copy(commentPosting = true)
+        var success = false
+        try {
+            runAPICatching { commentRepo.deleteComment(commentId) }
+                .onSuccess {
+                    Log.i(TAG, "deleteComment: success")
+                    val currentCommentState = state.commentState.stack.last()
+                    val targetPage =
+                        CommentActionPolicy.calculatePageAfterDeletion(
+                            currentPage = currentCommentState.page,
+                            currentCount = currentCommentState.comments.size,
+                        )
+                    state = state.copy(commentState = state.commentState.removeComment(commentId))
+                    if (targetPage != currentCommentState.page) {
+                        state = state.copy(commentState = state.commentState.updatePage(targetPage))
+                    }
+                    loadComments()
+                    success = true
+                }
+                .onError { Log.w(TAG, "deleteComment(error): $it") }
+                .onException {
+                    if (it.exception is CancellationException) {
+                        throw it.exception
+                    }
+                    Log.w(TAG, "deleteComment(exception)", it.exception)
+                }
+        } finally {
+            state = state.copy(commentPosting = false)
+        }
+        return success
     }
 
     /**
@@ -431,10 +528,14 @@ class UserVM(
         val friendStatus: FriendStatus = FriendStatus.NONE,
         val friendLoading: Boolean = false,
         val videoPage: Int = 1,
+        // 最近一次视频列表加载成功时的页码
+        val videoLoadedPage: Int? = null,
         val videoCount: Int = 0,
         val videoLoading: Boolean = false,
         val videoList: List<Video> = emptyList(),
         val imagePage: Int = 1,
+        // 最近一次图片列表加载成功时的页码
+        val imageLoadedPage: Int? = null,
         val imageCount: Int = 0,
         val imageLoading: Boolean = false,
         val imageList: List<Image> = emptyList(),

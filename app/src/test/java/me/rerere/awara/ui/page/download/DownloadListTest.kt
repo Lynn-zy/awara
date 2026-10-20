@@ -2,6 +2,7 @@ package me.rerere.awara.ui.page.download
 
 import java.time.Instant
 import java.time.ZoneId
+import me.rerere.awara.data.SearchCategory
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadType
 import org.junit.Assert.assertEquals
@@ -381,5 +382,102 @@ class DownloadListTest {
         assertEquals("author_real", realGroup.authorId)
         assertEquals("Ghost", realGroup.authorName)
         assertEquals(listOf(2), realGroup.items.map { it.id })
+    }
+
+    @Test
+    fun filterDownloadedItemsReturnsAllWhenQueryIsBlank() {
+        val item1 = createItem(id = 1, title = "Title A", authorName = "Author A")
+        val item2 = createItem(id = 2, title = "Title B", authorName = "Author B")
+        val items = listOf(item1, item2)
+
+        assertEquals(items, filterDownloadedItems(items, ""))
+        assertEquals(items, filterDownloadedItems(items, "   ", SearchCategory.TITLE))
+        assertEquals(items, filterDownloadedItems(items, "   ", SearchCategory.AUTHOR))
+    }
+
+    @Test
+    fun filterDownloadedItemsTitleModeOnlyMatchesTitle() {
+        val matchTitle =
+            createItem(id = 1, title = "Awesome Video", authorName = "Other", resourceId = "res_1")
+        val matchAuthorName =
+            createItem(
+                id = 2,
+                title = "Boring Clip",
+                authorName = "Awesome Author",
+                resourceId = "res_2",
+            )
+        val matchAuthorId =
+            createItem(id = 3, title = "Another Clip", authorId = "AwesomeId", resourceId = "res_3")
+        val matchResourceId = createItem(id = 4, title = "Random Clip", resourceId = "AwesomeRes")
+
+        val result =
+            filterDownloadedItems(
+                listOf(matchTitle, matchAuthorName, matchAuthorId, matchResourceId),
+                "wEsOmE",
+                SearchCategory.TITLE,
+            )
+        // 标题模式仅匹配 title（忽略大小写），不匹配作者名称、作者 ID 或资源 ID
+        assertEquals(listOf(1), result.map { it.id })
+    }
+
+    @Test
+    fun filterDownloadedItemsAuthorModeOnlyMatchesAuthorNameAndId() {
+        val matchTitle =
+            createItem(id = 1, title = "Creator Video", authorName = "Other", resourceId = "res_1")
+        val matchAuthorName =
+            createItem(
+                id = 2,
+                title = "Boring Clip",
+                authorName = "SuperCreator",
+                resourceId = "res_2",
+            )
+        val matchAuthorId =
+            createItem(
+                id = 3,
+                title = "Another Clip",
+                authorId = "supercreator_id",
+                resourceId = "res_3",
+            )
+        val matchResourceId =
+            createItem(id = 4, title = "Random Clip", resourceId = "supercreator_res")
+
+        val result =
+            filterDownloadedItems(
+                listOf(matchTitle, matchAuthorName, matchAuthorId, matchResourceId),
+                "supercreator",
+                SearchCategory.AUTHOR,
+            )
+        // 作者模式仅匹配 authorName 或 authorId，不匹配 title 或 resourceId
+        assertEquals(listOf(2, 3), result.map { it.id })
+    }
+
+    @Test
+    fun filterDownloadedItemsDefaultsToTitleMode() {
+        val matchTitle = createItem(id = 1, title = "Target Clip", authorName = "Other")
+        val matchAuthor = createItem(id = 2, title = "Other Clip", authorName = "Target Author")
+
+        // 默认类别参数为 TITLE
+        val result = filterDownloadedItems(listOf(matchTitle, matchAuthor), "Target")
+        assertEquals(listOf(1), result.map { it.id })
+    }
+
+    @Test
+    fun filterDownloadedItemsDoesNotMatchResourceIdInAnyMode() {
+        val item = createItem(id = 1, title = "Normal Title", resourceId = "special_res_id")
+
+        val resultTitle = filterDownloadedItems(listOf(item), "special_res", SearchCategory.TITLE)
+        assertTrue(resultTitle.isEmpty())
+
+        val resultAuthor = filterDownloadedItems(listOf(item), "special_res", SearchCategory.AUTHOR)
+        assertTrue(resultAuthor.isEmpty())
+    }
+
+    @Test
+    fun filterDownloadedItemsReturnsEmptyWhenNoMatch() {
+        val item1 = createItem(id = 1, title = "Alpha", authorName = "Bravo")
+        val item2 = createItem(id = 2, title = "Charlie", authorName = "Delta")
+
+        val result = filterDownloadedItems(listOf(item1, item2), "NonExistentQuery404")
+        assertTrue(result.isEmpty())
     }
 }

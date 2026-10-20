@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -36,12 +37,15 @@ import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun PlaylistDetailPage(vm: PlaylistDetailVM = koinViewModel()) {
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val gridState = rememberLazyStaggeredGridState()
+    PageScrollEffect(vm.state.loadedPage) { gridState.scrollToItem(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -96,6 +100,7 @@ fun PlaylistDetailPage(vm: PlaylistDetailVM = koinViewModel()) {
                     }
                 } else {
                     LazyVerticalStaggeredGrid(
+                        state = gridState,
                         columns = DynamicStaggeredGridCells(),
                         contentPadding = PaddingValues(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),

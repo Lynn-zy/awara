@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -28,11 +29,14 @@ import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.hooks.rememberDebounce
 import me.rerere.awara.ui.page.index.IndexVM
 
 @Composable
 fun IndexSubscriptionPage(vm: IndexVM) {
+    val gridState = rememberLazyStaggeredGridState()
+    PageScrollEffect(vm.state.subscriptionLoadedPage) { gridState.scrollToItem(0) }
     Column(modifier = Modifier.fillMaxSize()) {
         SwipeRefresh(
             state =
@@ -49,6 +53,7 @@ fun IndexSubscriptionPage(vm: IndexVM) {
                 onErrorRetry = { vm.loadSubscriptions(force = true) },
             ) {
                 LazyVerticalStaggeredGrid(
+                    state = gridState,
                     modifier = Modifier.fillMaxSize(),
                     columns = DynamicStaggeredGridCells(150.dp, 2, 4),
                     verticalItemSpacing = 8.dp,

@@ -453,8 +453,8 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
             },
         ) { player ->
             when (windowSize.widthSizeClass) {
-                WindowWidthSizeClass.Compact -> VideoPagePhoneLayout(vm, state, player)
-                else -> VideoPageTabletLayout(vm, state, player)
+                WindowWidthSizeClass.Compact -> VideoPagePhoneLayout(vm, player)
+                else -> VideoPageTabletLayout(vm, player)
             }
         }
     }

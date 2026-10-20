@@ -27,6 +27,7 @@ import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.entity.toAvatarUrl
+import me.rerere.awara.data.history.HistoryRetention
 import me.rerere.awara.data.repo.CommentRepo
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
@@ -36,9 +37,12 @@ import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.di.AppDatabase
+import me.rerere.awara.ui.component.iwara.comment.CommentActionPolicy
 import me.rerere.awara.ui.component.iwara.comment.CommentState
 import me.rerere.awara.ui.component.iwara.comment.pop
 import me.rerere.awara.ui.component.iwara.comment.push
+import me.rerere.awara.ui.component.iwara.comment.removeComment
+import me.rerere.awara.ui.component.iwara.comment.updateCommentBody
 import me.rerere.awara.ui.component.iwara.comment.updatePage
 import me.rerere.awara.ui.component.iwara.comment.updateTopStack
 
@@ -58,6 +62,8 @@ class VideoVM(
 
     val events = MutableSharedFlow<VideoEvent>()
     private var userMoreVideosJob: Job? = null
+    // 评论加载任务，用于新请求或退出回复层时取消旧请求守门
+    private var commentLoadJob: Job? = null
 
     private val coordinator =
         VideoPlaybackCoordinator(
@@ -139,6 +145,9 @@ class VideoVM(
                             durationSeconds = durationSeconds,
                         )
                     )
+                HistoryRetention.current().cutoff()?.let { cutoff ->
+                    appDatabase.historyDao().deleteHistoryBefore(cutoff.epochSecond)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -413,41 +422,56 @@ class VideoVM(
     }
 
     fun loadComments() {
+        commentLoadJob?.cancel()
         state = state.copy(commentState = state.commentState.copy(loading = true))
-        viewModelScope.launch {
-            val currentCommentState = state.commentState.stack.last()
-            runAPICatching {
-                    if (currentCommentState.parent != null) {
-                        commentRepo.getVideoCommentReplies(
-                            id,
-                            currentCommentState.page - 1,
-                            currentCommentState.parent,
-                        )
-                    } else {
-                        commentRepo.getVideoComments(id, currentCommentState.page - 1)
+        val currentCommentState = state.commentState.stack.last()
+        commentLoadJob =
+            viewModelScope.launch {
+                try {
+                    runAPICatching {
+                            if (currentCommentState.parent != null) {
+                                commentRepo.getVideoCommentReplies(
+                                    id,
+                                    currentCommentState.page - 1,
+                                    currentCommentState.parent,
+                                )
+                            } else {
+                                commentRepo.getVideoComments(id, currentCommentState.page - 1)
+                            }
+                        }
+                        .onSuccess {
+                            // 旧结果不能更新新栈（例如请求期间栈顶已改变或被 pop）
+                            if (
+                                state.commentState.stack.lastOrNull()?.parent ==
+                                    currentCommentState.parent
+                            ) {
+                                state =
+                                    state.copy(
+                                        commentState =
+                                            state.commentState.updateTopStack(
+                                                currentCommentState.copy(
+                                                    comments = it.results,
+                                                    limit = it.limit,
+                                                    total = it.count,
+                                                    loadedPage = currentCommentState.page,
+                                                )
+                                            )
+                                    )
+                            }
+                            Log.i(TAG, "loadComments: $it")
+                        }
+                        .onError { Log.w(TAG, "loadComments(error): $it") }
+                        .onException {
+                            if (it.exception is CancellationException) throw it.exception
+                            Log.w(TAG, "loadComments(exception)", it.exception)
+                        }
+                } finally {
+                    // 仅在任务未被新请求取消时复原 loading
+                    if (isActive) {
+                        state = state.copy(commentState = state.commentState.copy(loading = false))
                     }
                 }
-                .onSuccess {
-                    state =
-                        state.copy(
-                            commentState =
-                                state.commentState.updateTopStack(
-                                    currentCommentState.copy(
-                                        comments = it.results,
-                                        limit = it.limit,
-                                        total = it.count,
-                                    )
-                                )
-                        )
-                    Log.i(TAG, "loadComments: $it")
-                }
-                .onError { Log.w(TAG, "loadComments(error): $it") }
-                .onException {
-                    if (it.exception is CancellationException) throw it.exception
-                    Log.w(TAG, "loadComments(exception)", it.exception)
-                }
-            state = state.copy(commentState = state.commentState.copy(loading = false))
-        }
+            }
     }
 
     fun pushComment(id: String) {
@@ -456,28 +480,99 @@ class VideoVM(
     }
 
     fun popComment() {
-        state = state.copy(commentState = state.commentState.pop())
+        // pop 取消子评论未完成的请求并将 loading 正确复原为 false
+        commentLoadJob?.cancel()
+        state = state.copy(commentState = state.commentState.pop().copy(loading = false))
+        loadComments()
     }
 
-    fun postComment(it: CommentCreationDto) {
-        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return
-        viewModelScope.launch {
-            runAPICatching { commentRepo.postVideoComment(id, it.body, it.parentId) }
-                .onSuccess {
-                    events.emit(VideoEvent.CommentPosted)
-                    Log.i(TAG, "postComment: $it")
-                    loadComments()
+    /**
+     * 发表视频评论或回复某条评论。
+     *
+     * @param it 评论创建参数，包含正文及可选的父评论 ID
+     * @return 是否发表成功
+     */
+    suspend fun postComment(it: CommentCreationDto): Boolean {
+        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return false
+        var success = false
+        runAPICatching { commentRepo.postVideoComment(id, it.body, it.parentId) }
+            .onSuccess {
+                events.emit(VideoEvent.CommentPosted)
+                Log.i(TAG, "postComment: $it")
+                loadComments()
+                success = true
+            }
+            .onError {
+                events.emit(VideoEvent.CommentPostFailed(it))
+                Log.w(TAG, "postComment(error): $it")
+            }
+            .onException {
+                if (it.exception is CancellationException) throw it.exception
+                events.emit(VideoEvent.CommentPostException(it.exception))
+                Log.w(TAG, "postComment(exception)", it.exception)
+            }
+        return success
+    }
+
+    /**
+     * 编辑指定评论的正文。 编辑成功后仅刷新评论列表，绝不刷新整个 Video 导致重建播放器。
+     *
+     * @param commentId 待修改的评论 ID
+     * @param content 修改后的评论正文
+     * @return 是否修改成功
+     */
+    suspend fun editComment(commentId: String, content: String): Boolean {
+        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return false
+        var success = false
+        runAPICatching { commentRepo.updateComment(commentId, content) }
+            .onSuccess {
+                Log.i(TAG, "editComment: success")
+                state =
+                    state.copy(
+                        commentState = state.commentState.updateCommentBody(commentId, content)
+                    )
+                loadComments()
+                success = true
+            }
+            .onError { Log.w(TAG, "editComment(error): $it") }
+            .onException {
+                if (it.exception is CancellationException) throw it.exception
+                Log.w(TAG, "editComment(exception)", it.exception)
+            }
+        return success
+    }
+
+    /**
+     * 删除指定评论。 删除成功后刷新评论列表；若删除的是当前页最后一条且当前页码大于 1，则自动回退到上一页。
+     *
+     * @param commentId 待删除的评论 ID
+     * @return 是否删除成功
+     */
+    suspend fun deleteComment(commentId: String): Boolean {
+        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return false
+        var success = false
+        runAPICatching { commentRepo.deleteComment(commentId) }
+            .onSuccess {
+                Log.i(TAG, "deleteComment: success")
+                val currentCommentState = state.commentState.stack.last()
+                val targetPage =
+                    CommentActionPolicy.calculatePageAfterDeletion(
+                        currentPage = currentCommentState.page,
+                        currentCount = currentCommentState.comments.size,
+                    )
+                state = state.copy(commentState = state.commentState.removeComment(commentId))
+                if (targetPage != currentCommentState.page) {
+                    state = state.copy(commentState = state.commentState.updatePage(targetPage))
                 }
-                .onError {
-                    events.emit(VideoEvent.CommentPostFailed(it))
-                    Log.w(TAG, "postComment(error): $it")
-                }
-                .onException {
-                    if (it.exception is CancellationException) throw it.exception
-                    events.emit(VideoEvent.CommentPostException(it.exception))
-                    Log.w(TAG, "postComment(exception)", it.exception)
-                }
-        }
+                loadComments()
+                success = true
+            }
+            .onError { Log.w(TAG, "deleteComment(error): $it") }
+            .onException {
+                if (it.exception is CancellationException) throw it.exception
+                Log.w(TAG, "deleteComment(exception)", it.exception)
+            }
+        return success
     }
 
     fun addVideoToPlaylist(playlistId: String) {

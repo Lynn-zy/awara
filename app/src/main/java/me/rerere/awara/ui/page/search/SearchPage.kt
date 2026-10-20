@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.DockedSearchBar
@@ -20,6 +21,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -39,10 +41,13 @@ import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.UserCard
 import me.rerere.awara.ui.component.iwara.param.SortButton
 import me.rerere.awara.ui.component.iwara.param.SortOption
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun SearchPage(vm: SearchVM = koinViewModel()) {
+    val gridState = key(vm.state.loadedSearchType) { rememberLazyStaggeredGridState() }
+    PageScrollEffect(vm.state.loadedPage) { gridState.scrollToItem(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -126,13 +131,14 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                     onErrorRetry = { vm.search(force = true) },
                 ) {
                     LazyVerticalStaggeredGrid(
+                        state = gridState,
                         columns = DynamicStaggeredGridCells(150.dp, 2, 4),
                         contentPadding = PaddingValues(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalItemSpacing = 8.dp,
                         modifier = Modifier.matchParentSize(),
                     ) {
-                        when (vm.state.searchType) {
+                        when (vm.state.loadedSearchType ?: vm.state.searchType) {
                             "video" -> {
                                 items(vm.state.videoList, key = { it.id }) { MediaCard(media = it) }
                             }

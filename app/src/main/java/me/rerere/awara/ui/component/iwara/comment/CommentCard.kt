@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,18 +14,29 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
@@ -43,10 +55,20 @@ fun CommentCard(
     comment: Comment,
     onLoadReplies: (Comment) -> Unit,
     onReply: (Comment) -> Unit,
+    onEdit: ((Comment) -> Unit)? = null,
+    onDelete: ((Comment) -> Unit)? = null,
+    isLocalFallback: Boolean = false,
+    canReply: Boolean = true,
+    currentUserId: String? = LocalUserStore.current.collectAsState().user?.id,
 ) {
     val context = LocalContext.current
-    val user = LocalUserStore.current.collectAsState()
     val router = LocalRouterProvider.current
+    val canEditOrDelete =
+        CommentActionPolicy.canEditOrDelete(
+            comment = comment,
+            currentUserId = currentUserId,
+            isLocalFallback = isLocalFallback,
+        )
     Card(modifier = modifier) {
         Column(
             modifier = Modifier.animateContentSize().padding(8.dp).fillMaxWidth(),
@@ -64,7 +86,7 @@ fun CommentCard(
                     modifier = Modifier.size(32.dp),
                     onClick = onProfileClick,
                 )
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     val displayName =
                         comment.user?.name?.takeIf { it.isNotBlank() }
                             ?: comment.user?.username?.takeIf { it.isNotBlank() }
@@ -74,6 +96,8 @@ fun CommentCard(
                         text = displayName,
                         color = MaterialTheme.colorScheme.secondary,
                         style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier =
                             Modifier.clickable(enabled = profileId != null) { onProfileClick() },
                     )
@@ -81,6 +105,8 @@ fun CommentCard(
                         Text(
                             text = ("@" + comment.user?.username.orEmpty()),
                             style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -88,13 +114,55 @@ fun CommentCard(
                 comment.user?.let { UserStatus(user = it) }
 
                 // "Me" Tag
-                if (comment.user?.id == user.user?.id) {
+                if (currentUserId != null && comment.user?.id == currentUserId) {
                     Surface(shape = RoundedCornerShape(4.dp), tonalElevation = 4.dp) {
                         Text(
                             text = "我",
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp),
                         )
+                    }
+                }
+
+                // 本人鉴权通过且非离线回退时展示操作菜单
+                if (canReply && canEditOrDelete && onEdit != null && onDelete != null) {
+                    var menuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.MoreVert,
+                                contentDescription = stringResource(R.string.comment_action_more),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.comment_action_edit)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEdit(comment)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Edit, contentDescription = null)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.comment_action_delete)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onDelete(comment)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -126,12 +194,15 @@ fun CommentCard(
                     }
                 }
 
-                if (comment.parent == null) {
+                if (canReply) {
                     TextButton(
                         onClick = { onReply(comment) },
                         contentPadding = PaddingValues(4.dp),
                     ) {
-                        Text(text = "回复", style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            text = stringResource(R.string.comment_reply),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
                     }
                 }
             }

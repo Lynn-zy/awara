@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -20,11 +21,14 @@ import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.param.FilterAndSort
 import me.rerere.awara.ui.component.iwara.param.sort.MediaSortOptions
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.page.index.IndexVM
 
 @Composable
 fun IndexImagePage(vm: IndexVM) {
     val state = vm.state
+    val gridState = rememberLazyStaggeredGridState()
+    PageScrollEffect(state.imageLoadedPage) { gridState.scrollToItem(0) }
     Column {
         SwipeRefresh(
             state =
@@ -41,6 +45,7 @@ fun IndexImagePage(vm: IndexVM) {
                 onErrorRetry = { vm.loadImageList(force = true) },
             ) {
                 LazyVerticalStaggeredGrid(
+                    state = gridState,
                     columns = DynamicStaggeredGridCells(150.dp, 2, 4),
                     contentPadding = PaddingValues(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

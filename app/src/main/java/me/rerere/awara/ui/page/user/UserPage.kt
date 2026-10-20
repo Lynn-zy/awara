@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -93,6 +94,7 @@ import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.component.iwara.UserStatus
 import me.rerere.awara.ui.component.iwara.comment.CommentList
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.openUrl
@@ -405,6 +407,12 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                                         onBack = { vm.popComment() },
                                         onPush = { vm.pushComment(it) },
                                         onPostReply = { vm.postComment(it) },
+                                        onEditComment = { id, content ->
+                                            vm.editComment(id, content)
+                                        },
+                                        onDeleteComment = { id -> vm.deleteComment(id) },
+                                        canPostReply = true,
+                                        isLocalFallback = false,
                                     )
                                 }
                             }
@@ -714,19 +722,28 @@ private fun UserCard(
 
 @Composable
 private fun VideoPage(vm: UserVM) {
+    val gridState = rememberLazyStaggeredGridState()
+    // 仅在成功加载新页码数据后才触发列表回顶，避免旧内容过早回顶
+    PageScrollEffect(vm.state.videoLoadedPage) { gridState.scrollToItem(0) }
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (vm.state.videoList.isEmpty()) {
-                EmptyStatus()
-            } else {
-                LazyVerticalStaggeredGrid(
-                    columns = DynamicStaggeredGridCells(150.dp, 2, 4),
-                    modifier = Modifier.fillMaxSize(),
-                    verticalItemSpacing = 8.dp,
-                    contentPadding = PaddingValues(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(vm.state.videoList) { MediaCard(media = it) }
+            Spin(
+                modifier = Modifier.fillMaxSize(),
+                show = vm.state.videoLoading && vm.state.videoList.isEmpty(),
+            ) {
+                if (vm.state.videoList.isEmpty() && !vm.state.videoLoading) {
+                    EmptyStatus()
+                } else if (vm.state.videoList.isNotEmpty()) {
+                    LazyVerticalStaggeredGrid(
+                        state = gridState,
+                        columns = DynamicStaggeredGridCells(150.dp, 2, 4),
+                        modifier = Modifier.fillMaxSize(),
+                        verticalItemSpacing = 8.dp,
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(vm.state.videoList) { MediaCard(media = it) }
+                    }
                 }
             }
         }
@@ -742,19 +759,28 @@ private fun VideoPage(vm: UserVM) {
 
 @Composable
 private fun ImagePage(vm: UserVM) {
+    val gridState = rememberLazyStaggeredGridState()
+    // 仅在成功加载新页码数据后才触发列表回顶，避免旧内容过早回顶
+    PageScrollEffect(vm.state.imageLoadedPage) { gridState.scrollToItem(0) }
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (vm.state.imageList.isEmpty()) {
-                EmptyStatus()
-            } else {
-                LazyVerticalStaggeredGrid(
-                    columns = DynamicStaggeredGridCells(150.dp, 2, 4),
-                    modifier = Modifier.fillMaxSize(),
-                    verticalItemSpacing = 8.dp,
-                    contentPadding = PaddingValues(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(vm.state.imageList) { MediaCard(media = it) }
+            Spin(
+                modifier = Modifier.fillMaxSize(),
+                show = vm.state.imageLoading && vm.state.imageList.isEmpty(),
+            ) {
+                if (vm.state.imageList.isEmpty() && !vm.state.imageLoading) {
+                    EmptyStatus()
+                } else if (vm.state.imageList.isNotEmpty()) {
+                    LazyVerticalStaggeredGrid(
+                        state = gridState,
+                        columns = DynamicStaggeredGridCells(150.dp, 2, 4),
+                        modifier = Modifier.fillMaxSize(),
+                        verticalItemSpacing = 8.dp,
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(vm.state.imageList) { MediaCard(media = it) }
+                    }
                 }
             }
         }

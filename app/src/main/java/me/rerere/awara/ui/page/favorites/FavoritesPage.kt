@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,7 @@ import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.ext.onlyBottom
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -49,6 +51,10 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
     val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val pagerState = rememberPagerState()
     val scope = rememberCoroutineScope()
+    val videoGridState = rememberLazyStaggeredGridState()
+    val imageGridState = rememberLazyStaggeredGridState()
+    PageScrollEffect(vm.state.videoLoadedPage) { videoGridState.scrollToItem(0) }
+    PageScrollEffect(vm.state.imageLoadedPage) { imageGridState.scrollToItem(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -126,6 +132,7 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                         }
                                     } else {
                                         LazyVerticalStaggeredGrid(
+                                            state = videoGridState,
                                             columns = DynamicStaggeredGridCells(),
                                             contentPadding = PaddingValues(8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -195,6 +202,7 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                         }
                                     } else {
                                         LazyVerticalStaggeredGrid(
+                                            state = imageGridState,
                                             columns = DynamicStaggeredGridCells(),
                                             contentPadding = PaddingValues(8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.material.icons.outlined.Fullscreen
@@ -43,15 +44,18 @@ import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -96,6 +100,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
+import me.rerere.awara.data.SearchCategory
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.ui.LocalMessageProvider
@@ -129,6 +134,8 @@ fun DownloadPage(
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
     val router = LocalRouterProvider.current
+    // 独立作者根目录和内层视频列表的状态，避免共用同一个 LazyListState 导致 attach 错误
+    val rootListState = rememberLazyListState()
     val videoListState = rememberLazyListState()
     var pendingFocusId by rememberSaveable { mutableStateOf<Int?>(null) }
     var highlightedId by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -162,15 +169,23 @@ fun DownloadPage(
 
     var showSortMenu by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchCategory by rememberSaveable { mutableStateOf(SearchCategory.TITLE) }
+    var previousSearchCategory by rememberSaveable { mutableStateOf(searchCategory) }
 
+    val filteredItems =
+        remember(downloadedItems, searchQuery, searchCategory) {
+            filterDownloadedItems(downloadedItems, searchQuery, searchCategory)
+        }
     val sortedItems =
-        remember(downloadedItems, sortKey, sortAscending) {
-            sortDownloadedItems(downloadedItems, sortKey, sortAscending)
+        remember(filteredItems, sortKey, sortAscending) {
+            sortDownloadedItems(filteredItems, sortKey, sortAscending)
         }
     val authorGroups =
-        remember(downloadedItems, sortKey, sortAscending, groupByAuthors) {
+        remember(filteredItems, sortKey, sortAscending, groupByAuthors) {
             if (groupByAuthors) {
-                groupDownloadedItemsByAuthor(downloadedItems, sortKey, sortAscending)
+                groupDownloadedItemsByAuthor(filteredItems, sortKey, sortAscending)
             } else {
                 emptyList()
             }
@@ -179,6 +194,18 @@ fun DownloadPage(
         remember(authorGroups, selectedAuthorId) {
             authorGroups.firstOrNull { it.authorId == selectedAuthorId }
         }
+
+    // 搜索类别变化时，若在作者分类根目录则将作者根列表回顶，否则将视频列表回顶
+    LaunchedEffect(searchCategory) {
+        if (searchCategory == previousSearchCategory) return@LaunchedEffect
+        previousSearchCategory = searchCategory
+        if (pendingFocusId != null || focusResourceId != null) return@LaunchedEffect
+        if (groupByAuthors && selectedAuthorId == null) {
+            rootListState.scrollToItem(0)
+        } else {
+            videoListState.scrollToItem(0)
+        }
+    }
 
     // 当前视图可见的视频列表
     val visibleItems =
@@ -206,32 +233,48 @@ fun DownloadPage(
         val target = downloadedItems.firstOrNull { it.resourceId == resourceId }
         if (target == null) {
             message.warning { Text(stringResource(R.string.download_focus_missing)) }
+            // 目标缺失时通知已处理
+            onFocusHandled()
         } else {
+            // 下载通知 focus 命中时清空 searchOpen、searchQuery 并重置分类为默认标题，保证目标可被检索可见
+            searchOpen = false
+            searchQuery = ""
+            searchCategory = SearchCategory.TITLE
             selectedIds = emptySet()
             selectedAuthorId = if (groupByAuthors) target.authorId.trim() else null
             pendingFocusId = target.id
+            // 首次 LaunchedEffect 不在此处过早调用 onFocusHandled()，交由后续滚动定位完成后回调
         }
-        onFocusHandled()
     }
 
-    LaunchedEffect(pendingFocusId, visibleItems) {
+    LaunchedEffect(pendingFocusId, visibleItems, selectedAuthorId, groupByAuthors) {
         val targetId = pendingFocusId ?: return@LaunchedEffect
+        // 等待目标作者目录列表挂载且布局包含目标 item 后，执行 scroll + highlight 再 onFocusHandled
         val index = visibleItems.indexOfFirst { it.id == targetId }
         if (index >= 0) {
             videoListState.scrollToItem(index)
             highlightedId = targetId
             pendingFocusId = null
+            onFocusHandled()
         }
     }
 
-    LaunchedEffect(videoListState.isScrollInProgress) {
-        if (videoListState.isScrollInProgress) highlightedId = null
-    }
-
-    LaunchedEffect(visibleVideoIds, vm.state.uiState, selectedAuthorId) {
+    LaunchedEffect(
+        visibleVideoIds,
+        vm.state.uiState,
+        selectedAuthorId,
+        selectedGroup,
+        pendingFocusId,
+    ) {
         if (vm.state.uiState == UiState.Success || vm.state.uiState == UiState.Empty) {
             selectedIds = selectedIds.intersect(visibleVideoIds)
-            if (groupByAuthors && selectedAuthorId != null && selectedGroup == null) {
+            // pendingFocusId 期间 guard 不能重置作者目录，避免目标作者尚未渲染完毕时被误重置回根目录
+            if (
+                pendingFocusId == null &&
+                    groupByAuthors &&
+                    selectedAuthorId != null &&
+                    selectedGroup == null
+            ) {
                 selectedAuthorId = null
             }
         }
@@ -310,10 +353,17 @@ fun DownloadPage(
 
     BackHandler(fullscreen) { exitFullScreen() }
 
-    // 多选模式下按返回键优先退出选择，不退出作者目录或页面
+    // 多选模式下按返回键优先退出选择，不退出作者目录或页面，也不破坏搜索
     BackHandler(!fullscreen && isSelectionMode) { selectedIds = emptySet() }
 
-    BackHandler(!fullscreen && !isSelectionMode && selectedAuthorId != null) {
+    // 搜索打开且非多选时按返回键先关闭搜索并恢复默认分类
+    BackHandler(!fullscreen && !isSelectionMode && searchOpen) {
+        searchOpen = false
+        searchQuery = ""
+        searchCategory = SearchCategory.TITLE
+    }
+
+    BackHandler(!fullscreen && !isSelectionMode && !searchOpen && selectedAuthorId != null) {
         selectedAuthorId = null
     }
 
@@ -542,6 +592,22 @@ fun DownloadPage(
                                 )
                             }
                         } else {
+                            IconButton(
+                                onClick = {
+                                    searchOpen = !searchOpen
+                                    if (!searchOpen) {
+                                        searchQuery = ""
+                                        searchCategory = SearchCategory.TITLE
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector =
+                                        if (searchOpen) Icons.Outlined.Close
+                                        else Icons.Outlined.Search,
+                                    contentDescription = stringResource(R.string.search),
+                                )
+                            }
                             Box {
                                 IconButton(onClick = { showSortMenu = !showSortMenu }) {
                                     Icon(
@@ -635,77 +701,191 @@ fun DownloadPage(
                 )
             }
         ) { innerPadding ->
-            UiStateBox(
-                modifier = Modifier.padding(innerPadding).fillMaxSize(),
-                state = vm.state.uiState,
-                emptyStatus = {
-                    val composition by
-                        rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.coffee))
-                    val progress by
-                        animateLottieCompositionAsState(
-                            composition = composition,
-                            iterations = LottieConstants.IterateForever,
-                        )
-                    Column(
-                        modifier = Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally,
+            Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+                // 搜索框独立一行，放置在 topbar 下方，避免在 topbar title 内过窄；不在多选模式展示以防破坏选择
+                if (searchOpen && !isSelectionMode) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        singleLine = true,
+                        placeholder = {
+                            val hint =
+                                if (searchCategory == SearchCategory.AUTHOR)
+                                    stringResource(R.string.search_author_hint)
+                                else stringResource(R.string.download_search_hint)
+                            Text(hint)
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(
+                                        Icons.Outlined.Close,
+                                        contentDescription = stringResource(R.string.cancel),
+                                    )
+                                }
+                            }
+                        },
+                    )
+                    // 紧凑分段选择：标题与作者分类切换，保留输入词
+                    Row(
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        LottieAnimation(
-                            composition = composition,
-                            progress = { progress },
-                            modifier = Modifier.size(200.dp),
-                            contentScale = ContentScale.Crop,
+                        FilterChip(
+                            selected = searchCategory == SearchCategory.TITLE,
+                            onClick = {
+                                if (searchCategory != SearchCategory.TITLE) {
+                                    searchCategory = SearchCategory.TITLE
+                                }
+                            },
+                            label = { Text(stringResource(R.string.search_category_title)) },
                         )
-                        Text(
-                            text =
-                                if (selectedAuthorId != null) {
-                                    stringResource(R.string.download_folder_empty)
-                                } else {
-                                    stringResource(R.string.download_empty)
-                                },
-                            style = MaterialTheme.typography.titleLarge,
+                        FilterChip(
+                            selected = searchCategory == SearchCategory.AUTHOR,
+                            onClick = {
+                                if (searchCategory != SearchCategory.AUTHOR) {
+                                    searchCategory = SearchCategory.AUTHOR
+                                }
+                            },
+                            label = { Text(stringResource(R.string.search_category_author)) },
                         )
                     }
-                },
-                onErrorRetry = vm::loadDownloadedItems,
-            ) {
-                if (groupByAuthors && selectedAuthorId == null) {
-                    LazyColumn(
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(
-                            items = authorGroups,
-                            key = { group -> "author_folder_${group.groupKey}" },
-                            contentType = { "author_folder" },
-                        ) { group ->
-                            AuthorFolderRow(
-                                group = group,
-                                onClick = {
-                                    selectedAuthorId = group.authorId
-                                    selectedIds = emptySet()
-                                },
-                                onAuthorClick = {
-                                    if (group.authorId.isNotBlank()) {
-                                        router.navigate("user/${Uri.encode(group.authorId)}")
-                                    }
-                                },
+                }
+
+                UiStateBox(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    state = vm.state.uiState,
+                    emptyStatus = {
+                        val composition by
+                            rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.coffee))
+                        val progress by
+                            animateLottieCompositionAsState(
+                                composition = composition,
+                                iterations = LottieConstants.IterateForever,
+                            )
+                        Column(
+                            modifier = Modifier.align(Alignment.Center),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            LottieAnimation(
+                                composition = composition,
+                                progress = { progress },
+                                modifier = Modifier.size(200.dp),
+                                contentScale = ContentScale.Crop,
+                            )
+                            Text(
+                                text =
+                                    if (selectedAuthorId != null) {
+                                        stringResource(R.string.download_folder_empty)
+                                    } else {
+                                        stringResource(R.string.download_empty)
+                                    },
+                                style = MaterialTheme.typography.titleLarge,
                             )
                         }
-                    }
-                } else if (groupByAuthors && selectedAuthorId != null) {
-                    val folderItems = selectedGroup?.items.orEmpty()
-                    if (folderItems.isEmpty()) {
+                    },
+                    onErrorRetry = vm::loadDownloadedItems,
+                ) {
+                    // 明确无结果空状态：当搜索词不为空且过滤后没有结果时展示
+                    if (searchQuery.isNotBlank() && filteredItems.isEmpty()) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(
-                                text = stringResource(R.string.download_folder_empty),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Search,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(56.dp),
+                                    tint =
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                                            alpha = 0.5f
+                                        ),
+                                )
+                                Text(
+                                    text = stringResource(R.string.list_search_empty),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else if (groupByAuthors && selectedAuthorId == null) {
+                        LazyColumn(
+                            state = rootListState,
+                            contentPadding = PaddingValues(vertical = 8.dp),
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            items(
+                                items = authorGroups,
+                                key = { group -> "author_folder_${group.groupKey}" },
+                                contentType = { "author_folder" },
+                            ) { group ->
+                                AuthorFolderRow(
+                                    group = group,
+                                    onClick = {
+                                        selectedAuthorId = group.authorId
+                                        selectedIds = emptySet()
+                                    },
+                                    onAuthorClick = {
+                                        if (group.authorId.isNotBlank()) {
+                                            router.navigate("user/${Uri.encode(group.authorId)}")
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    } else if (groupByAuthors && selectedAuthorId != null) {
+                        val folderItems = selectedGroup?.items.orEmpty()
+                        if (folderItems.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.download_folder_empty),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                state = videoListState,
+                                contentPadding = PaddingValues(vertical = 8.dp),
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                items(
+                                    items = folderItems,
+                                    key = { item -> item.id },
+                                    contentType = { "download_item" },
+                                ) { item ->
+                                    DownloadItemRow(
+                                        item = item,
+                                        isSelectionMode = isSelectionMode,
+                                        isSelected = item.id in selectedIds,
+                                        isDeleting = item.id in vm.state.deletingIds,
+                                        isHighlighted = item.id == highlightedId,
+                                        onToggleSelect = {
+                                            selectedIds = toggleSelection(selectedIds, item.id)
+                                        },
+                                        onDelete = { vm.delete(listOf(item)) },
+                                        onClick = { playDownloadedItem(item) },
+                                        onPlayExternal = { playExternal(item) },
+                                        onOpenDetails = {
+                                            router.navigate("video/${Uri.encode(item.resourceId)}")
+                                        },
+                                    )
+                                }
+                            }
                         }
                     } else {
                         LazyColumn(
@@ -715,7 +895,7 @@ fun DownloadPage(
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             items(
-                                items = folderItems,
+                                items = sortedItems,
                                 key = { item -> item.id },
                                 contentType = { "download_item" },
                             ) { item ->
@@ -736,36 +916,6 @@ fun DownloadPage(
                                     },
                                 )
                             }
-                        }
-                    }
-                } else {
-                    LazyColumn(
-                        state = videoListState,
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(
-                            items = sortedItems,
-                            key = { item -> item.id },
-                            contentType = { "download_item" },
-                        ) { item ->
-                            DownloadItemRow(
-                                item = item,
-                                isSelectionMode = isSelectionMode,
-                                isSelected = item.id in selectedIds,
-                                isDeleting = item.id in vm.state.deletingIds,
-                                isHighlighted = item.id == highlightedId,
-                                onToggleSelect = {
-                                    selectedIds = toggleSelection(selectedIds, item.id)
-                                },
-                                onDelete = { vm.delete(listOf(item)) },
-                                onClick = { playDownloadedItem(item) },
-                                onPlayExternal = { playExternal(item) },
-                                onOpenDetails = {
-                                    router.navigate("video/${Uri.encode(item.resourceId)}")
-                                },
-                            )
                         }
                     }
                 }

@@ -28,9 +28,9 @@ interface DownloadTaskDao {
 
     @Query("DELETE FROM download_tasks WHERE taskId = :taskId") suspend fun delete(taskId: String)
 
-    // 原子操作：仅当处于排队或运行中时转为目标状态（用于暂停）
+    // 原子操作：排队、传输或重试等待均可暂停。
     @Query(
-        "UPDATE download_tasks SET status = :newStatus WHERE taskId = :taskId AND (status = 'QUEUED' OR status = 'RUNNING')"
+        "UPDATE download_tasks SET status = :newStatus WHERE taskId = :taskId AND status IN ('QUEUED', 'RUNNING', 'RETRYING')"
     )
     suspend fun updateStatusFromQueuedOrRunning(taskId: String, newStatus: String): Int
 
@@ -77,7 +77,7 @@ interface DownloadTaskDao {
     ): Int
 
     @Query(
-        "UPDATE download_tasks SET downloadedBytes = :downloadedBytes WHERE taskId = :taskId AND workId = :workId AND status IN ('PAUSED', 'FAILED', 'CANCELLING')"
+        "UPDATE download_tasks SET downloadedBytes = :downloadedBytes WHERE taskId = :taskId AND workId = :workId AND status IN ('PAUSED', 'FAILED', 'CANCELLING', 'RETRYING')"
     )
     suspend fun updateSettledBytes(taskId: String, workId: String, downloadedBytes: Long): Int
 
@@ -105,7 +105,33 @@ interface DownloadTaskDao {
     ): Int
 
     @Query(
-        "UPDATE download_tasks SET url = :url, status = :status, workId = :workId, error = null, downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, validator = :validator WHERE taskId = :taskId AND workId = :previousWorkId AND status IN ('PAUSED', 'FAILED')"
+        "UPDATE download_tasks SET status = 'RETRYING', retryCount = :retryCount, destinationUri = :destinationUri, error = :error WHERE taskId = :taskId AND workId = :workId AND (status = 'RUNNING' OR status = 'SAVING')"
+    )
+    suspend fun markRetrying(
+        taskId: String,
+        workId: String,
+        retryCount: Int,
+        destinationUri: String,
+        error: String?,
+    ): Int
+
+    @Query(
+        "UPDATE download_tasks SET retryCount = :retryCount, error = :error WHERE taskId = :taskId AND workId = :workId AND status = 'RETRYING'"
+    )
+    suspend fun updateRetryCount(
+        taskId: String,
+        workId: String,
+        retryCount: Int,
+        error: String?,
+    ): Int
+
+    @Query(
+        "UPDATE download_tasks SET status = 'FAILED', error = :error WHERE taskId = :taskId AND workId = :workId AND status = 'RETRYING'"
+    )
+    suspend fun failRetryingTask(taskId: String, workId: String, error: String?): Int
+
+    @Query(
+        "UPDATE download_tasks SET url = :url, status = :status, workId = :workId, error = null, retryCount = :retryCount, downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, validator = :validator WHERE taskId = :taskId AND workId = :previousWorkId AND status = :expectedStatus"
     )
     suspend fun updateResumeInfo(
         taskId: String,
@@ -113,13 +139,35 @@ interface DownloadTaskDao {
         status: String,
         workId: String,
         previousWorkId: String,
+        expectedStatus: String,
         downloadedBytes: Long,
         totalBytes: Long,
         validator: String?,
+        retryCount: Int,
     ): Int
 
     @Query("UPDATE download_tasks SET error = :error WHERE taskId = :taskId")
     suspend fun updateError(taskId: String, error: String?): Int
+
+    @Query(
+        "UPDATE download_tasks SET error = :error WHERE taskId = :taskId AND workId = :workId AND status = :status"
+    )
+    suspend fun updateResumeError(
+        taskId: String,
+        workId: String,
+        status: String,
+        error: String,
+    ): Int
+
+    @Query(
+        "UPDATE download_tasks SET status = 'RETRYING', workId = :previousWorkId, error = :error WHERE taskId = :taskId AND workId = :scheduledWorkId AND status = 'QUEUED'"
+    )
+    suspend fun restoreRetryScheduling(
+        taskId: String,
+        scheduledWorkId: String,
+        previousWorkId: String,
+        error: String,
+    ): Int
 
     // 重置保存中断任务为 FAILED，支持更新/保留目标 URI
     @Query(

@@ -212,7 +212,8 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                 remember(vm.state.tasks) {
                     vm.state.tasks.count {
                         it.status == DownloadTaskStatus.QUEUED ||
-                            it.status == DownloadTaskStatus.RUNNING
+                            it.status == DownloadTaskStatus.RUNNING ||
+                            it.status == DownloadTaskStatus.RETRYING
                     }
                 }
             val resumableCount =
@@ -384,6 +385,9 @@ private fun DownloadTaskCard(
                 DownloadTaskStatus.SAVING ->
                     stringResource(R.string.download_task_saving) to
                         MaterialTheme.colorScheme.tertiary
+                DownloadTaskStatus.RETRYING ->
+                    stringResource(R.string.download_task_retrying) to
+                        MaterialTheme.colorScheme.secondary
                 DownloadTaskStatus.FAILED ->
                     stringResource(R.string.download_task_failed) to MaterialTheme.colorScheme.error
                 DownloadTaskStatus.CANCELLING ->
@@ -462,7 +466,7 @@ private fun DownloadTaskCard(
                     )
                 }
 
-                if (!task.error.isNullOrBlank()) {
+                if (!task.error.isNullOrBlank() && task.status != DownloadTaskStatus.RETRYING) {
                     Text(
                         text = task.error,
                         maxLines = 2,
@@ -497,6 +501,7 @@ private fun DownloadTaskCard(
                     }
                     DownloadTaskStatus.QUEUED,
                     DownloadTaskStatus.SAVING,
+                    DownloadTaskStatus.RETRYING,
                     DownloadTaskStatus.CANCELLING -> {
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth(),
@@ -527,6 +532,7 @@ private fun DownloadTaskCard(
                 ) {
                     when (task.status) {
                         DownloadTaskStatus.RUNNING,
+                        DownloadTaskStatus.RETRYING,
                         DownloadTaskStatus.QUEUED -> {
                             TextButton(
                                 onClick = onPause,

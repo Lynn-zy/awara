@@ -44,12 +44,13 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
         } else if (friendsJob?.isActive == true) {
             return null
         }
+        val requestedPage = state.friendsPage
         val previousState = state.friendsUiState
         val deferred =
             viewModelScope.async {
                 state = state.copy(friendsUiState = UiState.Loading)
                 var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching { userRepo.getUserFriends(userId, state.friendsPage - 1) }
+                runAPICatching { userRepo.getUserFriends(userId, requestedPage - 1) }
                     .onSuccess {
                         outcome = RefreshResult.Success
                         state =
@@ -58,6 +59,7 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
                                     if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
                                 friendsData = it.results,
                                 friendsCount = it.count,
+                                friendsLoadedPage = requestedPage,
                             )
                     }
                     .onError {
@@ -112,12 +114,13 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
         } else if (requestsJob?.isActive == true) {
             return null
         }
+        val requestedPage = state.requestsPage
         val previousState = state.requestsUiState
         val deferred =
             viewModelScope.async {
                 state = state.copy(requestsUiState = UiState.Loading)
                 var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching { userRepo.getFriendRequests(userId, state.requestsPage - 1) }
+                runAPICatching { userRepo.getFriendRequests(userId, requestedPage - 1) }
                     .onSuccess {
                         outcome = RefreshResult.Success
                         state =
@@ -126,6 +129,7 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
                                     if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
                                 requestsData = it.results,
                                 requestsCount = it.count,
+                                requestsLoadedPage = requestedPage,
                             )
                     }
                     .onError {
@@ -210,10 +214,14 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
     data class FriendsState(
         val friendsUiState: UiState = UiState.Initial,
         val friendsPage: Int = 1,
+        /** 记录已成功渲染的好友页码，仅在数据更新时触发回顶。 */
+        val friendsLoadedPage: Int? = null,
         val friendsCount: Int = 0,
         val friendsData: List<User> = emptyList(),
         val requestsUiState: UiState = UiState.Initial,
         val requestsPage: Int = 1,
+        /** 记录已成功渲染的好友请求页码，仅在数据更新时触发回顶。 */
+        val requestsLoadedPage: Int? = null,
         val requestsCount: Int = 0,
         val requestsData: List<FriendRequestDto> = emptyList(),
         val loadingFriendChange: Boolean = false,

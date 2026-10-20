@@ -64,4 +64,12 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
 
     /** 通知页通过仓库读取，避免在界面层暴露 Retrofit。 */
     suspend fun getNotifications(userId: String) = iwaraAPI.getNotifications(userId)
+
+    suspend fun markNotificationAsRead(notificationId: String) {
+        check(iwaraAPI.markNotificationAsRead(notificationId).isSuccessful) { "标记通知已读失败" }
+    }
+
+    suspend fun markAllNotificationsAsRead() {
+        check(iwaraAPI.markAllNotificationsAsRead().isSuccessful) { "全部标记已读失败" }
+    }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Card
@@ -53,6 +54,7 @@ import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.UserCard
 import me.rerere.awara.ui.component.iwara.UserStatus
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.toLocalDateTimeString
@@ -80,6 +82,10 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
         Column(modifier = Modifier.padding(innerPadding.excludeBottom()).fillMaxSize()) {
             val pagerState = rememberPagerState()
             val scope = rememberCoroutineScope()
+            val friendsGridState = rememberLazyStaggeredGridState()
+            val requestsGridState = rememberLazyStaggeredGridState()
+            PageScrollEffect(vm.state.friendsLoadedPage) { friendsGridState.scrollToItem(0) }
+            PageScrollEffect(vm.state.requestsLoadedPage) { requestsGridState.scrollToItem(0) }
             if (vm.self) {
                 BetterTabBar(selectedTabIndex = pagerState.currentPage) {
                     Tab(
@@ -121,6 +127,7 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
                                     onErrorRetry = { vm.loadFriends(force = true) },
                                 ) {
                                     LazyVerticalStaggeredGrid(
+                                        state = friendsGridState,
                                         columns = DynamicStaggeredGridCells(),
                                         contentPadding = PaddingValues(8.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -166,6 +173,7 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
                                         onErrorRetry = { vm.loadRequests(force = true) },
                                     ) {
                                         LazyVerticalStaggeredGrid(
+                                            state = requestsGridState,
                                             columns =
                                                 DynamicStaggeredGridCells(
                                                     minSize = 300.dp,

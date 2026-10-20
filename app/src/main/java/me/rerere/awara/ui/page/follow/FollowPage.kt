@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Scaffold
@@ -36,6 +37,7 @@ import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.ext.onlyBottom
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.UserCard
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -44,6 +46,10 @@ fun FollowPage(vm: FollowVM = koinViewModel()) {
     val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val pagerState = rememberPagerState()
     val scope = rememberCoroutineScope()
+    val followingGridState = rememberLazyStaggeredGridState()
+    val followerGridState = rememberLazyStaggeredGridState()
+    PageScrollEffect(vm.state.followingLoadedPage) { followingGridState.scrollToItem(0) }
+    PageScrollEffect(vm.state.followerLoadedPage) { followerGridState.scrollToItem(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -100,6 +106,7 @@ fun FollowPage(vm: FollowVM = koinViewModel()) {
                                     onErrorRetry = { vm.loadFollowing(force = true) },
                                 ) {
                                     LazyVerticalStaggeredGrid(
+                                        state = followingGridState,
                                         columns = DynamicStaggeredGridCells(),
                                         contentPadding = PaddingValues(8.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -146,6 +153,7 @@ fun FollowPage(vm: FollowVM = koinViewModel()) {
                                     onErrorRetry = { vm.loadFollower(force = true) },
                                 ) {
                                     LazyVerticalStaggeredGrid(
+                                        state = followerGridState,
                                         columns = DynamicStaggeredGridCells(),
                                         contentPadding = PaddingValues(8.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),

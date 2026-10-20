@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import me.rerere.awara.data.SearchCategory
 import me.rerere.awara.data.entity.DownloadItem
 
 const val PREFERENCE_KEY_DOWNLOAD_SORT = "setting.download_sort"
@@ -90,6 +91,30 @@ fun sortDownloadedItems(
             DownloadSortMode.SIZE -> getSizeComparator(ascending)
         }
     return items.sortedWith(comparator)
+}
+
+/**
+ * 按类别（标题或作者）过滤已下载记录，避免每项创建临时 List。
+ * - 标题模式 [SearchCategory.TITLE]：仅匹配 [DownloadItem.title]，不匹配作者与资源 ID
+ * - 作者模式 [SearchCategory.AUTHOR]：仅匹配 [DownloadItem.authorName] 或 [DownloadItem.authorId]，不匹配资源
+ *   ID，不做跨类别合并
+ */
+fun filterDownloadedItems(
+    items: List<DownloadItem>,
+    query: String,
+    category: SearchCategory = SearchCategory.TITLE,
+): List<DownloadItem> {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return items
+    return when (category) {
+        SearchCategory.TITLE ->
+            items.filter { item -> item.title.contains(normalizedQuery, ignoreCase = true) }
+        SearchCategory.AUTHOR ->
+            items.filter { item ->
+                item.authorName.contains(normalizedQuery, ignoreCase = true) ||
+                    item.authorId.contains(normalizedQuery, ignoreCase = true)
+            }
+    }
 }
 
 fun sortDownloadedItems(

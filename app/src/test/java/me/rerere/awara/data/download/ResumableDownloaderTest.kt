@@ -73,6 +73,53 @@ class ResumableDownloaderTest {
     }
 
     @Test
+    fun countsNewBytesWhenServerResetsALargerPartialFile() =
+        runBlocking<Unit> {
+            val file =
+                tempFolder.newFile("reset-progress.part").apply { writeText("OLD_PARTIAL_DATA") }
+            var receivedBytes = 0L
+            server.enqueue(MockResponse().setResponseCode(200).setBody("NEW"))
+
+            downloader.download(
+                url = server.url("/video.mp4").toString(),
+                targetFile = file,
+                validator = "\"old-etag\"",
+                onBytesDownloaded = { receivedBytes += it },
+                onProgress = { _, _ -> },
+            )
+
+            assertEquals(3L, receivedBytes)
+            assertEquals("NEW", file.readText())
+            assertTrue(decideDownloadRetry(true, receivedBytes > 0L, 3).shouldRetry)
+        }
+
+    @Test
+    fun completedOverlapVerificationDoesNotCountAsNewBytes() =
+        runBlocking<Unit> {
+            val file = tempFolder.newFile("overlap-progress.part").apply { writeText("ABC") }
+            var receivedBytes = 0L
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(206)
+                    .setHeader("Content-Range", "bytes 0-2/3")
+                    .setHeader("ETag", "\"same-etag\"")
+                    .setBody("ABC")
+            )
+
+            downloader.download(
+                url = server.url("/video.mp4").toString(),
+                targetFile = file,
+                validator = "\"same-etag\"",
+                expectedTotalBytes = 3L,
+                onBytesDownloaded = { receivedBytes += it },
+                onProgress = { _, _ -> },
+            )
+
+            assertEquals(0L, receivedBytes)
+            assertFalse(decideDownloadRetry(true, receivedBytes > 0L, 3).shouldRetry)
+        }
+
+    @Test
     fun download200FallbackResetsPrefixInsteadOfAppending() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("test.part").apply { writeText("ABC") }

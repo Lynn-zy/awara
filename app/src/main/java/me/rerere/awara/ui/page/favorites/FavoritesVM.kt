@@ -51,6 +51,7 @@ class FavoritesVM(private val mediaRepo: MediaRepo) : ViewModel() {
         } else if (videoJob?.isActive == true) {
             return null
         }
+        val requestedPage = state.videoPage
         val oldError = state.videoError
         val oldList = state.videoList
         val oldCount = state.videoCount
@@ -59,13 +60,14 @@ class FavoritesVM(private val mediaRepo: MediaRepo) : ViewModel() {
                 state = state.copy(videoLoading = true, videoError = null)
                 var outcome: RefreshResult = RefreshResult.Success
                 try {
-                    runAPICatching { mediaRepo.getFavoriteVideos(state.videoPage - 1) }
+                    runAPICatching { mediaRepo.getFavoriteVideos(requestedPage - 1) }
                         .onSuccess {
                             state =
                                 state.copy(
                                     videoCount = it.count,
                                     videoList = it.results,
                                     videoError = null,
+                                    videoLoadedPage = requestedPage,
                                 )
                             outcome = RefreshResult.Success
                         }
@@ -118,6 +120,7 @@ class FavoritesVM(private val mediaRepo: MediaRepo) : ViewModel() {
         } else if (imageJob?.isActive == true) {
             return null
         }
+        val requestedPage = state.imagePage
         val oldError = state.imageError
         val oldList = state.imageList
         val oldCount = state.imageCount
@@ -126,13 +129,14 @@ class FavoritesVM(private val mediaRepo: MediaRepo) : ViewModel() {
                 state = state.copy(imageLoading = true, imageError = null)
                 var outcome: RefreshResult = RefreshResult.Success
                 try {
-                    runAPICatching { mediaRepo.getFavoriteImages(state.imagePage - 1) }
+                    runAPICatching { mediaRepo.getFavoriteImages(requestedPage - 1) }
                         .onSuccess {
                             state =
                                 state.copy(
                                     imageCount = it.count,
                                     imageList = it.results,
                                     imageError = null,
+                                    imageLoadedPage = requestedPage,
                                 )
                             outcome = RefreshResult.Success
                         }
@@ -182,11 +186,15 @@ class FavoritesVM(private val mediaRepo: MediaRepo) : ViewModel() {
         val videoLoading: Boolean = false,
         val videoError: String? = null,
         val videoPage: Int = 1,
+        /** 记录已成功渲染的视频页码，仅在数据更新时触发回顶。 */
+        val videoLoadedPage: Int? = null,
         val videoCount: Int = 0,
         val videoList: List<FavoriteVideo> = emptyList(),
         val imageLoading: Boolean = false,
         val imageError: String? = null,
         val imagePage: Int = 1,
+        /** 记录已成功渲染的图片页码，仅在数据更新时触发回顶。 */
+        val imageLoadedPage: Int? = null,
         val imageCount: Int = 0,
         val imageList: List<FavoriteImage> = emptyList(),
     )

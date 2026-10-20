@@ -18,6 +18,7 @@ import me.rerere.awara.data.entity.HistoryItem
 import me.rerere.awara.data.entity.HistoryType
 import me.rerere.awara.data.entity.Image
 import me.rerere.awara.data.entity.thumbnailUrl
+import me.rerere.awara.data.history.HistoryRetention
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.data.source.onError
@@ -138,6 +139,9 @@ class ImageVM(
                                 thumbnail = state.state?.thumbnailUrl() ?: "",
                             )
                         )
+                    HistoryRetention.current().cutoff()?.let { cutoff ->
+                        appDatabase.historyDao().deleteHistoryBefore(cutoff.epochSecond)
+                    }
                 }
                 .onFailure { it.printStackTrace() }
         }

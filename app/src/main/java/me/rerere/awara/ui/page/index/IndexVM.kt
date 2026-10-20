@@ -81,6 +81,7 @@ class IndexVM(
             return null
         }
         val previousState = state.subscriptionState
+        val requestedPage = state.subscriptionPage
         val deferred =
             viewModelScope.async {
                 state = state.copy(subscriptionState = UiState.Loading)
@@ -90,7 +91,7 @@ class IndexVM(
                             mapOf(
                                 "subscribed" to "true",
                                 "limit" to "24",
-                                "page" to (state.subscriptionPage - 1).toString(),
+                                "page" to (requestedPage - 1).toString(),
                             )
                         when (state.subscriptionType) {
                             SubscriptionType.VIDEO -> mediaRepo.getVideoList(param)
@@ -102,6 +103,7 @@ class IndexVM(
                         state =
                             state.copy(
                                 subscriptions = it.results,
+                                subscriptionLoadedPage = requestedPage,
                                 subscriptionTotal = it.count,
                                 subscriptionState =
                                     if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
@@ -199,6 +201,7 @@ class IndexVM(
             return null
         }
         val previousState = state.videoState
+        val requestedPage = state.videoPage
         val deferred =
             viewModelScope.async {
                 state = state.copy(videoState = UiState.Loading)
@@ -207,7 +210,7 @@ class IndexVM(
                         mediaRepo.getVideoList(
                             mapOf(
                                 "limit" to "24",
-                                "page" to (state.videoPage - 1).toString(),
+                                "page" to (requestedPage - 1).toString(),
                                 "sort" to videoSort,
                             ) + videoFilters.toParams()
                         )
@@ -217,6 +220,7 @@ class IndexVM(
                         state =
                             state.copy(
                                 videoList = it.results,
+                                videoLoadedPage = requestedPage,
                                 videoCount = it.count,
                                 videoState =
                                     if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
@@ -273,6 +277,7 @@ class IndexVM(
             return null
         }
         val previousState = state.imageState
+        val requestedPage = state.imagePage
         val deferred =
             viewModelScope.async {
                 state = state.copy(imageState = UiState.Loading)
@@ -281,7 +286,7 @@ class IndexVM(
                         mediaRepo.getImageList(
                             mapOf(
                                 "limit" to "24",
-                                "page" to (state.imagePage - 1).toString(),
+                                "page" to (requestedPage - 1).toString(),
                                 "sort" to imageSort,
                             ) + imageFilters.toParams()
                         )
@@ -291,6 +296,7 @@ class IndexVM(
                         state =
                             state.copy(
                                 imageList = it.results,
+                                imageLoadedPage = requestedPage,
                                 imageCount = it.count,
                                 imageState =
                                     if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
@@ -389,15 +395,18 @@ class IndexVM(
     data class IndexState(
         val subscriptionState: UiState = UiState.Initial,
         val subscriptionPage: Int = 1,
+        val subscriptionLoadedPage: Int? = null,
         val subscriptionTotal: Int = 0,
         val subscriptionType: SubscriptionType = SubscriptionType.VIDEO,
         val subscriptions: List<Media> = emptyList(),
         val videoState: UiState = UiState.Initial,
         val videoPage: Int = 1,
+        val videoLoadedPage: Int? = null,
         val videoCount: Int = 0,
         val videoList: List<Media> = emptyList(),
         val imageState: UiState = UiState.Initial,
         val imagePage: Int = 1,
+        val imageLoadedPage: Int? = null,
         val imageCount: Int = 0,
         val imageList: List<Media> = emptyList(),
         val followingCount: Int = 0,

@@ -10,6 +10,7 @@ import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.dto.Self
 import me.rerere.awara.data.entity.Comment
 import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.entity.CommentUpdateDto
 import me.rerere.awara.data.entity.Conversation
 import me.rerere.awara.data.entity.ConversationCreatedDto
 import me.rerere.awara.data.entity.ConversationCreationDto
@@ -33,6 +34,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 import retrofit2.http.QueryMap
@@ -95,6 +97,24 @@ interface IwaraAPI {
     @POST("/profile/{id}/comments")
     suspend fun postProfileComment(@Path("id") id: String, @Body dto: CommentCreationDto): Comment
 
+    /**
+     * 更新指定评论正文。
+     *
+     * @param id 待修改的评论 ID
+     * @param body 更新请求体，仅包含正文 body
+     * @return 响应结果
+     */
+    @PUT("/comment/{id}")
+    suspend fun updateComment(@Path("id") id: String, @Body body: CommentUpdateDto): Response<Unit>
+
+    /**
+     * 删除指定评论。
+     *
+     * @param id 待删除的评论 ID
+     * @return 响应结果
+     */
+    @DELETE("/comment/{id}") suspend fun deleteComment(@Path("id") id: String): Response<Unit>
+
     @GET("/image/{id}") suspend fun getImage(@Path("id") id: String): Image
 
     @POST("/user/{id}/followers") suspend fun followUser(@Path("id") id: String): Response<Unit>
@@ -128,9 +148,16 @@ interface IwaraAPI {
 
     @GET("/user/counts") suspend fun getNotificationCount(): NotificationCounts
 
-    /** 目标版本仅查询通知，不提供删除或标记已读操作。 */
+    /** 分页查询指定用户的通知列表。 */
     @GET("/user/{userId}/notifications")
     suspend fun getNotifications(@Path("userId") userId: String): Pager<Notification>
+
+    /** 标记单条通知为已读。 */
+    @POST("/notifications/{id}/read")
+    suspend fun markNotificationAsRead(@Path("id") id: String): Response<Unit>
+
+    /** 标记全部通知为已读。 */
+    @POST("/notifications/all/read") suspend fun markAllNotificationsAsRead(): Response<Unit>
 
     @GET("/user/{userId}/followers")
     suspend fun getUserFollowers(

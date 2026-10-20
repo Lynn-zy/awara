@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.room.withTransaction
+import androidx.work.BackoffPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -13,6 +14,7 @@ import androidx.work.workDataOf
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -34,6 +36,7 @@ import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.data.entity.videoQualityRank
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.di.AppDatabase
+import me.rerere.awara.worker.DownloadRetryWorker
 import me.rerere.awara.worker.DownloadWorker
 import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.Call
@@ -89,6 +92,16 @@ class DownloadManager(
                 )
             }
             .getOrDefault(DownloadLaunchPolicy.DEFAULT_AUTO_RESUME)
+    }
+
+    fun isAutomaticRetryEnabled(): Boolean {
+        return runCatching {
+                mmkvPreference.getBoolean(
+                    PREFERENCE_KEY_DOWNLOAD_AUTO_RETRY,
+                    DEFAULT_DOWNLOAD_AUTO_RETRY,
+                )
+            }
+            .getOrDefault(DEFAULT_DOWNLOAD_AUTO_RETRY)
     }
 
     fun grantExecutionAuthorization(taskId: String, workId: String) {
@@ -198,6 +211,7 @@ class DownloadManager(
                                 newStatus = DownloadTaskStatus.FAILED,
                                 error = "入队失败: ${e.message}",
                             )
+                        DownloadNotifications.showFailureNotification(context, taskId, task.title)
                         throw e
                     }
                 }
@@ -235,10 +249,16 @@ class DownloadManager(
 
                 withContext(NonCancellable) {
                     // 先取消活跃连接以阻断网络传输，再等待传输锁释放
+                    launchPolicy.revokeAuthorization(taskId)
                     cancelActiveCall(taskId)
                     DownloadNotifications.cancelTaskNotification(context, taskId)
                     WorkManager.getInstance(context)
                         .cancelUniqueWork("download_$taskId")
+                        .result
+                        .await()
+
+                    WorkManager.getInstance(context)
+                        .cancelUniqueWork("download_retry_$taskId")
                         .result
                         .await()
 
@@ -253,53 +273,53 @@ class DownloadManager(
             }
         }
 
-    suspend fun resume(taskId: String) =
+    suspend fun resume(taskId: String, expectedRetryWorkId: String? = null) =
         withContext(Dispatchers.IO) {
-            val cmdMutex = getCommandMutex(taskId)
-            cmdMutex.withLock {
-                val task =
-                    database.downloadTaskDao().getTask(taskId)
-                        ?: throw IllegalStateException("任务不存在")
+            val task =
+                database.downloadTaskDao().getTask(taskId) ?: throw IllegalStateException("任务不存在")
+            if (
+                expectedRetryWorkId != null &&
+                    (task.status != DownloadTaskStatus.RETRYING ||
+                        task.workId != expectedRetryWorkId)
+            )
+                return@withContext
 
-                if (
-                    task.status != DownloadTaskStatus.PAUSED &&
-                        task.status != DownloadTaskStatus.FAILED
-                ) {
-                    return@withLock
-                }
+            if (
+                task.status != DownloadTaskStatus.PAUSED &&
+                    task.status != DownloadTaskStatus.FAILED &&
+                    task.status != DownloadTaskStatus.RETRYING
+            ) {
+                return@withContext
+            }
 
-                if (task.quality.isBlank()) {
-                    throw IllegalStateException(
-                        context.getString(R.string.download_quality_missing)
-                    )
-                }
+            if (task.quality.isBlank()) {
+                throw IllegalStateException(context.getString(R.string.download_quality_missing))
+            }
 
-                // 等待旧传输释放，禁止直接覆盖活跃工作
-                val transMutex = getTransferMutex(taskId)
-                transMutex.withLock {
+            // 网络请求不占命令锁，让用户可立即暂停或取消后台重试。
+            val refreshedUrl =
+                try {
+                    val video = mediaRepo.getVideo(task.resourceId)
+                    val files = mediaRepo.parseVideoUrl(video)
+                    val file = files.requireDownloadQuality(task.quality)
+                    file.src.download.fixUrl()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val reason =
+                        e.message?.replace(Regex("https?://[^\\s]+")) { url ->
+                            url.value.substringBefore('?')
+                        } ?: e.javaClass.simpleName
                     database
                         .downloadTaskDao()
-                        .updateSettledBytes(taskId, task.workId, parts.file(taskId).length())
+                        .updateResumeError(taskId, task.workId, task.status, "刷新链接失败: $reason")
+                    throw java.io.IOException("刷新链接失败: $reason", e)
                 }
 
-                // 在状态变更前刷新已签名的视频下载链接，异常时保留原状态并记录原因
-                val refreshedUrl =
-                    try {
-                        val video = mediaRepo.getVideo(task.resourceId)
-                        val files = mediaRepo.parseVideoUrl(video)
-                        val file = files.requireDownloadQuality(task.quality)
-                        file.src.download.fixUrl()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        val reason =
-                            e.message?.replace(Regex("https?://[^\\s]+")) { url ->
-                                url.value.substringBefore('?')
-                            } ?: e.javaClass.simpleName
-                        database.downloadTaskDao().updateError(taskId, "刷新链接失败: $reason")
-                        throw java.io.IOException("刷新链接失败: $reason", e)
-                    }
-
+            getCommandMutex(taskId).withLock {
+                val latest = database.downloadTaskDao().getTask(taskId)
+                if (latest?.workId != task.workId || latest.status != task.status) return@withLock
+                val transMutex = getTransferMutex(taskId)
                 val req =
                     OneTimeWorkRequestBuilder<DownloadWorker>()
                         .setInputData(workDataOf(DownloadWorker.KEY_TASK_ID to taskId))
@@ -323,9 +343,14 @@ class DownloadManager(
                                     status = DownloadTaskStatus.QUEUED,
                                     workId = req.id.toString(),
                                     previousWorkId = task.workId,
+                                    expectedStatus = task.status,
                                     downloadedBytes = parts.file(taskId).length(),
                                     totalBytes = if (resourceChanged) -1L else task.totalBytes,
                                     validator = if (resourceChanged) null else task.validator,
+                                    retryCount =
+                                        if (task.status == DownloadTaskStatus.RETRYING)
+                                            task.retryCount
+                                        else 0,
                                 )
                         }
                     check(resumed > 0) { "任务状态已变化，请重试" }
@@ -340,6 +365,17 @@ class DownloadManager(
                             .await()
                     } catch (e: Exception) {
                         DownloadNotifications.cancelTaskNotification(context, taskId)
+                        if (task.status == DownloadTaskStatus.RETRYING) {
+                            database
+                                .downloadTaskDao()
+                                .restoreRetryScheduling(
+                                    taskId,
+                                    req.id.toString(),
+                                    task.workId,
+                                    "恢复调度失败: ${e.javaClass.simpleName}",
+                                )
+                            throw e
+                        }
                         database
                             .downloadTaskDao()
                             .updateStatus(
@@ -347,6 +383,7 @@ class DownloadManager(
                                 newStatus = DownloadTaskStatus.FAILED,
                                 error = "恢复调度失败: ${e.message}",
                             )
+                        DownloadNotifications.showFailureNotification(context, taskId, task.title)
                         throw e
                     }
                 }
@@ -359,11 +396,35 @@ class DownloadManager(
             // 确保正在运行或排队的旧任务先安全释放，再发起带新授权的恢复
             if (
                 task.status == DownloadTaskStatus.QUEUED ||
-                    task.status == DownloadTaskStatus.RUNNING
+                    task.status == DownloadTaskStatus.RUNNING ||
+                    task.status == DownloadTaskStatus.RETRYING
             ) {
                 pause(taskId)
             }
             resume(taskId)
+        }
+
+    suspend fun scheduleRetry(taskId: String) =
+        withContext(Dispatchers.IO) {
+            val task = database.downloadTaskDao().getTask(taskId) ?: return@withContext
+            if (task.status != DownloadTaskStatus.RETRYING) return@withContext
+            val request =
+                OneTimeWorkRequestBuilder<DownloadRetryWorker>()
+                    .setInputData(
+                        workDataOf(
+                            DownloadRetryWorker.KEY_TASK_ID to taskId,
+                            DownloadRetryWorker.KEY_DOWNLOAD_WORK_ID to task.workId,
+                        )
+                    )
+                    .setInitialDelay(2L, TimeUnit.SECONDS)
+                    .setBackoffCriteria(BackoffPolicy.LINEAR, 10L, TimeUnit.SECONDS)
+                    .addTag(taskId)
+                    .build()
+            grantExecutionAuthorization(taskId, request.id.toString())
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork("download_retry_$taskId", ExistingWorkPolicy.REPLACE, request)
+                .result
+                .await()
         }
 
     suspend fun cancel(taskId: String) =
@@ -380,6 +441,11 @@ class DownloadManager(
 
                     WorkManager.getInstance(context)
                         .cancelUniqueWork("download_$taskId")
+                        .result
+                        .await()
+
+                    WorkManager.getInstance(context)
+                        .cancelUniqueWork("download_retry_$taskId")
                         .result
                         .await()
 
@@ -435,6 +501,31 @@ class DownloadManager(
                     val task =
                         database.downloadTaskDao().getTask(initialTask.taskId) ?: return@withLock
                     when (task.status) {
+                        DownloadTaskStatus.RETRYING -> {
+                            val transferMutex = getTransferMutex(task.taskId)
+                            if (transferMutex.tryLock()) {
+                                try {
+                                    val retryWorks =
+                                        workManager
+                                            .getWorkInfosForUniqueWork(
+                                                "download_retry_${task.taskId}"
+                                            )
+                                            .await()
+                                    if (retryWorks.none { !it.state.isFinished }) {
+                                        database
+                                            .downloadTaskDao()
+                                            .compareAndSetStatus(
+                                                task.taskId,
+                                                task.workId,
+                                                DownloadTaskStatus.RETRYING,
+                                                DownloadTaskStatus.PAUSED,
+                                            )
+                                    }
+                                } finally {
+                                    transferMutex.unlock()
+                                }
+                            }
+                        }
                         DownloadTaskStatus.CANCELLING -> {
                             val isWorkActive = isWorkerActive(workManager, task.workId)
                             if (!isWorkActive) {
@@ -490,13 +581,21 @@ class DownloadManager(
                                 DownloadNotifications.cancelTaskNotification(context, task.taskId)
                                 val destUriToRetain =
                                     if (cleanupSuccess) "" else task.destinationUri
-                                database
-                                    .downloadTaskDao()
-                                    .resetSavingToFailed(
-                                        taskId = task.taskId,
-                                        destinationUri = destUriToRetain,
-                                        error = cleanupError ?: "保存中断",
+                                val updated =
+                                    database
+                                        .downloadTaskDao()
+                                        .resetSavingToFailed(
+                                            taskId = task.taskId,
+                                            destinationUri = destUriToRetain,
+                                            error = cleanupError ?: "保存中断",
+                                        )
+                                if (updated > 0) {
+                                    DownloadNotifications.showFailureNotification(
+                                        context,
+                                        task.taskId,
+                                        task.title,
                                     )
+                                }
                             }
                         }
                         DownloadTaskStatus.RUNNING,
@@ -528,18 +627,28 @@ class DownloadManager(
                                     } else {
                                         DownloadTaskStatus.PAUSED
                                     }
-                                database
-                                    .downloadTaskDao()
-                                    .updateOrphanState(
-                                        taskId = task.taskId,
-                                        status = targetStatus,
-                                        destinationUri = destUriToRetain,
-                                        error =
-                                            cleanupError
-                                                ?: if (targetStatus == DownloadTaskStatus.FAILED)
-                                                    "下载异常中断"
-                                                else null,
+                                val updated =
+                                    database
+                                        .downloadTaskDao()
+                                        .updateOrphanState(
+                                            taskId = task.taskId,
+                                            status = targetStatus,
+                                            destinationUri = destUriToRetain,
+                                            error =
+                                                cleanupError
+                                                    ?: if (
+                                                        targetStatus == DownloadTaskStatus.FAILED
+                                                    )
+                                                        "下载异常中断"
+                                                    else null,
+                                        )
+                                if (updated > 0 && targetStatus == DownloadTaskStatus.FAILED) {
+                                    DownloadNotifications.showFailureNotification(
+                                        context,
+                                        task.taskId,
+                                        task.title,
                                     )
+                                }
                             }
                         }
                     }
@@ -606,11 +715,15 @@ class DownloadManager(
     companion object {
         const val PREFERENCE_KEY_AUTO_RESUME = DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME
         const val DEFAULT_AUTO_RESUME = DownloadLaunchPolicy.DEFAULT_AUTO_RESUME
+        const val PREFERENCE_KEY_AUTO_RETRY = PREFERENCE_KEY_DOWNLOAD_AUTO_RETRY
+        const val DEFAULT_AUTO_RETRY = DEFAULT_DOWNLOAD_AUTO_RETRY
 
         // pauseAll 仅针对排队或下载中的任务，过滤跳过保存中、已暂停、已失败及取消中任务
         fun filterPausableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
             return tasks.filter {
-                it.status == DownloadTaskStatus.QUEUED || it.status == DownloadTaskStatus.RUNNING
+                it.status == DownloadTaskStatus.QUEUED ||
+                    it.status == DownloadTaskStatus.RUNNING ||
+                    it.status == DownloadTaskStatus.RETRYING
             }
         }
 

@@ -65,6 +65,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadLaunchPolicy
+import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.Avatar
@@ -449,6 +450,20 @@ fun SettingPage() {
                         },
                         text = { Text(stringResource(R.string.setting_download_auto_resume_text)) },
                         icon = { Icon(Icons.Outlined.PlayCircle, null) },
+                    )
+
+                    val autoRetry =
+                        rememberBooleanPreference(
+                            key = DownloadManager.PREFERENCE_KEY_AUTO_RETRY,
+                            default = DownloadManager.DEFAULT_AUTO_RETRY,
+                        )
+                    SettingBooleanItem(
+                        state = autoRetry,
+                        title = {
+                            Text(stringResource(R.string.setting_download_auto_retry_title))
+                        },
+                        text = { Text(stringResource(R.string.setting_download_auto_retry_text)) },
+                        icon = { Icon(Icons.Outlined.Replay, null) },
                     )
 
                     SettingLinkItem(

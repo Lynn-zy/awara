@@ -29,6 +29,7 @@ import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.ResumableDownloader
+import me.rerere.awara.data.download.decideDownloadRetry
 import me.rerere.awara.data.download.shouldBlockAutomaticDownloadStart
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTaskStatus
@@ -98,6 +99,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         taskId,
                         appContext.getString(R.string.please_grant_notification_permission),
                     )
+                DownloadNotifications.showFailureNotification(
+                    context = appContext,
+                    taskId = taskId,
+                    title = task.title,
+                )
             }
             return Result.failure()
         }
@@ -105,6 +111,8 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         val transferMutex = downloadManager.getTransferMutex(taskId)
         var destinationUri: Uri? = null
         var committed = false
+        var receivedNewData = false
+        var transferInProgress = false
 
         return withContext(Dispatchers.IO) {
             transferMutex.withLock {
@@ -143,6 +151,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     taskId,
                                     appContext.getString(R.string.download_quality_missing),
                                 )
+                            DownloadNotifications.showFailureNotification(
+                                context = appContext,
+                                taskId = taskId,
+                                title = task.title,
+                            )
                         }
                         return@withLock Result.failure()
                     }
@@ -188,6 +201,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     destinationUri = task.destinationUri,
                                     error = "清理历史目标文件失败",
                                 )
+                            DownloadNotifications.showFailureNotification(
+                                context = appContext,
+                                taskId = taskId,
+                                title = task.title,
+                            )
                             return@withLock Result.failure()
                         }
                     }
@@ -218,11 +236,13 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
 
                     val partFile = downloadManager.parts.file(taskId)
 
+                    transferInProgress = true
                     resumableDownloader.download(
                         url = currentTask.url,
                         targetFile = partFile,
                         validator = currentTask.validator,
                         expectedTotalBytes = currentTask.totalBytes,
+                        onBytesDownloaded = { receivedNewData = true },
                         onBindCall = { call -> downloadManager.registerActiveCall(taskId, call) },
                         onValidatorResolved = { validator ->
                             appDatabase
@@ -270,6 +290,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         },
                     )
 
+                    transferInProgress = false
                     try {
                         validateVideoFile(partFile)
                     } catch (exception: Exception) {
@@ -474,20 +495,74 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                         if (!cleanSuccess && destinationUri != null)
                                             destinationUri.toString()
                                         else ""
-                                    appDatabase
-                                        .downloadTaskDao()
-                                        .updateWorkerTerminalState(
-                                            taskId = taskId,
-                                            workId = id.toString(),
-                                            newStatus = DownloadTaskStatus.FAILED,
-                                            destinationUri = retainedDest,
-                                            error = err,
+                                    val retryDecision =
+                                        decideDownloadRetry(
+                                            autoRetryEnabled =
+                                                transferInProgress &&
+                                                    downloadManager.isAutomaticRetryEnabled(),
+                                            receivedNewData = receivedNewData,
+                                            retryCount = taskAfterError.retryCount,
                                         )
-                                    DownloadNotifications.showFailureNotification(
-                                        context = appContext,
-                                        taskId = taskId,
-                                        title = taskAfterError.title,
-                                    )
+                                    var retryHandled = false
+                                    if (retryDecision.shouldRetry) {
+                                        val markedRetrying =
+                                            appDatabase
+                                                .downloadTaskDao()
+                                                .markRetrying(
+                                                    taskId = taskId,
+                                                    workId = id.toString(),
+                                                    retryCount = retryDecision.nextRetryCount,
+                                                    destinationUri = retainedDest,
+                                                    error = err,
+                                                )
+                                        if (markedRetrying > 0) {
+                                            retryHandled = true
+                                            try {
+                                                downloadManager.scheduleRetry(taskId)
+                                            } catch (scheduleException: Exception) {
+                                                val scheduleError =
+                                                    sanitizeErrorMessage(
+                                                        scheduleException.message
+                                                            ?: scheduleException.javaClass
+                                                                .simpleName
+                                                    )
+                                                if (
+                                                    appDatabase
+                                                        .downloadTaskDao()
+                                                        .failRetryingTask(
+                                                            taskId,
+                                                            id.toString(),
+                                                            scheduleError,
+                                                        ) > 0
+                                                ) {
+                                                    DownloadNotifications.showFailureNotification(
+                                                        context = appContext,
+                                                        taskId = taskId,
+                                                        title = taskAfterError.title,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (!retryHandled) {
+                                        if (
+                                            appDatabase
+                                                .downloadTaskDao()
+                                                .updateWorkerTerminalState(
+                                                    taskId = taskId,
+                                                    workId = id.toString(),
+                                                    newStatus = DownloadTaskStatus.FAILED,
+                                                    destinationUri = retainedDest,
+                                                    error = err,
+                                                ) > 0
+                                        ) {
+                                            DownloadNotifications.showFailureNotification(
+                                                context = appContext,
+                                                taskId = taskId,
+                                                title = taskAfterError.title,
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

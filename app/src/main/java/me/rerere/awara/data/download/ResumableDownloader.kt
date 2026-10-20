@@ -28,6 +28,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
         expectedTotalBytes: Long = -1L,
         onBindCall: ((Call) -> Unit)? = null,
         onValidatorResolved: (suspend (String?) -> Unit)? = null,
+        onBytesDownloaded: (Long) -> Unit = {},
         onProgress: suspend (downloadedBytes: Long, totalBytes: Long) -> Unit,
     ) =
         withContext(Dispatchers.IO) {
@@ -166,6 +167,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
                                     currentOffset = 0L,
                                     expectedBytes = if (len > 0L) len else -1L,
                                     totalBytes = totalBytes,
+                                    onBytesDownloaded = onBytesDownloaded,
                                     onProgress = onProgress,
                                 )
                                 return@use false
@@ -280,6 +282,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
                                     currentOffset = currentOffset,
                                     expectedBytes = expectedNewBytes,
                                     totalBytes = totalBytes,
+                                    onBytesDownloaded = onBytesDownloaded,
                                     onProgress = onProgress,
                                 )
                             }
@@ -375,6 +378,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
         currentOffset: Long,
         expectedBytes: Long,
         totalBytes: Long,
+        onBytesDownloaded: (Long) -> Unit,
         onProgress: suspend (Long, Long) -> Unit,
     ) {
         val parent = targetFile.parentFile
@@ -395,6 +399,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
                 }
                 fos.write(buffer, 0, len)
                 writtenBytes += len
+                onBytesDownloaded(len.toLong())
 
                 val now = System.currentTimeMillis()
                 if (now - lastProgressTime >= 500L) {

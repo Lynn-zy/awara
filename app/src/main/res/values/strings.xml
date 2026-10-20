@@ -1,4 +1,19 @@
 <resources>
+    <string name="comment_action_more">Comment actions</string>
+    <string name="comment_reply">Reply</string>
+    <string name="comment_reply_to">Reply to %1$s</string>
+    <string name="comment_send">Send comment</string>
+    <string name="comment_action_edit">Edit comment</string>
+    <string name="comment_action_delete">Delete comment</string>
+    <string name="comment_body_hint">Enter comment</string>
+    <string name="comment_save">Save</string>
+    <string name="comment_edit_failed">Could not update comment. Try again.</string>
+    <string name="comment_delete_confirm">Delete this comment? This cannot be undone.</string>
+    <string name="comment_delete_failed">Could not delete comment. Try again.</string>
+    <string name="comment_post_failed">Could not send comment. Try again.</string>
+    <string name="search_category_title">Title</string>
+    <string name="search_category_author">Author</string>
+    <string name="search_author_hint">Search author name or ID</string>
     <string name="app_name" translatable="false">Awara</string>
     <string name="login_title">Login</string>
     <string name="login_button">Login</string>
@@ -27,6 +42,13 @@
     <string name="filters">Filters</string>
     <string name="tag">Tag</string>
     <string name="history">History</string>
+    <string name="history_search_hint">Search titles</string>
+    <string name="history_clear">Clear history</string>
+    <string name="history_clear_confirm">Delete all viewing history?</string>
+    <string name="history_retention">History retention</string>
+    <string name="history_retention_forever">Forever</string>
+    <string name="history_retention_month">One month</string>
+    <string name="history_retention_week">One week</string>
     <string name="playlist">Playlist</string>
     <string name="playlist_num_videos">Total %d videos</string>
     <string name="playlist_num_videos_badge">%d个</string>
@@ -34,6 +56,7 @@
     <string name="hide_description">收起简介</string>
     <string name="link_open_unavailable">未找到可打开此链接的应用</string>
     <string name="search">Search</string>
+    <string name="list_search_empty">No matching results</string>
     <string name="search_sort_relevance">相关性</string>
     <string name="search_sort_date">最新</string>
     <string name="favorites">Favorites</string>
@@ -108,12 +131,14 @@
     <string name="send_message">发送消息</string>
     <!-- 通知类型文案；未知类型保留服务端类型，便于反馈。 -->
     <string name="notifications">通知</string>
+    <string name="notifications_mark_all_read">全部标记为已读</string>
     <string name="download_show_directory">查看下载目录</string>
     <string name="download_delete">删除下载文件</string>
     <string name="download_restore">恢复卡片</string>
     <string name="comment_load_failed">留言加载失败：%1$s</string>
     <string name="notification_new_reply">%1$s 回复了你的评论</string>
     <string name="notification_new_comment">%1$s 在你的主页留言</string>
+    <string name="notification_video_comment">%1$s 评论了你的视频</string>
     <string name="notification_video_source">来自视频：%1$s</string>
     <string name="notification_unsupported">暂不支持的通知类型：%1$s</string>
     <!-- 用户资料页新建会话对话框与操作提示。 -->
@@ -150,6 +175,8 @@
     <string name="setting_download">Downloads</string>
     <string name="setting_download_auto_resume_title">Auto-resume unfinished downloads</string>
     <string name="setting_download_auto_resume_text">Automatically resume pending download tasks when app launches</string>
+    <string name="setting_download_auto_retry_title">Retry failed downloads silently</string>
+    <string name="setting_download_auto_retry_text">后台自动静默重试 3 次</string>
     <string name="download_unfinished_dialog_title">Unfinished Downloads</string>
     <string name="download_unfinished_dialog_message">Unfinished download tasks detected. Do you want to continue downloading?</string>
     <string name="download_unfinished_dialog_resume">Resume</string>
@@ -169,6 +196,7 @@
     <string name="download_delete_failed">Could not delete download: %1$s</string>
     <string name="download_play_failed">Could not play download: %1$s</string>
     <string name="download_empty">No downloaded videos yet</string>
+    <string name="download_search_hint">Search video titles</string>
     <string name="download_manager">Download Manager</string>
     <string name="download_manager_description">View progress, pause, resume, or cancel active downloads</string>
     <string name="download_completed">Downloaded videos</string>
@@ -178,6 +206,7 @@
     <string name="download_task_running">Downloading</string>
     <string name="download_task_paused">Paused</string>
     <string name="download_task_saving">Saving</string>
+    <string name="download_task_retrying">Retrying</string>
     <string name="download_task_failed">Failed</string>
     <string name="download_task_cancelling">Cancelling</string>
     <string name="download_task_progress">%1$d%% (%2$s / %3$s)</string>

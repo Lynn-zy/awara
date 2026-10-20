@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +36,7 @@ import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
 import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.toLocalDateTimeString
@@ -44,6 +46,8 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
     val navController = LocalRouterProvider.current
+    val listState = rememberLazyListState()
+    PageScrollEffect(vm.state.loadedPage) { listState.scrollToItem(0) }
 
     Scaffold(
         topBar = {
@@ -78,6 +82,7 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
                 onErrorRetry = { vm.loadConversations(force = true) },
             ) {
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),
