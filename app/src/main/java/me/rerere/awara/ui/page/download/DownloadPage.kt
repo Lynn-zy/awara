@@ -92,6 +92,7 @@ import com.airbnb.lottie.compose.LottieCompositionSpec
 import com.airbnb.lottie.compose.LottieConstants
 import com.airbnb.lottie.compose.animateLottieCompositionAsState
 import com.airbnb.lottie.compose.rememberLottieComposition
+import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.ui.AspectRatioFrameLayout
@@ -311,7 +312,12 @@ fun DownloadPage(
         )
     }
 
-    val state = rememberPlayerState { ExoPlayer.Builder(it).build() }
+    val state = rememberPlayerState {
+        ExoPlayer.Builder(it)
+            // 下载内置播放采用相同的对照策略，不向系统提交视频帧率请求。
+            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+            .build()
+    }
     var requestOrientation by rememberRequestedScreenOrientation()
     var fullscreen by remember { mutableStateOf(false) }
     fun enterFullScreen() {

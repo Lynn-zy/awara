@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.PlaybackException
@@ -27,6 +28,8 @@ fun rememberPlayerState(
     builder: (Context) -> ExoPlayer = {
         ExoPlayer.Builder(it, DefaultMediaSourceFactory(PlayerCache.get(it)))
             .setHandleAudioBecomingNoisy(true)
+            // 对照验证：停止按视频帧率请求刷新率，保留系统对屏幕刷新率的选择。
+            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
             .build()
             .apply {
                 playWhenReady = true
