@@ -11,6 +11,19 @@
     <string name="comment_delete_confirm">Delete this comment? This cannot be undone.</string>
     <string name="comment_delete_failed">Could not delete comment. Try again.</string>
     <string name="comment_post_failed">Could not send comment. Try again.</string>
+    <string name="comment_image_preview">Image preview</string>
+    <string name="comment_image_load">加载图片</string>
+    <string name="setting_comment_image">评论图片</string>
+    <string name="setting_comment_image_auto_load_title">自动加载并显示</string>
+    <string name="setting_comment_image_auto_load_text">关闭时，点击“加载图片”后才加载并显示图片</string>
+    <string name="comment_image_save">Save image</string>
+    <string name="comment_image_saving">Saving image…</string>
+    <string name="comment_image_save_success">Image saved</string>
+    <string name="comment_image_save_failed">Failed to save image</string>
+    <string name="comment_image_load_failed">Failed to load image, tap to retry</string>
+    <string name="comment_image_too_large">Image is too large to save</string>
+    <string name="comment_image_invalid_type">Invalid image type</string>
+    <string name="close">Close</string>
     <string name="search_category_title">Title</string>
     <string name="search_category_author">Author</string>
     <string name="search_author_hint">Search author name or ID</string>
@@ -245,6 +258,7 @@
     <string name="download_invalid_video">The downloaded file has no readable video track. It has not been saved as a completed download.</string>
     <string name="download_open_details">Open video details</string>
     <string name="download_focus_missing">This video is no longer in your downloads</string>
+    <string name="download_focus_failed">Could not locate the downloaded video. Please try again.</string>
     <string name="download_task_pause_all">Pause all</string>
     <string name="download_task_resume_all">Resume all</string>
     <string name="download_task_cancel_all">Cancel all</string>

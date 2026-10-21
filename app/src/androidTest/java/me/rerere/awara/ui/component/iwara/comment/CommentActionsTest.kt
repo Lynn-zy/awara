@@ -6,16 +6,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -28,6 +37,7 @@ import me.rerere.awara.data.entity.User
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.DialogProvider
 import me.rerere.awara.ui.component.common.MessageProvider
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -113,12 +123,94 @@ class CommentActionsTest {
         compose.runOnIdle { assertTrue(deletionCalled) }
     }
 
+    @Test
+    fun returningFromThreadAndSamePageReloadKeepExactParentPosition() {
+        val root =
+            CommentStateItem(
+                page = 3,
+                loadedPage = 3,
+                total = 100,
+                comments = (0..31).map { comment().copy(id = "comment-$it", body = "评论-$it") },
+            )
+        var commentState by mutableStateOf(CommentState(stack = listOf(root)))
+        compose.setContent { Content(commentState = commentState) }
+        compose.onAllNodes(hasScrollToIndexAction())[0].performScrollToIndex(20)
+        val before = compose.onNodeWithText("评论-20").getUnclippedBoundsInRoot().top
+        compose.runOnIdle {
+            commentState =
+                commentState
+                    .push("thread")
+                    .updateTopStack(
+                        CommentStateItem(
+                            parent = "thread",
+                            loadedPage = 1,
+                            comments = listOf(comment()),
+                        )
+                    )
+        }
+        compose.onNodeWithText("原评论").assertIsDisplayed()
+        compose.runOnIdle { commentState = commentState.pop() }
+        compose.onNodeWithText("评论-20").assertIsDisplayed()
+        assertEquals(before, compose.onNodeWithText("评论-20").getUnclippedBoundsInRoot().top)
+        // 回复后返回父层的同页更新也不重置已保存的列表位置。
+        compose.runOnIdle { commentState = commentState.updateTopStack(root.copy(total = 101)) }
+        assertEquals(before, compose.onNodeWithText("评论-20").getUnclippedBoundsInRoot().top)
+    }
+
+    @Test
+    fun pullToRefreshInvokesRequestAndShowsNewComments() {
+        var commentState by
+            mutableStateOf(
+                CommentState(
+                    stack = listOf(CommentStateItem(loadedPage = 1, comments = listOf(comment())))
+                )
+            )
+        var requests = 0
+        compose.setContent {
+            Content(
+                commentState = commentState,
+                onRefresh = {
+                    requests++
+                    commentState =
+                        commentState.updateTopStack(
+                            commentState.stack
+                                .last()
+                                .copy(comments = listOf(comment().copy(body = "刷新后的评论")))
+                        )
+                    RefreshResult.Success
+                },
+            )
+        }
+        compose.onAllNodes(hasScrollToIndexAction())[0].performTouchInput { swipeDown() }
+        compose.onNodeWithText("刷新后的评论").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, requests) }
+    }
+
+    @Test
+    fun failedRefreshKeepsExistingCommentAndShowsFailure() {
+        var requests = 0
+        compose.setContent {
+            Content(
+                onRefresh = {
+                    requests++
+                    RefreshResult.Failure { androidx.compose.material3.Text("刷新失败示例") }
+                }
+            )
+        }
+        compose.onAllNodes(hasScrollToIndexAction())[0].performTouchInput { swipeDown() }
+        compose.onNodeWithText("原评论").assertIsDisplayed()
+        compose.onNodeWithText("刷新失败示例").assertExists()
+        compose.runOnIdle { assertEquals(1, requests) }
+    }
+
     @Composable
     private fun Content(
         parent: String? = null,
         onPost: suspend (CommentCreationDto) -> Boolean = { false },
         onEdit: suspend (String, String) -> Boolean = { _, _ -> false },
         onDelete: suspend (String) -> Boolean = { false },
+        commentState: CommentState? = null,
+        onRefresh: (suspend () -> RefreshResult)? = null,
     ) {
         val router = rememberAnimatedNavController()
         CompositionLocalProvider(LocalRouterProvider provides router) {
@@ -129,16 +221,17 @@ class CommentActionsTest {
                             CommentList(
                                 modifier = Modifier.fillMaxSize(),
                                 state =
-                                    CommentState(
-                                        stack =
-                                            listOf(
-                                                CommentStateItem(
-                                                    parent = parent,
-                                                    comments = listOf(comment()),
-                                                    total = 1,
+                                    commentState
+                                        ?: CommentState(
+                                            stack =
+                                                listOf(
+                                                    CommentStateItem(
+                                                        parent = parent,
+                                                        comments = listOf(comment()),
+                                                        total = 1,
+                                                    )
                                                 )
-                                            )
-                                    ),
+                                        ),
                                 onPageChange = {},
                                 onBack = {},
                                 onPush = {},
@@ -146,6 +239,7 @@ class CommentActionsTest {
                                 onEditComment = onEdit,
                                 onDeleteComment = onDelete,
                                 currentUserId = "owner",
+                                onRefresh = onRefresh,
                             )
                         }
                     }

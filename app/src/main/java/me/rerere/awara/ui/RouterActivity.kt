@@ -32,6 +32,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.navigation.NavType
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.google.accompanist.navigation.animation.AnimatedNavHost
 import com.google.accompanist.navigation.animation.composable
@@ -369,9 +370,12 @@ class RouterActivity : ComponentActivity() {
 
                 composable("download") { DownloadHubPage() }
                 composable("download/manager") { DownloadManagerPage() }
-                composable("download/videos") {
+                composable("download/videos") { entry ->
+                    val currentEntry by navController.currentBackStackEntryAsState()
                     DownloadPage(
-                        focusResourceId = requestedDownloadResourceId,
+                        // 返回栈或退场动画中的旧页面不能消费前台页面的新通知。
+                        focusResourceId =
+                            requestedDownloadResourceId.takeIf { currentEntry?.id == entry.id },
                         onFocusHandled = { requestedDownloadResourceId = null },
                     )
                 }

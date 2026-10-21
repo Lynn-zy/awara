@@ -15,6 +15,8 @@ data class CommentStateItem(
     val comments: List<Comment> = emptyList(),
     // 最近一次数据成功写入展示时的页码，初始或同页刷新时不触发回顶
     val loadedPage: Int? = null,
+    // 成功发送回复后标记相关层级，返回时按需刷新而非每次重载。
+    val needsRefresh: Boolean = false,
 )
 
 fun CommentState.push(id: String): CommentState {
@@ -22,8 +24,13 @@ fun CommentState.push(id: String): CommentState {
 }
 
 fun CommentState.pop(): CommentState {
-    return copy(stack = stack.dropLast(1))
+    if (stack.size <= 1) return this
+    return copy(loading = false, stack = stack.dropLast(1))
 }
+
+/** 写操作成功后使当前层及父层失效；每一层仅在重新加载成功后消费标记。 */
+fun CommentState.markCommentsChanged(): CommentState =
+    copy(stack = stack.map { it.copy(needsRefresh = true) })
 
 fun CommentState.updatePage(page: Int): CommentState {
     return copy(stack = stack.dropLast(1) + stack.last().copy(page = page))

@@ -26,12 +26,10 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -70,6 +68,7 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.EmptyStatus
 import me.rerere.awara.ui.component.common.ErrorStatus
+import me.rerere.awara.ui.component.common.LocalSearchInput
 import me.rerere.awara.ui.component.common.Spin
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.items
@@ -157,55 +156,13 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (searchOpen) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = vm::setSearchQuery,
+                LocalSearchInput(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                    singleLine = true,
-                    placeholder = {
-                        val hint =
-                            if (category == SearchCategory.AUTHOR)
-                                stringResource(R.string.search_author_hint)
-                            else stringResource(R.string.history_search_hint)
-                        Text(hint)
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (query.isNotEmpty()) {
-                            IconButton(onClick = { vm.setSearchQuery("") }) {
-                                Icon(
-                                    Icons.Outlined.Close,
-                                    contentDescription = stringResource(R.string.cancel),
-                                )
-                            }
-                        }
-                    },
+                    query = query,
+                    onQueryChange = vm::setSearchQuery,
+                    category = category,
+                    onCategoryChange = vm::setSearchCategory,
                 )
-                // 紧凑分段选择：标题与作者分类切换，保留输入词
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FilterChip(
-                        selected = category == SearchCategory.TITLE,
-                        onClick = {
-                            if (category != SearchCategory.TITLE) {
-                                vm.setSearchCategory(SearchCategory.TITLE)
-                            }
-                        },
-                        label = { Text(stringResource(R.string.search_category_title)) },
-                    )
-                    FilterChip(
-                        selected = category == SearchCategory.AUTHOR,
-                        onClick = {
-                            if (category != SearchCategory.AUTHOR) {
-                                vm.setSearchCategory(SearchCategory.AUTHOR)
-                            }
-                        },
-                        label = { Text(stringResource(R.string.search_category_author)) },
-                    )
-                }
             }
             val refreshState = itemsPaged.loadState.refresh
             Spin(

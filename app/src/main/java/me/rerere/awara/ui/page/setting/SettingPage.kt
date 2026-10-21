@@ -71,6 +71,7 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.Avatar
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
+import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
 import me.rerere.awara.util.openUrl
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberIntPreference
@@ -432,6 +433,28 @@ fun SettingPage() {
                         text = {
                             Text(stringResource(R.string.setting_player_download_player_text))
                         },
+                    )
+                }
+            }
+
+            item {
+                SettingItemCategory(
+                    title = { Text(stringResource(R.string.setting_comment_image)) }
+                ) {
+                    val autoLoadImages =
+                        rememberBooleanPreference(
+                            key = PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD,
+                            default = false,
+                        )
+                    SettingBooleanItem(
+                        state = autoLoadImages,
+                        title = {
+                            Text(stringResource(R.string.setting_comment_image_auto_load_title))
+                        },
+                        text = {
+                            Text(stringResource(R.string.setting_comment_image_auto_load_text))
+                        },
+                        icon = { Icon(Icons.Outlined.AutoMode, null) },
                     )
                 }
             }

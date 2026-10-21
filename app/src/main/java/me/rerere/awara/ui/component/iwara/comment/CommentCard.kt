@@ -42,7 +42,6 @@ import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.iwara.Avatar
-import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.component.iwara.UserStatus
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
@@ -167,7 +166,8 @@ fun CommentCard(
                 }
             }
 
-            RichText(text = comment.body, onLinkClick = { context.openUrl(it) })
+            // 评论正文接入CommentBody，支持内嵌图片展示、大图预览及长按文本选择
+            CommentBody(body = comment.body, onLinkClick = { context.openUrl(it) })
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,

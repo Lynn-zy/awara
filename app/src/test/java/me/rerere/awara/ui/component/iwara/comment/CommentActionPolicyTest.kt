@@ -13,6 +13,32 @@ import org.junit.Test
 class CommentActionPolicyTest {
 
     @Test
+    fun returningWithoutReplyKeepsCachedPageAndDoesNotRequireRefresh() {
+        val root = CommentStateItem(page = 3, loadedPage = 3, comments = listOf(createComment()))
+        val returned = CommentState(stack = listOf(root)).push("thread").copy(loading = true).pop()
+        assertSame(root, returned.stack.single())
+        assertFalse(returned.loading)
+        assertFalse(returned.stack.single().needsRefresh)
+    }
+
+    @Test
+    fun successfulReplyKeepsParentDirtyUntilItsOwnReloadSucceeds() {
+        val changed = CommentState().push("thread").markCommentsChanged()
+        val childReloaded = changed.updateTopStack(changed.stack.last().copy(needsRefresh = false))
+        assertFalse(childReloaded.stack.last().needsRefresh)
+        assertTrue(childReloaded.pop().stack.single().needsRefresh)
+        val parent = childReloaded.pop()
+        val parentReloaded = parent.updateTopStack(parent.stack.last().copy(needsRefresh = false))
+        assertFalse(parentReloaded.stack.single().needsRefresh)
+    }
+
+    @Test
+    fun returningFromRootNeverRemovesLastCommentLayer() {
+        val state = CommentState()
+        assertSame(state, state.pop())
+    }
+
+    @Test
     fun confirmedEditUpdatesContentWithoutChangingPage() {
         val state =
             CommentState(

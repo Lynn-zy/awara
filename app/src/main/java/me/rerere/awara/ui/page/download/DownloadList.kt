@@ -26,6 +26,16 @@ enum class DownloadSortMode(val key: String, val defaultAscending: Boolean) {
     }
 }
 
+data class DownloadFocusTarget(val itemId: Int, val authorId: String)
+
+/** 根据通知携带的资源 ID 解析稳定的下载条目和作者分组标识，不受排序方式影响。 */
+fun findDownloadFocusTarget(items: List<DownloadItem>, resourceId: String): DownloadFocusTarget? {
+    val normalizedResourceId = resourceId.trim()
+    if (normalizedResourceId.isEmpty()) return null
+    val target = items.firstOrNull { it.resourceId.trim() == normalizedResourceId } ?: return null
+    return DownloadFocusTarget(itemId = target.id, authorId = target.authorId.trim())
+}
+
 data class DownloadAuthorGroup(
     val authorId: String,
     val authorName: String,

@@ -7,6 +7,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.with
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -40,11 +41,11 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,9 @@ import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
 import me.rerere.awara.data.entity.CommentCreationDto
 import me.rerere.awara.ui.component.common.Spin
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
+import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
@@ -76,13 +80,11 @@ fun CommentList(
     canPostReply: Boolean = true,
     isLocalFallback: Boolean = false,
     currentUserId: String? = LocalUserStore.current.collectAsState().user?.id,
+    onRefresh: (suspend () -> RefreshResult)? = null,
 ) {
     val currentComment = state.stack.last()
     val parent = currentComment.parent
-    // 当 parent 变化（如进入或退出二级回复）时创建独立的列表状态，避免继承旧层的滚动偏移
-    val listState = key(parent) { rememberLazyListState() }
-    // 仅在当前层级成功拉取并展示新页数据时触发回顶，且不同 parent 层级独立追踪
-    key(parent) { PageScrollEffect(currentComment.loadedPage) { listState.scrollToItem(0) } }
+    val listStateHolder = rememberSaveableStateHolder()
 
     val canReply = CommentActionPolicy.canReply(canPostReply, currentUserId, isLocalFallback)
     val editFailedMessage = stringResource(R.string.comment_edit_failed)
@@ -301,47 +303,66 @@ fun CommentList(
             }
         }
 
-        Spin(show = state.loading, modifier = Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(8.dp),
-            ) {
-                items(currentComment.comments, key = { it.id }) { comment ->
-                    // 评论内容接入SelectionContainer支持系统长按复制
-                    SelectionContainer {
-                        CommentCard(
-                            comment = comment,
-                            onLoadReplies = {
-                                onPush(it.id)
-                                selectReplyTarget(it)
-                                repling = false
-                            },
-                            onReply = {
-                                if (canReply) {
-                                    repling = true
-                                    selectReplyTarget(it)
-                                    replyError = null
-                                }
-                            },
-                            onEdit = {
-                                editingCommentId = it.id
-                                editBody = it.body
-                                editSubmitting = false
-                                editError = null
-                            },
-                            onDelete = {
-                                deletingComment = it
-                                deleteSubmitting = false
-                                deleteError = null
-                            },
-                            isLocalFallback = isLocalFallback,
-                            canReply = canReply,
-                            currentUserId = currentUserId,
-                        )
+        // 保存各楼层的列表及已展示页码，返回父层不重新创建初始滚动位置。
+        listStateHolder.SaveableStateProvider(parent ?: "root") {
+            val listState = rememberLazyListState()
+            PageScrollEffect(currentComment.loadedPage) { listState.scrollToItem(0) }
+            val listContent: @Composable () -> Unit = {
+                Spin(show = state.loading, modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(8.dp),
+                    ) {
+                        items(currentComment.comments, key = { it.id }) { comment ->
+                            // 评论内容接入SelectionContainer支持系统长按复制
+                            SelectionContainer {
+                                CommentCard(
+                                    comment = comment,
+                                    onLoadReplies = {
+                                        onPush(it.id)
+                                        selectReplyTarget(it)
+                                        repling = false
+                                    },
+                                    onReply = {
+                                        if (canReply) {
+                                            repling = true
+                                            selectReplyTarget(it)
+                                            replyError = null
+                                        }
+                                    },
+                                    onEdit = {
+                                        editingCommentId = it.id
+                                        editBody = it.body
+                                        editSubmitting = false
+                                        editError = null
+                                    },
+                                    onDelete = {
+                                        deletingComment = it
+                                        deleteSubmitting = false
+                                        deleteError = null
+                                    },
+                                    isLocalFallback = isLocalFallback,
+                                    canReply = canReply,
+                                    currentUserId = currentUserId,
+                                )
+                            }
+                        }
                     }
                 }
+            }
+            if (onRefresh != null) {
+                SwipeRefresh(
+                    state = rememberSwipeRefreshState(false),
+                    onRefresh = onRefresh,
+                    swipeEnabled =
+                        !state.loading && !replySubmitting && !editSubmitting && !deleteSubmitting,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    content = listContent,
+                )
+            } else {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) { listContent() }
             }
         }
 

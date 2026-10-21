@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.DockedSearchBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -28,7 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BackButton
-import me.rerere.awara.ui.component.common.SelectButton
+import me.rerere.awara.ui.component.common.SearchInput
 import me.rerere.awara.ui.component.common.SelectOption
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
@@ -95,20 +94,13 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            DockedSearchBar(
+            SearchInput(
                 query = vm.query,
                 onQueryChange = { vm.query = it },
+                value = vm.state.searchType,
+                options = SearchOptions,
+                onValueChange = { vm.updateSearchType(it) },
                 onSearch = { vm.submitSearch() },
-                active = false,
-                onActiveChange = {},
-                content = {},
-                leadingIcon = {
-                    SelectButton(
-                        value = vm.state.searchType,
-                        options = SearchOptions,
-                        onValueChange = { vm.updateSearchType(it) },
-                    )
-                },
                 trailingIcon = {
                     IconButton(onClick = { vm.submitSearch() }) {
                         Icon(Icons.Outlined.Search, null)

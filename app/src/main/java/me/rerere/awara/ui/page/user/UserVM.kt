@@ -27,6 +27,7 @@ import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.ui.component.iwara.comment.CommentActionPolicy
 import me.rerere.awara.ui.component.iwara.comment.CommentState
+import me.rerere.awara.ui.component.iwara.comment.markCommentsChanged
 import me.rerere.awara.ui.component.iwara.comment.pop
 import me.rerere.awara.ui.component.iwara.comment.push
 import me.rerere.awara.ui.component.iwara.comment.removeComment
@@ -268,7 +269,7 @@ class UserVM(
     fun popComment() {
         commentLoadJob?.cancel()
         state = state.copy(commentState = state.commentState.pop())
-        loadComments()
+        if (state.commentState.stack.last().needsRefresh) loadComments()
     }
 
     /** 加载当前层级的评论或回复列表。 仅在 profile 加载成功获取到真实 user.id 后执行。 */
@@ -309,6 +310,7 @@ class UserVM(
                                                     limit = pager.limit,
                                                     total = pager.count,
                                                     loadedPage = currentCommentState.page,
+                                                    needsRefresh = false,
                                                 )
                                             )
                                     )
@@ -357,6 +359,7 @@ class UserVM(
                 .onSuccess {
                     events.emit(UserVMEvent.CommentPosted)
                     Log.i(TAG, "postComment: $it")
+                    state = state.copy(commentState = state.commentState.markCommentsChanged())
                     loadComments()
                     success = true
                 }

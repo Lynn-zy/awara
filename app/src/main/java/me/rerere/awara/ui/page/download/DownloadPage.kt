@@ -7,6 +7,8 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -51,11 +53,9 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -106,6 +106,7 @@ import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.LocalSearchInput
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.ui.component.player.Player
@@ -137,8 +138,6 @@ fun DownloadPage(
     // 独立作者根目录和内层视频列表的状态，避免共用同一个 LazyListState 导致 attach 错误
     val rootListState = rememberLazyListState()
     val videoListState = rememberLazyListState()
-    var pendingFocusId by rememberSaveable { mutableStateOf<Int?>(null) }
-    var highlightedId by rememberSaveable { mutableStateOf<Int?>(null) }
 
     val internalPlayer by
         rememberStringPreference(key = "setting.download_player_internal", default = "internal")
@@ -199,7 +198,7 @@ fun DownloadPage(
     LaunchedEffect(searchCategory) {
         if (searchCategory == previousSearchCategory) return@LaunchedEffect
         previousSearchCategory = searchCategory
-        if (pendingFocusId != null || focusResourceId != null) return@LaunchedEffect
+        if (focusResourceId != null) return@LaunchedEffect
         if (groupByAuthors && selectedAuthorId == null) {
             rootListState.scrollToItem(0)
         } else {
@@ -226,51 +225,39 @@ fun DownloadPage(
     val allVisibleSelected = isAllVideosSelected(selectedIds, visibleVideoIds)
     val isDeleting = vm.state.deletingIds.isNotEmpty()
 
-    LaunchedEffect(focusResourceId, vm.state.uiState, downloadedItems, groupByAuthors) {
-        val resourceId = focusResourceId ?: return@LaunchedEffect
-        if (vm.state.uiState != UiState.Success && vm.state.uiState != UiState.Empty)
-            return@LaunchedEffect
-        val target = downloadedItems.firstOrNull { it.resourceId == resourceId }
-        if (target == null) {
-            message.warning { Text(stringResource(R.string.download_focus_missing)) }
-            // 目标缺失时通知已处理
-            onFocusHandled()
-        } else {
-            // 下载通知 focus 命中时清空 searchOpen、searchQuery 并重置分类为默认标题，保证目标可被检索可见
-            searchOpen = false
-            searchQuery = ""
-            searchCategory = SearchCategory.TITLE
-            selectedIds = emptySet()
-            selectedAuthorId = if (groupByAuthors) target.authorId.trim() else null
-            pendingFocusId = target.id
-            // 首次 LaunchedEffect 不在此处过早调用 onFocusHandled()，交由后续滚动定位完成后回调
-        }
-    }
-
-    LaunchedEffect(pendingFocusId, visibleItems, selectedAuthorId, groupByAuthors) {
-        val targetId = pendingFocusId ?: return@LaunchedEffect
-        // 等待目标作者目录列表挂载且布局包含目标 item 后，执行 scroll + highlight 再 onFocusHandled
-        val index = visibleItems.indexOfFirst { it.id == targetId }
-        if (index >= 0) {
-            videoListState.scrollToItem(index)
-            highlightedId = targetId
-            pendingFocusId = null
-            onFocusHandled()
-        }
-    }
+    val highlightedId =
+        rememberDownloadFocus(
+            resourceId = focusResourceId,
+            groupByAuthors = groupByAuthors,
+            visibleItems = visibleItems,
+            listState = videoListState,
+            resolveTarget = vm::resolveFocusTarget,
+            onPrepare = { target ->
+                searchOpen = false
+                searchQuery = ""
+                searchCategory = SearchCategory.TITLE
+                selectedIds = emptySet()
+                selectedAuthorId = if (groupByAuthors) target.authorId else null
+            },
+            onMissing = {
+                message.warning { Text(stringResource(R.string.download_focus_missing)) }
+            },
+            onFailure = { message.error { Text(stringResource(R.string.download_focus_failed)) } },
+            onHandled = onFocusHandled,
+        )
 
     LaunchedEffect(
         visibleVideoIds,
         vm.state.uiState,
         selectedAuthorId,
         selectedGroup,
-        pendingFocusId,
+        focusResourceId,
     ) {
         if (vm.state.uiState == UiState.Success || vm.state.uiState == UiState.Empty) {
             selectedIds = selectedIds.intersect(visibleVideoIds)
-            // pendingFocusId 期间 guard 不能重置作者目录，避免目标作者尚未渲染完毕时被误重置回根目录
+            // 定位期间不重置作者目录，等待新查询对应的 Room 列表更新。
             if (
-                pendingFocusId == null &&
+                focusResourceId == null &&
                     groupByAuthors &&
                     selectedAuthorId != null &&
                     selectedGroup == null
@@ -704,57 +691,15 @@ fun DownloadPage(
             Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
                 // 搜索框独立一行，放置在 topbar 下方，避免在 topbar title 内过窄；不在多选模式展示以防破坏选择
                 if (searchOpen && !isSelectionMode) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                    LocalSearchInput(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        category = searchCategory,
+                        onCategoryChange = { searchCategory = it },
                         modifier =
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        singleLine = true,
-                        placeholder = {
-                            val hint =
-                                if (searchCategory == SearchCategory.AUTHOR)
-                                    stringResource(R.string.search_author_hint)
-                                else stringResource(R.string.download_search_hint)
-                            Text(hint)
-                        },
-                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(
-                                        Icons.Outlined.Close,
-                                        contentDescription = stringResource(R.string.cancel),
-                                    )
-                                }
-                            }
-                        },
+                        titleHint = stringResource(R.string.download_search_hint),
                     )
-                    // 紧凑分段选择：标题与作者分类切换，保留输入词
-                    Row(
-                        modifier =
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        FilterChip(
-                            selected = searchCategory == SearchCategory.TITLE,
-                            onClick = {
-                                if (searchCategory != SearchCategory.TITLE) {
-                                    searchCategory = SearchCategory.TITLE
-                                }
-                            },
-                            label = { Text(stringResource(R.string.search_category_title)) },
-                        )
-                        FilterChip(
-                            selected = searchCategory == SearchCategory.AUTHOR,
-                            onClick = {
-                                if (searchCategory != SearchCategory.AUTHOR) {
-                                    searchCategory = SearchCategory.AUTHOR
-                                }
-                            },
-                            label = { Text(stringResource(R.string.search_category_author)) },
-                        )
-                    }
                 }
 
                 UiStateBox(
@@ -843,9 +788,8 @@ fun DownloadPage(
                                 )
                             }
                         }
-                    } else if (groupByAuthors && selectedAuthorId != null) {
-                        val folderItems = selectedGroup?.items.orEmpty()
-                        if (folderItems.isEmpty()) {
+                    } else {
+                        if (visibleItems.isEmpty()) {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center,
@@ -864,7 +808,7 @@ fun DownloadPage(
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
                                 items(
-                                    items = folderItems,
+                                    items = visibleItems,
                                     key = { item -> item.id },
                                     contentType = { "download_item" },
                                 ) { item ->
@@ -885,36 +829,6 @@ fun DownloadPage(
                                         },
                                     )
                                 }
-                            }
-                        }
-                    } else {
-                        LazyColumn(
-                            state = videoListState,
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            items(
-                                items = sortedItems,
-                                key = { item -> item.id },
-                                contentType = { "download_item" },
-                            ) { item ->
-                                DownloadItemRow(
-                                    item = item,
-                                    isSelectionMode = isSelectionMode,
-                                    isSelected = item.id in selectedIds,
-                                    isDeleting = item.id in vm.state.deletingIds,
-                                    isHighlighted = item.id == highlightedId,
-                                    onToggleSelect = {
-                                        selectedIds = toggleSelection(selectedIds, item.id)
-                                    },
-                                    onDelete = { vm.delete(listOf(item)) },
-                                    onClick = { playDownloadedItem(item) },
-                                    onPlayExternal = { playExternal(item) },
-                                    onOpenDetails = {
-                                        router.navigate("video/${Uri.encode(item.resourceId)}")
-                                    },
-                                )
                             }
                         }
                     }
@@ -1050,9 +964,13 @@ fun DownloadItemRow(
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val thumbWidth = if (maxWidth >= 600.dp) 112.dp else 96.dp
-        val rowBackground =
-            if (isSelected || isHighlighted) MaterialTheme.colorScheme.secondaryContainer
-            else MaterialTheme.colorScheme.surface
+        val rowBackground by
+            animateColorAsState(
+                targetValue =
+                    if (isSelected || isHighlighted) MaterialTheme.colorScheme.secondaryContainer
+                    else MaterialTheme.colorScheme.surface,
+                animationSpec = tween(durationMillis = 500),
+            )
         val selectedStateDesc = stringResource(R.string.download_selected_accessibility)
 
         Row(

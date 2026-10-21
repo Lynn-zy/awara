@@ -2,6 +2,7 @@ package me.rerere.awara.ui.page.video
 
 import android.net.Uri
 import android.util.Log
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -10,8 +11,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -36,9 +39,12 @@ import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
+import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.di.AppDatabase
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.iwara.comment.CommentActionPolicy
 import me.rerere.awara.ui.component.iwara.comment.CommentState
+import me.rerere.awara.ui.component.iwara.comment.markCommentsChanged
 import me.rerere.awara.ui.component.iwara.comment.pop
 import me.rerere.awara.ui.component.iwara.comment.push
 import me.rerere.awara.ui.component.iwara.comment.removeComment
@@ -421,12 +427,22 @@ class VideoVM(
         loadComments()
     }
 
-    fun loadComments() {
+    /** 加载当前评论层；手势刷新等待真实结果，失败时保留旧数据和浏览位置。 */
+    fun loadComments(refresh: Boolean = false): Deferred<RefreshResult>? {
+        if (
+            refresh &&
+                (state.commentState.loading ||
+                    state.isLocalFallback ||
+                    state.isOnlineRemoved ||
+                    state.video == null)
+        )
+            return null
         commentLoadJob?.cancel()
         state = state.copy(commentState = state.commentState.copy(loading = true))
         val currentCommentState = state.commentState.stack.last()
-        commentLoadJob =
-            viewModelScope.launch {
+        val request =
+            viewModelScope.async {
+                var result: RefreshResult = RefreshResult.Ignored
                 try {
                     runAPICatching {
                             if (currentCommentState.parent != null) {
@@ -454,16 +470,23 @@ class VideoVM(
                                                     limit = it.limit,
                                                     total = it.count,
                                                     loadedPage = currentCommentState.page,
+                                                    needsRefresh = false,
                                                 )
                                             )
                                     )
+                                result = RefreshResult.Success
                             }
                             Log.i(TAG, "loadComments: $it")
                         }
-                        .onError { Log.w(TAG, "loadComments(error): $it") }
+                        .onError {
+                            Log.w(TAG, "loadComments(error): $it")
+                            result = RefreshResult.Failure { Text(stringResource(error = it)) }
+                        }
                         .onException {
                             if (it.exception is CancellationException) throw it.exception
                             Log.w(TAG, "loadComments(exception)", it.exception)
+                            val reason = it.exception.localizedMessage ?: "评论加载失败，请重试"
+                            result = RefreshResult.Failure { Text(reason) }
                         }
                 } finally {
                     // 仅在任务未被新请求取消时复原 loading
@@ -471,7 +494,10 @@ class VideoVM(
                         state = state.copy(commentState = state.commentState.copy(loading = false))
                     }
                 }
+                result
             }
+        commentLoadJob = request
+        return request
     }
 
     fun pushComment(id: String) {
@@ -480,10 +506,9 @@ class VideoVM(
     }
 
     fun popComment() {
-        // pop 取消子评论未完成的请求并将 loading 正确复原为 false
         commentLoadJob?.cancel()
-        state = state.copy(commentState = state.commentState.pop().copy(loading = false))
-        loadComments()
+        state = state.copy(commentState = state.commentState.pop())
+        if (state.commentState.stack.last().needsRefresh) loadComments()
     }
 
     /**
@@ -499,6 +524,7 @@ class VideoVM(
             .onSuccess {
                 events.emit(VideoEvent.CommentPosted)
                 Log.i(TAG, "postComment: $it")
+                state = state.copy(commentState = state.commentState.markCommentsChanged())
                 loadComments()
                 success = true
             }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -34,6 +35,15 @@ class DownloadVM(
     init {
         loadDownloadedItems()
     }
+
+    /** 重新查询数据库后确认通知目标，不把页面尚未刷新的列表快照当作删除依据。 */
+    suspend fun resolveFocusTarget(resourceId: String): DownloadFocusTarget? =
+        withContext(Dispatchers.IO) {
+            findDownloadFocusTarget(
+                appDatabase.downloadDao().getDownloadedItems().first(),
+                resourceId,
+            )
+        }
 
     fun loadDownloadedItems() {
         observeJob?.cancel()

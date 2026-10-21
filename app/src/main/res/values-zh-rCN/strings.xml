@@ -11,6 +11,19 @@
     <string name="comment_delete_confirm">确定删除这条评论吗？此操作无法撤销。</string>
     <string name="comment_delete_failed">删除评论失败，请重试</string>
     <string name="comment_post_failed">发送评论失败，请重试</string>
+    <string name="comment_image_preview">图片预览</string>
+    <string name="comment_image_load">加载图片</string>
+    <string name="setting_comment_image">评论图片</string>
+    <string name="setting_comment_image_auto_load_title">自动加载并显示</string>
+    <string name="setting_comment_image_auto_load_text">关闭时，点击“加载图片”后才加载并显示图片</string>
+    <string name="comment_image_save">保存图片</string>
+    <string name="comment_image_saving">正在保存图片…</string>
+    <string name="comment_image_save_success">图片已保存</string>
+    <string name="comment_image_save_failed">保存图片失败</string>
+    <string name="comment_image_load_failed">图片加载失败，点击重试</string>
+    <string name="comment_image_too_large">图片体积过大，无法保存</string>
+    <string name="comment_image_invalid_type">不是有效的图片类型</string>
+    <string name="close">关闭</string>
     <string name="search_category_title">标题</string>
     <string name="search_category_author">作者</string>
     <string name="search_author_hint">搜索作者名称或作者 ID</string>
@@ -199,6 +212,7 @@
     <string name="download_invalid_video">下载文件中没有可读取的视频轨道，未将其保存为已完成视频。</string>
     <string name="download_open_details">进入视频详情页</string>
     <string name="download_focus_missing">该视频已不在已下载列表中</string>
+    <string name="download_focus_failed">定位已下载视频失败，请重试</string>
     <string name="download_task_pause_all">全部暂停</string>
     <string name="download_task_resume_all">全部恢复</string>
     <string name="download_task_cancel_all">全部取消</string>
