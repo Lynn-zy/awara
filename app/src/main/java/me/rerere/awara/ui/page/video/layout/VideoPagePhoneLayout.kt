@@ -31,7 +31,8 @@ import me.rerere.awara.ui.page.video.pager.VideoOverviewPage
 
 @Composable
 fun VideoPagePhoneLayout(vm: VideoVM, player: @Composable () -> Unit) {
-    val pagerState = rememberPagerState()
+    // 手机端视频详情包含简介与评论2个分页，页数由 PagerState 统一提供
+    val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     Scaffold(
         topBar = {
@@ -74,11 +75,8 @@ fun VideoPagePhoneLayout(vm: VideoVM, player: @Composable () -> Unit) {
                     },
                 )
             }
-            HorizontalPager(
-                pageCount = 2,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                state = pagerState,
-            ) {
+            // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
+            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (it) {
                     0 -> VideoOverviewPage(vm)
                     1 -> VideoCommentPage(vm)

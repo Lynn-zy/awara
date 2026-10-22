@@ -26,9 +26,9 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.google.accompanist.navigation.animation.rememberAnimatedNavController
 import java.time.Instant
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
@@ -212,7 +212,7 @@ class CommentActionsTest {
         commentState: CommentState? = null,
         onRefresh: (suspend () -> RefreshResult)? = null,
     ) {
-        val router = rememberAnimatedNavController()
+        val router = rememberNavController()
         CompositionLocalProvider(LocalRouterProvider provides router) {
             MaterialTheme {
                 MessageProvider {

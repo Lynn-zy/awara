@@ -9,9 +9,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.google.accompanist.navigation.animation.rememberAnimatedNavController
 import java.time.Instant
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendRequestDto
@@ -31,7 +31,7 @@ class FriendRequestCardTest {
 
     @Composable
     private fun TestEnvironment(content: @Composable () -> Unit) {
-        val router = rememberAnimatedNavController()
+        val router = rememberNavController()
         CompositionLocalProvider(LocalRouterProvider provides router) {
             MaterialTheme { content() }
         }

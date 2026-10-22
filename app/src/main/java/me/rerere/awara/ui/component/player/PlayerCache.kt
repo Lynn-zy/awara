@@ -3,16 +3,22 @@ package me.rerere.awara.ui.component.player
 import android.content.Context
 import android.os.storage.StorageManager
 import android.util.Log
-import com.google.android.exoplayer2.database.StandaloneDatabaseProvider
-import com.google.android.exoplayer2.upstream.DefaultDataSource
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
-import com.google.android.exoplayer2.upstream.cache.CacheDataSource
-import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor
-import com.google.android.exoplayer2.upstream.cache.SimpleCache
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 
 private const val TAG = "PlayerCache"
 
+/**
+ * 播放器缓存工厂，已迁移至 AndroidX Media3 数据源体系。 保持原有的缓存路径、LRU 策略、独立 SQLite 数据库及由 DefaultDataSource 代理的上游数据源。
+ */
+@OptIn(UnstableApi::class)
 object PlayerCache {
     private lateinit var cacheFactory: CacheDataSource.Factory
 

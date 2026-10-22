@@ -365,7 +365,8 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                 },
                 pager = {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        val pagerState = rememberPagerState()
+                        // 用户主页包含视频、图片、留言3个分页，页数由 PagerState 统一提供
+                        val pagerState = rememberPagerState { 3 }
                         BetterTabBar(selectedTabIndex = pagerState.currentPage) {
                             Tab(
                                 selected = pagerState.currentPage == 0,
@@ -384,9 +385,9 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                             )
                         }
 
+                        // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
                         HorizontalPager(
                             state = pagerState,
-                            pageCount = 3,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         ) { page ->
                             when (page) {

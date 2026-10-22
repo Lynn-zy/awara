@@ -1,7 +1,7 @@
 package me.rerere.awara.ui.component.player
 
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.Player
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -288,5 +288,13 @@ class PlayerStateQualityTest {
         listener.onIsPlayingChanged(false)
         assertFalse(state.playing)
         assertFalse(state.showLoading)
+    }
+
+    @Test
+    fun videoSizeMappingPreservesDimensions() {
+        val media3VideoSize = androidx.media3.common.VideoSize(1920, 1080)
+        val domainVideoSize = PlayerState.VideoSize.from(media3VideoSize)
+        assertEquals(1920, domainVideoSize.width)
+        assertEquals(1080, domainVideoSize.height)
     }
 }

@@ -32,11 +32,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.google.accompanist.navigation.animation.AnimatedNavHost
-import com.google.accompanist.navigation.animation.composable
-import com.google.accompanist.navigation.animation.rememberAnimatedNavController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -295,9 +295,9 @@ class RouterActivity : ComponentActivity() {
 
     @Composable
     private fun Routes() {
-        val navController = rememberAnimatedNavController()
+        val navController = rememberNavController()
         CompositionLocalProvider(LocalRouterProvider provides navController) {
-            AnimatedNavHost(
+            NavHost(
                 modifier =
                     Modifier.fillMaxSize()
                         // 防止夜间模式下切换页面闪白屏

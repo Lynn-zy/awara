@@ -2,12 +2,13 @@ plugins {
     id("com.android.application")
     kotlin("android")
     kotlin("plugin.serialization")
+    kotlin("plugin.compose")
     id("com.google.devtools.ksp")
 }
 
 android {
     namespace = "me.rerere.awara"
-    compileSdk = 33
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "me.rerere.awara"
@@ -38,15 +39,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    // 配置 Kotlin 编译目标字节码版本为 17
-    kotlinOptions { jvmTarget = "17" }
-    // 配置 Kotlin JVM 工具链版本为 17
-    kotlin { jvmToolchain(17) }
     buildFeatures {
         compose = true
         buildConfig = true
     }
-    composeOptions { kotlinCompilerExtensionVersion = "1.4.5" }
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
@@ -63,32 +59,42 @@ dependencies {
     // Compose
     // implementation(platform("androidx.compose:compose-bom:2023.01.00"))
     // 依据 APK 内嵌 META-INF version 文件统一升级 Compose 构件。
-    implementation("androidx.compose.ui:ui:1.4.3")
-    implementation("androidx.compose.ui:ui-graphics:1.4.3")
-    implementation("androidx.compose.ui:ui-tooling-preview:1.4.3")
-    implementation("androidx.compose.ui:ui-util:1.4.3")
+    val composeVersion = "1.5.1"
+    implementation("androidx.compose.ui:ui:$composeVersion")
+    implementation("androidx.compose.ui:ui-graphics:$composeVersion")
+    implementation("androidx.compose.ui:ui-tooling-preview:$composeVersion")
+    implementation("androidx.compose.ui:ui-util:$composeVersion")
     implementation("androidx.compose.material3:material3:1.1.0-rc01")
     implementation("androidx.compose.material3:material3-window-size-class:1.1.0-rc01")
-    implementation("androidx.compose.material:material-icons-extended:1.4.3")
+    implementation("androidx.compose.material:material-icons-extended:$composeVersion")
 
-    // Media
-    implementation("com.google.android.exoplayer:exoplayer:2.18.6")
+    // Media3 (从 ExoPlayer 2.18.6 迁移，保留原 umbrella 对应的核心、流媒体与 UI 模块)
+    val media3Version = "1.11.1"
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-database:$media3Version")
+    implementation("androidx.media3:media3-datasource:$media3Version")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-rtsp:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-smoothstreaming:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.8.1")
 
     // Room
-    implementation("androidx.room:room-runtime:2.5.1")
-    implementation("androidx.room:room-paging:2.5.1")
-    implementation("androidx.room:room-ktx:2.5.1")
-    ksp("androidx.room:room-compiler:2.5.1")
+    val roomVersion = "2.7.2"
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-paging:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")
 
     // Paging3
-    implementation("androidx.paging:paging-runtime:3.2.0-alpha05")
-    implementation("androidx.paging:paging-compose:1.0.0-alpha19")
+    implementation("androidx.paging:paging-runtime:3.3.2")
+    implementation("androidx.paging:paging-compose:3.3.2")
 
-    // Accompanist
-    implementation("com.google.accompanist:accompanist-navigation-animation:0.29.2-rc")
+    // 导航与权限
+    implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("com.google.accompanist:accompanist-permissions:0.29.2-rc")
 
     // Splash
@@ -133,24 +139,24 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.10.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2022.10.00"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:$composeVersion")
+    debugImplementation("androidx.compose.ui:ui-tooling:$composeVersion")
+    debugImplementation("androidx.compose.ui:ui-test-manifest:$composeVersion")
 }
 
-tasks {
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions {
-            freeCompilerArgs += "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api"
-            freeCompilerArgs += "-opt-in=androidx.compose.material.ExperimentalMaterialApi"
-            freeCompilerArgs += "-opt-in=androidx.compose.animation.ExperimentalAnimationApi"
-            freeCompilerArgs += "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
-            freeCompilerArgs += "-opt-in=com.google.accompanist.pager.ExperimentalPagerApi"
-            freeCompilerArgs += "-opt-in=coil.annotation.ExperimentalCoilApi"
-            freeCompilerArgs +=
-                "-opt-in=androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi"
-        }
+kotlin {
+    jvmToolchain(17)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        optIn.addAll(
+            "androidx.compose.material3.ExperimentalMaterial3Api",
+            "androidx.compose.material.ExperimentalMaterialApi",
+            "androidx.compose.animation.ExperimentalAnimationApi",
+            "androidx.compose.foundation.ExperimentalFoundationApi",
+            "com.google.accompanist.pager.ExperimentalPagerApi",
+            "coil.annotation.ExperimentalCoilApi",
+            "androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi",
+        )
     }
 }
 

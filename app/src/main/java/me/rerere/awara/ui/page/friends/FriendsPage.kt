@@ -80,7 +80,8 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
         }
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding.excludeBottom()).fillMaxSize()) {
-            val pagerState = rememberPagerState()
+            // 本人查看显示好友和申请2页，非本人仅显示好友1页；采用 lambda 动态读取页数
+            val pagerState = rememberPagerState { if (vm.self) 2 else 1 }
             val scope = rememberCoroutineScope()
             val friendsGridState = rememberLazyStaggeredGridState()
             val requestsGridState = rememberLazyStaggeredGridState()
@@ -102,11 +103,8 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
                 }
             }
 
-            HorizontalPager(
-                pageCount = if (vm.self) 2 else 1,
-                modifier = Modifier.fillMaxSize(),
-                state = pagerState,
-            ) { page ->
+            // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                 when (page) {
                     0 -> {
                         Column(modifier = Modifier.fillMaxSize()) {

@@ -197,8 +197,10 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
                     },
                 show = state.loading && state.state == null,
             ) {
-                val pagerState = rememberPagerState()
-                HorizontalPager(pageCount = fileCount, state = pagerState) {
+                // 使用 lambda 动态获取图片文件数量，不缓存过时页数
+                val pagerState = rememberPagerState { state.state?.files?.size ?: 0 }
+                // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
+                HorizontalPager(state = pagerState) {
                     AsyncImage(
                         model = state.state!!.files[it].toImageLarge(),
                         contentDescription = null,

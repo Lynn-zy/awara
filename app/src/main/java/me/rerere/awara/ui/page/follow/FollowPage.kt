@@ -44,7 +44,8 @@ import org.koin.androidx.compose.koinViewModel
 fun FollowPage(vm: FollowVM = koinViewModel()) {
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-    val pagerState = rememberPagerState()
+    // 关注列表包含正在关注与粉丝2个标签页，页数由 PagerState 统一提供
+    val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
     val followingGridState = rememberLazyStaggeredGridState()
     val followerGridState = rememberLazyStaggeredGridState()
@@ -80,11 +81,9 @@ fun FollowPage(vm: FollowVM = koinViewModel()) {
                 )
             }
 
-            HorizontalPager(
-                pageCount = 2,
-                state = pagerState,
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            ) { page ->
+            // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth().weight(1f)) {
+                page ->
                 when (page) {
                     0 -> {
                         Column {

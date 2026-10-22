@@ -3,6 +3,7 @@ package me.rerere.awara.ui.component.player
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
@@ -11,18 +12,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import com.google.android.exoplayer2.C
-import com.google.android.exoplayer2.ExoPlayer
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.PlaybackException
-import com.google.android.exoplayer2.Player
-import com.google.android.exoplayer2.source.DefaultMediaSourceFactory
-import com.google.android.exoplayer2.ui.AspectRatioFrameLayout
-import com.google.android.exoplayer2.video.VideoSize
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import me.rerere.compose_setting.preference.mmkvPreference
 
 private const val TAG = "PlayerState"
 
+@OptIn(UnstableApi::class)
 @Composable
 fun rememberPlayerState(
     builder: (Context) -> ExoPlayer = {
@@ -74,6 +76,7 @@ fun rememberPlayerState(
 }
 
 @Stable
+@OptIn(UnstableApi::class)
 @SuppressLint("UnsafeOptInUsageError")
 class PlayerState(
     val player: Player,
@@ -118,9 +121,7 @@ class PlayerState(
                 this@PlayerState.isLoading = loading
             }
 
-            override fun onVideoSizeChanged(
-                videoSize: com.google.android.exoplayer2.video.VideoSize
-            ) {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 super.onVideoSizeChanged(videoSize)
                 this@PlayerState.videoSize = VideoSize.from(videoSize)
                 duration = player.duration
@@ -219,7 +220,7 @@ class PlayerState(
         companion object {
             val UNKNOWN = VideoSize(0, 0)
 
-            fun from(videoSize: com.google.android.exoplayer2.video.VideoSize) =
+            fun from(videoSize: androidx.media3.common.VideoSize) =
                 VideoSize(videoSize.width, videoSize.height)
         }
     }

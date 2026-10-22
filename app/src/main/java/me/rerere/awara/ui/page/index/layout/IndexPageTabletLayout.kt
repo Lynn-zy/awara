@@ -49,13 +49,14 @@ fun IndexPageTabletLayout(vm: IndexVM) {
     val userStore = LocalUserStore.current
     val userState = userStore.collectAsState()
     val navController = LocalRouterProvider.current
-    val pagerState = rememberPagerState()
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val navigations =
         remember(userState.user) {
             indexNavigations.filter { !it.needLogin || userState.user != null }
         }
+    // 平板主页导航项根据用户登录状态动态增减，PagerState 传入 lambda 实时获取最新页数
+    val pagerState = rememberPagerState { navigations.size }
     ModalNavigationDrawer(
         drawerContent = { ModalDrawerSheet { IndexDrawer(vm) } },
         drawerState = drawerState,

@@ -49,7 +49,8 @@ fun FilterAndSort(
     onFilterClear: () -> Unit,
 ) {
     var showFilter by remember { mutableStateOf(false) }
-    val pagerState = rememberPagerState()
+    // 筛选弹窗包含标签、日期、分级共3个分页，页数由 PagerState 统一提供
+    val pagerState = rememberPagerState { 3 }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -103,11 +104,8 @@ fun FilterAndSort(
                         )
                     }
 
-                    HorizontalPager(
-                        pageCount = 3,
-                        state = pagerState,
-                        modifier = Modifier.height(500.dp),
-                    ) {
+                    // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
+                    HorizontalPager(state = pagerState, modifier = Modifier.height(500.dp)) {
                         when (it) {
                             0 -> {
                                 TagFilter(
