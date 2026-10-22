@@ -1,6 +1,7 @@
 {
-  // 指定 VS Code Gradle 插件及其 Gradle Server 运行使用的 JDK 路径（匹配项目 JDK 17，避免环境变量中的 JDK 21 导致类版本不兼容报错）
-  "java.import.gradle.java.home": "C:\\Program Files\\Java\\jdk-17",
-  // 指定 Java 语言服务器使用的 JDK 路径
-  "java.jdt.ls.java.home": "C:\\Program Files\\Java\\jdk-17"
+  // 指定 VS Code Gradle 插件及其 Gradle Server 运行使用的 JDK 路径。
+  // 项目通过 jvmToolchain(17) 要求 JDK 17，此处锁定 Temurin 17.0.20（2026-10-22 从 Oracle JDK 17.0.12 迁移）
+  "java.import.gradle.java.home": "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.20.101-hotspot",
+  // 指定 Java 语言服务器使用的 JDK 路径，与上面的 Gradle JDK 保持一致，避免出现类版本不兼容
+  "java.jdt.ls.java.home": "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.20.101-hotspot"
 }
