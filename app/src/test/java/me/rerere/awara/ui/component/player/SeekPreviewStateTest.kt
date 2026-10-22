@@ -10,6 +10,40 @@ import org.junit.Test
 /** 播放器手势滑动与进度预览状态单元测试。 */
 class SeekPreviewStateTest {
 
+    /** 非边缘位置的预览中心与滑块中心一致，不再固定于播放器正中。 */
+    @Test
+    fun thumbnailPreviewFollowsThumbAcrossTrack() {
+        assertEquals(175, calculateSeekPreviewLeft(1000, 160, 0.25f, 10f, false))
+        assertEquals(420, calculateSeekPreviewLeft(1000, 160, 0.5f, 10f, false))
+        assertEquals(665, calculateSeekPreviewLeft(1000, 160, 0.75f, 10f, false))
+    }
+
+    /** 端点贴边时预览仍完整落在控制层宽度内。 */
+    @Test
+    fun thumbnailPreviewClampsBothEdges() {
+        assertEquals(0, calculateSeekPreviewLeft(320, 160, 0f, 10f, false))
+        assertEquals(160, calculateSeekPreviewLeft(320, 160, 1f, 10f, false))
+        assertEquals(0, calculateSeekPreviewLeft(320, 160, -1f, 10f, false))
+        assertEquals(160, calculateSeekPreviewLeft(320, 160, 2f, 10f, false))
+    }
+
+    /** RTL 下只反转进度方向，居中和边界夹紧规则保持一致。 */
+    @Test
+    fun thumbnailPreviewMirrorsTrackInRtl() {
+        assertEquals(665, calculateSeekPreviewLeft(1000, 160, 0.25f, 10f, true))
+        assertEquals(175, calculateSeekPreviewLeft(1000, 160, 0.75f, 10f, true))
+        assertEquals(840, calculateSeekPreviewLeft(1000, 160, 0f, 10f, true))
+        assertEquals(0, calculateSeekPreviewLeft(1000, 160, 1f, 10f, true))
+    }
+
+    /** 未测量、超窄或无效输入不会形成越界坐标或非有限值。 */
+    @Test
+    fun thumbnailPreviewHandlesUnavailableGeometry() {
+        assertEquals(0, calculateSeekPreviewLeft(0, 160, 0.5f, 10f, false))
+        assertEquals(0, calculateSeekPreviewLeft(100, 160, 0.5f, 10f, false))
+        assertEquals(0, calculateSeekPreviewLeft(320, 160, Float.NaN, Float.NaN, false))
+    }
+
     @Test
     fun invalidGestureInputCannotLeaveAnActivePreview() {
         val state = SeekPreviewState()

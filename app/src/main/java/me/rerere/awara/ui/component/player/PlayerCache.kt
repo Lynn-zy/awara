@@ -2,7 +2,6 @@ package me.rerere.awara.ui.component.player
 
 import android.content.Context
 import android.os.storage.StorageManager
-import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -12,8 +11,6 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
-
-private const val TAG = "PlayerCache"
 
 /**
  * 播放器缓存工厂，已迁移至 AndroidX Media3 数据源体系。 保持原有的缓存路径、LRU 策略、独立 SQLite 数据库及由 DefaultDataSource 代理的上游数据源。
@@ -44,10 +41,7 @@ object PlayerCache {
                     .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
                     .setCacheKeyFactory { dataSpec ->
                         val filename = dataSpec.uri.getQueryParameter("filename")
-                        Log.i(
-                            TAG,
-                            "rememberPlayerState: ${dataSpec.key} || $filename || ${dataSpec.uri}",
-                        )
+                        // 预览复用相同缓存键，但不能把带签名的播放 URL 输出到日志。
                         dataSpec.key ?: filename ?: dataSpec.uri.toString()
                     }
             this.cacheFactory = cacheFactory

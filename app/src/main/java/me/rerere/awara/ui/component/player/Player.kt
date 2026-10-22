@@ -14,11 +14,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -32,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -64,6 +65,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as MediaPlayer
+import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.delay
 
 private const val TAG = "Player"
@@ -94,6 +96,7 @@ fun Player(
 
 /** 全屏控制栏避开隐藏系统栏占用区域，手势区域保持完整尺寸。 */
 @OptIn(ExperimentalLayoutApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun PlayerController(
     modifier: Modifier,
@@ -119,6 +122,16 @@ internal fun PlayerController(
     val inputEnabled = foreground && windowInfo.isWindowFocused
     val mediaItem = state.currentMediaItem
     val renderedGeneration = mediaGeneration
+    // 下载页直接设源，读取播放内核实际 URI，而不是仅依赖详情页维护的媒体摘要。
+    val sourceUri = state.player.currentMediaItem?.localConfiguration?.uri?.toString()
+    val thumbnail =
+        rememberSeekThumbnail(
+            sourceUri = sourceUri,
+            mediaKey = listOf(mediaItem, mediaGeneration, sourceUri),
+            active = inputEnabled && previewState.isActive,
+            positionMs = previewState.targetPositionMs,
+            durationMs = state.duration,
+        )
 
     // 媒体与窗口变更均使未提交预览失效，不能把旧目标提交到新视频。
     DisposableEffect(state.player, lifecycleOwner, previewState) {
@@ -183,6 +196,11 @@ internal fun PlayerController(
             previewState.isActive -> previewState.targetPositionMs
             else -> previewState.pendingSeekTarget ?: currentPosition
         }.coerceIn(0L, state.duration.coerceAtLeast(0L))
+    // 同一比例同时驱动滑块和预览位置，横滑与进度条拖动不会出现两套定位结果。
+    val progressFraction =
+        if (state.duration > 0L) {
+            (displayPosition.toDouble() / state.duration.toDouble()).toFloat().coerceIn(0f, 1f)
+        } else 0f
 
     var visible by remember { mutableStateOf(true) }
     var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -317,7 +335,17 @@ internal fun PlayerController(
                     actions()
                 }
 
-                Spacer(modifier = Modifier.weight(1f).fillMaxWidth())
+                // 预览在剩余空间底部随滑块移动，不挤压 Slider 或底部按钮。
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (previewState.isActive) {
+                        PlayerSeekPreview(
+                            targetTime = previewState.targetTimeText,
+                            deltaTime = previewState.deltaTimeText,
+                            thumbnail = thumbnail,
+                            fraction = progressFraction,
+                        )
+                    }
+                }
 
                 // 底部控制与进度条排布：Slider 单独一行避免窄屏被时间挤占
                 Column(
@@ -327,7 +355,7 @@ internal fun PlayerController(
                     ProgressSlider(
                         state = state,
                         previewState = previewState,
-                        displayPosition = displayPosition,
+                        fraction = progressFraction,
                         enabled =
                             inputEnabled &&
                                 state.duration > 0L &&
@@ -399,25 +427,6 @@ internal fun PlayerController(
                     Icon(Icons.Outlined.Replay, "Replay")
                 }
             }
-
-            // 预览时间提示
-            if (previewState.isActive) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = previewState.targetTimeText,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = Color.White,
-                    )
-                    Text(
-                        text = "(${previewState.deltaTimeText})",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.8f),
-                    )
-                }
-            }
         }
     }
 }
@@ -435,7 +444,7 @@ internal fun PlayerController(
 private fun ProgressSlider(
     state: PlayerState,
     previewState: SeekPreviewState,
-    displayPosition: Long,
+    fraction: Float,
     enabled: Boolean,
     interactionKey: Any,
     onTouch: () -> Unit,
@@ -460,16 +469,9 @@ private fun ProgressSlider(
         }
     }
 
-    val percent =
-        if (state.duration > 0L) {
-            (displayPosition.toDouble() / state.duration.toDouble()).toFloat().coerceIn(0f, 1f)
-        } else {
-            0f
-        }
-
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Slider(
-            value = percent,
+            value = fraction,
             onValueChange = { ratio ->
                 if (!enabled || (touchInProgress && isDragCancelled)) return@Slider
                 if (!touchInProgress) isDragCancelled = false
@@ -490,6 +492,13 @@ private fun ProgressSlider(
             },
             enabled = enabled,
             interactionSource = interactionSource,
+            thumb = {
+                SliderDefaults.Thumb(
+                    interactionSource = interactionSource,
+                    enabled = enabled,
+                    modifier = Modifier.size(PlayerSeekThumbDiameter).testTag("player_seek_thumb"),
+                )
+            },
             modifier =
                 Modifier.fillMaxWidth().testTag("player_seek_slider").pointerInput(
                     interactionKey,

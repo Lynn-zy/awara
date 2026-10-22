@@ -43,6 +43,8 @@ android {
         compose = true
         buildConfig = true
     }
+    // 仪器测试复用 JVM 的合成视频素材，不复制文件，也不打入正式应用。
+    sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
@@ -79,6 +81,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-rtsp:$media3Version")
     implementation("androidx.media3:media3-exoplayer-smoothstreaming:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
+    // 在线预览使用独立异步取帧器，不通过播放中的 ExoPlayer seek 取图。
+    implementation("androidx.media3:media3-inspector-frame:$media3Version")
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.8.1")
