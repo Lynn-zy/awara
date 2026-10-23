@@ -25,6 +25,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import me.rerere.awara.R
+import me.rerere.awara.ui.component.player.SeekPreviewPosition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -34,6 +37,45 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SettingPageLayoutTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test
+    fun thumbnailSettingRetainsChosenPositionWhenDisabled() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val enabled = mutableStateOf(true)
+        val position = mutableStateOf(SeekPreviewPosition.FollowSlider.key)
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 1.3f)
+            ) {
+                MaterialTheme {
+                    Column(Modifier.width(320.dp).testTag("thumbnail_settings")) {
+                        SeekThumbnailSettings(enabled, position)
+                    }
+                }
+            }
+        }
+        val switchTitle = context.getString(R.string.setting_player_seek_thumbnail)
+        val positionTitle = context.getString(R.string.setting_player_seek_preview_position)
+        compose.onNodeWithText(positionTitle).performClick()
+        compose
+            .onNodeWithText(context.getString(R.string.setting_player_seek_preview_center))
+            .performClick()
+        compose.runOnIdle { assertEquals(SeekPreviewPosition.Center.key, position.value) }
+        compose.onNodeWithText(switchTitle).performClick()
+        compose.onNodeWithText(positionTitle).assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(false, enabled.value)
+            assertEquals(SeekPreviewPosition.Center.key, position.value)
+        }
+        compose.onNodeWithText(switchTitle).performClick()
+        compose
+            .onNodeWithText(context.getString(R.string.setting_player_seek_preview_center))
+            .assertIsDisplayed()
+        val bounds = compose.onNodeWithTag("thumbnail_settings").getUnclippedBoundsInRoot()
+        val label = compose.onNodeWithText(positionTitle).getUnclippedBoundsInRoot()
+        assertTrue(label.left >= bounds.left && label.right <= bounds.right)
+    }
 
     @Test
     fun settingItemsRenderWithinBoundsOnNarrowWidthWithLargeFontScale() {

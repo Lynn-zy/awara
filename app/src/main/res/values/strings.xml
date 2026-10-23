@@ -1,4 +1,8 @@
 <resources>
+    <string name="setting_player_seek_thumbnail">Seek thumbnail preview</string>
+    <string name="setting_player_seek_preview_position">Thumbnail position</string>
+    <string name="setting_player_seek_preview_center">Center</string>
+    <string name="setting_player_seek_preview_follow_slider">Follow seek slider</string>
     <string name="player_seek_keyframe">Nearby keyframe preview</string>
     <string name="player_seek_thumbnail_unavailable">Preview unavailable</string>
     <string name="comment_action_more">Comment actions</string>

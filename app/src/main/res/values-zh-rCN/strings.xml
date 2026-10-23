@@ -1,4 +1,8 @@
 <resources>
+    <string name="setting_player_seek_thumbnail">滑动缩略图预览</string>
+    <string name="setting_player_seek_preview_position">缩略图显示位置</string>
+    <string name="setting_player_seek_preview_center">视频中间</string>
+    <string name="setting_player_seek_preview_follow_slider">跟随进度条滑块</string>
     <string name="player_seek_keyframe">附近关键帧预览</string>
     <string name="player_seek_thumbnail_unavailable">预览不可用</string>
     <string name="comment_action_more">评论操作</string>

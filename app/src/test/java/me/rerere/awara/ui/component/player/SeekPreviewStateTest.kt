@@ -315,4 +315,35 @@ class SeekPreviewStateTest {
         state.clearPending()
         assertNull(state.pendingSeekTarget)
     }
+
+    @Test
+    fun previewPositionUsesStableKeysAndDefaultsToFollowingSlider() {
+        assertEquals(SeekPreviewPosition.Center, SeekPreviewPosition.fromKey("center"))
+        assertEquals(SeekPreviewPosition.FollowSlider, SeekPreviewPosition.fromKey("follow_slider"))
+        assertEquals(SeekPreviewPosition.FollowSlider, SeekPreviewPosition.fromKey(null))
+        assertEquals(SeekPreviewPosition.FollowSlider, SeekPreviewPosition.fromKey("invalid"))
+    }
+
+    @Test
+    fun centeredPreviewIgnoresProgressAndLayoutDirection() {
+        listOf(false, true).forEach { isRtl ->
+            listOf(0f, 0.5f, 1f, Float.NaN).forEach { fraction ->
+                assertEquals(
+                    80,
+                    calculateSeekPreviewLeft(
+                        containerWidth = 320,
+                        previewWidth = 160,
+                        fraction = fraction,
+                        thumbInset = 10f,
+                        isRtl = isRtl,
+                        position = SeekPreviewPosition.Center,
+                    ),
+                )
+            }
+        }
+        assertEquals(
+            0,
+            calculateSeekPreviewLeft(80, 160, 0f, 10f, false, SeekPreviewPosition.Center),
+        )
+    }
 }

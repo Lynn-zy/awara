@@ -44,6 +44,21 @@ import me.rerere.awara.R
 /** 滑块直径由 Slider 和预览定位共用，避免轨道内缩与预览锚点不一致。 */
 internal val PlayerSeekThumbDiameter = 20.dp
 
+/** 缩略图开关与显示位置独立保存；关闭图片时仍保留时间定位反馈。 */
+internal const val PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED = "setting.seek_thumbnail_enabled"
+internal const val PREFERENCE_KEY_SEEK_PREVIEW_POSITION = "setting.seek_preview_position"
+
+/** 预览位置使用稳定键持久化，缺失或无效值保持当前随滑块的默认体验。 */
+internal enum class SeekPreviewPosition(val key: String) {
+    Center("center"),
+    FollowSlider("follow_slider");
+
+    companion object {
+        fun fromKey(key: String?): SeekPreviewPosition =
+            entries.firstOrNull { it.key == key } ?: FollowSlider
+    }
+}
+
 /** 在组件作用域内复用串行调度器；媒体代次变化时清缓存，非拖动期间不启动取帧。 */
 @Composable
 internal fun rememberSeekThumbnail(
@@ -79,7 +94,7 @@ internal fun rememberSeekThumbnail(
     else SeekThumbnailState(request, loading = request != null)
 }
 
-/** 预览贴在进度条上方并跟随滑块；边缘夹紧、空间不足时缩图，不改变下方控件位置。 */
+/** 预览可居中或贴在进度条上方随动；空间不足时缩图，不改变下方控件位置。 */
 @Composable
 internal fun PlayerSeekPreview(
     targetTime: String,
@@ -87,6 +102,7 @@ internal fun PlayerSeekPreview(
     thumbnail: SeekThumbnailState<Bitmap>,
     fraction: Float,
     modifier: Modifier = Modifier,
+    position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
 ) {
     Layout(
         modifier = modifier.fillMaxSize().padding(bottom = 4.dp),
@@ -184,10 +200,14 @@ internal fun PlayerSeekPreview(
                 fraction = fraction,
                 thumbInset = PlayerSeekThumbDiameter.toPx() / 2f,
                 isRtl = layoutDirection == LayoutDirection.Rtl,
+                position = position,
             )
+        val availableHeight = (constraints.maxHeight - bubble.height).coerceAtLeast(0)
+        val top =
+            if (position == SeekPreviewPosition.Center) availableHeight / 2 else availableHeight
         layout(constraints.maxWidth, constraints.maxHeight) {
             // left 已是物理坐标，使用 place 而非 placeRelative，避免 RTL 再次镜像。
-            bubble.place(left, (constraints.maxHeight - bubble.height).coerceAtLeast(0))
+            bubble.place(left, top)
         }
     }
 }
@@ -199,9 +219,11 @@ internal fun calculateSeekPreviewLeft(
     fraction: Float,
     thumbInset: Float,
     isRtl: Boolean,
+    position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
 ): Int {
     val width = containerWidth.coerceAtLeast(0)
     val bubbleWidth = previewWidth.coerceIn(0, width)
+    if (position == SeekPreviewPosition.Center) return (width - bubbleWidth) / 2
     val inset = if (thumbInset.isFinite()) thumbInset.coerceIn(0f, width / 2f) else 0f
     val progress = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
     val physicalProgress = if (isRtl) 1f - progress else progress

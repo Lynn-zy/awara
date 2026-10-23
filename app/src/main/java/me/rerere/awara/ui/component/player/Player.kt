@@ -67,6 +67,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as MediaPlayer
 import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.delay
+import me.rerere.compose_setting.preference.rememberBooleanPreference
+import me.rerere.compose_setting.preference.rememberStringPreference
 
 private const val TAG = "Player"
 
@@ -79,6 +81,13 @@ fun Player(
     controllerTrail: @Composable (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val thumbnailEnabled by
+        rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
+    val previewPosition by
+        rememberStringPreference(
+            key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
+            default = SeekPreviewPosition.FollowSlider.key,
+        )
     Box(modifier = modifier) {
         PlayerBase(state = state, modifier = Modifier.matchParentSize())
         CompositionLocalProvider(LocalContentColor provides Color.White) {
@@ -89,6 +98,8 @@ fun Player(
                 navigationIcon = navigationIcon,
                 actions = actions,
                 controllerTrail = controllerTrail,
+                thumbnailEnabled = thumbnailEnabled,
+                previewPosition = SeekPreviewPosition.fromKey(previewPosition),
             )
         }
     }
@@ -106,6 +117,8 @@ internal fun PlayerController(
     navigationIcon: @Composable (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     controllerTrail: @Composable (() -> Unit)? = null,
+    thumbnailEnabled: Boolean = true,
+    previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val windowInfo = LocalWindowInfo.current
@@ -124,14 +137,17 @@ internal fun PlayerController(
     val renderedGeneration = mediaGeneration
     // 下载页直接设源，读取播放内核实际 URI，而不是仅依赖详情页维护的媒体摘要。
     val sourceUri = state.player.currentMediaItem?.localConfiguration?.uri?.toString()
+    // 关闭时移出组合并释放调度器，避免只隐藏图片却继续网络请求或本地解码。
     val thumbnail =
-        rememberSeekThumbnail(
-            sourceUri = sourceUri,
-            mediaKey = listOf(mediaItem, mediaGeneration, sourceUri),
-            active = inputEnabled && previewState.isActive,
-            positionMs = previewState.targetPositionMs,
-            durationMs = state.duration,
-        )
+        if (thumbnailEnabled) {
+            rememberSeekThumbnail(
+                sourceUri = sourceUri,
+                mediaKey = listOf(mediaItem, mediaGeneration, sourceUri),
+                active = inputEnabled && previewState.isActive,
+                positionMs = previewState.targetPositionMs,
+                durationMs = state.duration,
+            )
+        } else SeekThumbnailState()
 
     // 媒体与窗口变更均使未提交预览失效，不能把旧目标提交到新视频。
     DisposableEffect(state.player, lifecycleOwner, previewState) {
@@ -335,7 +351,7 @@ internal fun PlayerController(
                     actions()
                 }
 
-                // 预览在剩余空间底部随滑块移动，不挤压 Slider 或底部按钮。
+                // 两种位置都只使用现有剩余空间，不挤压 Slider 或底部按钮。
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     if (previewState.isActive) {
                         PlayerSeekPreview(
@@ -343,6 +359,7 @@ internal fun PlayerController(
                             deltaTime = previewState.deltaTimeText,
                             thumbnail = thumbnail,
                             fraction = progressFraction,
+                            position = previewPosition,
                         )
                     }
                 }

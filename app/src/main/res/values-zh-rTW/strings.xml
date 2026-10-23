@@ -1,4 +1,8 @@
 <resources>
+    <string name="setting_player_seek_thumbnail">滑動縮圖預覽</string>
+    <string name="setting_player_seek_preview_position">縮圖顯示位置</string>
+    <string name="setting_player_seek_preview_center">中間</string>
+    <string name="setting_player_seek_preview_follow_slider">跟隨進度列滑塊</string>
     <string name="login_title">登錄</string>
     <string name="login_button">登錄</string>
     <string name="login_user">用戶名或電子郵件</string>

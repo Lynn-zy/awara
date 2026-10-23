@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -98,7 +99,11 @@ class PlayerSeekInteractionTest {
         val preview: SeekPreviewState,
     )
 
-    private fun renderController(sourceUri: String? = null): Fixture {
+    private fun renderController(
+        sourceUri: String? = null,
+        thumbnailEnabled: MutableState<Boolean> = mutableStateOf(true),
+        position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
+    ): Fixture {
         val handler = RecordingPlayer()
         handler.mediaItem = sourceUri?.let { MediaItem.fromUri(it) }
         val player =
@@ -115,12 +120,55 @@ class PlayerSeekInteractionTest {
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.size(320.dp, 240.dp)) {
-                    PlayerController(Modifier.fillMaxSize(), state, false, preview)
+                    PlayerController(
+                        Modifier.fillMaxSize(),
+                        state,
+                        false,
+                        preview,
+                        thumbnailEnabled = thumbnailEnabled.value,
+                        previewPosition = position,
+                    )
                 }
             }
         }
         compose.waitForIdle()
         return Fixture(state, handler, preview)
+    }
+
+    @Test
+    fun disablingThumbnailDuringDragKeepsTimeAndSingleSeekCommit() {
+        val enabled = mutableStateOf(true)
+        val fixture = renderController("file:///missing-thumbnail.mp4", enabled)
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.7f))
+            moveTo(Offset(center.x * 1.5f, center.y * 0.7f))
+        }
+        compose.onNodeWithTag("player_seek_thumbnail").assertIsDisplayed()
+        compose.runOnIdle { enabled.value = false }
+        compose.onNodeWithTag("player_seek_thumbnail").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_preview_time").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, fixture.player.seekCount) }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.runOnIdle { assertEquals(1, fixture.player.seekCount) }
+    }
+
+    @Test
+    fun centeredPreviewDoesNotMoveWithHorizontalGesture() {
+        renderController(position = SeekPreviewPosition.Center)
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.7f))
+            moveTo(Offset(center.x, center.y * 0.7f))
+        }
+        val before =
+            compose.onNodeWithTag("player_seek_preview_bubble").fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            moveTo(Offset(center.x * 1.5f, center.y * 0.7f))
+        }
+        val after =
+            compose.onNodeWithTag("player_seek_preview_bubble").fetchSemanticsNode().boundsInRoot
+        assertEquals(before.center.x, after.center.x, 1f)
+        assertEquals(before.center.y, after.center.y, 1f)
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { cancel() }
     }
 
     @Test

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.AutoMode
 import androidx.compose.material.icons.outlined.ColorLens
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.HomeWork
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.LightMode
@@ -72,11 +73,44 @@ import me.rerere.awara.ui.component.common.Avatar
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
+import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_PREVIEW_POSITION
+import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED
+import me.rerere.awara.ui.component.player.SeekPreviewPosition
 import me.rerere.awara.util.openUrl
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberIntPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.compose.koinInject
+
+/** 复用现有设置行；关闭时保留位置偏好，下次开启仍沿用之前选择。 */
+@Composable
+internal fun SeekThumbnailSettings(enabled: MutableState<Boolean>, position: MutableState<String>) {
+    SettingBooleanItem(
+        state = enabled,
+        title = { Text(stringResource(R.string.setting_player_seek_thumbnail)) },
+        icon = { Icon(Icons.Outlined.Image, null) },
+    )
+    if (enabled.value) {
+        SettingPickerItem(
+            state = position,
+            items = SeekPreviewPosition.entries.map { it.key },
+            itemLabel = { key ->
+                Text(
+                    stringResource(
+                        when (SeekPreviewPosition.fromKey(key)) {
+                            SeekPreviewPosition.Center ->
+                                R.string.setting_player_seek_preview_center
+                            SeekPreviewPosition.FollowSlider ->
+                                R.string.setting_player_seek_preview_follow_slider
+                        }
+                    )
+                )
+            },
+            title = { Text(stringResource(R.string.setting_player_seek_preview_position)) },
+            icon = { Icon(Icons.Outlined.Image, null) },
+        )
+    }
+}
 
 @Composable
 internal fun SettingItemCategory(
@@ -406,6 +440,19 @@ fun SettingPage() {
                         title = { Text(stringResource(R.string.setting_player_loop_title)) },
                         text = { Text(stringResource(R.string.setting_player_loop_text)) },
                         icon = { Icon(Icons.Outlined.Replay, null) },
+                    )
+
+                    SeekThumbnailSettings(
+                        enabled =
+                            rememberBooleanPreference(
+                                key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED,
+                                default = true,
+                            ),
+                        position =
+                            rememberStringPreference(
+                                key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
+                                default = SeekPreviewPosition.FollowSlider.key,
+                            ),
                     )
 
                     // 下载视频播放器选择：内置（internal）/ 第三方（external）
