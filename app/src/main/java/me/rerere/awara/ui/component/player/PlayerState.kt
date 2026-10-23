@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -23,6 +24,20 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import me.rerere.compose_setting.preference.mmkvPreference
 
 private const val TAG = "PlayerState"
+
+/** 播放速度持久化配置键 */
+internal const val PREFERENCE_KEY_PLAYER_SPEED = "setting.player_speed"
+
+/** 支持的播放倍速档位列表（0.5x, 1.0x, 1.5x, 2.0x） */
+internal val PlayerPlaybackSpeeds = listOf(0.5f, 1f, 1.5f, 2f)
+
+/** 规范化播放速度，对于非法值、非有限数（NaN/Infinity）或不在支持档位列表中的值回退为默认的 1.0x */
+internal fun normalizePlaybackSpeed(value: Float): Float =
+    if (value.isFinite() && value in PlayerPlaybackSpeeds) {
+        value
+    } else {
+        1f
+    }
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -43,7 +58,13 @@ fun rememberPlayerState(
     }
 ): PlayerState {
     val context = LocalContext.current
-    val state by remember { mutableStateOf(PlayerState(builder(context))) }
+    val initialSpeed = remember {
+        val speedStr = mmkvPreference.getString(PREFERENCE_KEY_PLAYER_SPEED, "1.0")
+        normalizePlaybackSpeed(speedStr?.toFloatOrNull() ?: 1f)
+    }
+    val state by remember {
+        mutableStateOf(PlayerState(player = builder(context), initialPlaybackSpeed = initialSpeed))
+    }
     DisposableEffect(context) {
         state.playing = state.player.isPlaying
         state.isLoading = state.player.isLoading
@@ -84,10 +105,18 @@ class PlayerState(
     private val saveQualityPreference: (String) -> Unit = { quality ->
         mmkvPreference.putString("setting.player_quality", quality)
     },
+    initialPlaybackSpeed: Float = 1f,
+    private val savePlaybackSpeedPreference: (Float) -> Unit = { speed ->
+        mmkvPreference.putString(PREFERENCE_KEY_PLAYER_SPEED, speed.toString())
+    },
 ) {
     var playing by mutableStateOf(false)
     var state by mutableStateOf(State.IDLE)
     var isLoading by mutableStateOf(false)
+
+    /** 当前播放倍速状态（只读，私有 set，仅通过 [updatePlaybackSpeed] 显式变更并持久化） */
+    var currentPlaybackSpeed by mutableFloatStateOf(normalizePlaybackSpeed(initialPlaybackSpeed))
+        private set
 
     val showLoading: Boolean
         get() = !playing && (state == State.BUFFERING || isLoading)
@@ -136,6 +165,14 @@ class PlayerState(
 
     init {
         player.addListener(playbackListener)
+        // 初次创建时应用常驻偏好并保留音调；临时加速和媒体切换不重新写入偏好。
+        try {
+            if (player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+                player.playbackParameters =
+                    player.playbackParameters.withSpeed(currentPlaybackSpeed)
+            }
+        } catch (_: SecurityException) {} catch (_: IllegalArgumentException) {} catch (
+            _: UnsupportedOperationException) {}
     }
 
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
@@ -196,6 +233,37 @@ class PlayerState(
         player.prepare()
 
         currentMediaItem = item.mediaItem
+    }
+
+    /**
+     * 更新播放倍速
+     *
+     * 验证目标倍速是否属于四档（0.5x, 1.0x, 1.5x, 2.0x）且播放器当前支持 COMMAND_SET_SPEED_AND_PITCH 命令。 应用成功后更新
+     * [currentPlaybackSpeed] 并调用 [savePlaybackSpeedPreference] 持久化； 若校验失败或底层抛出 SecurityException /
+     * IllegalArgumentException / UnsupportedOperationException， 则不持久化、不改变当前偏好并返回 false；严禁吞没协程取消异常。
+     *
+     * @param speed 目标播放倍速
+     * @return true 表示成功更新并持久化，false 表示不支持或设置失败
+     */
+    fun updatePlaybackSpeed(speed: Float): Boolean {
+        if (!speed.isFinite() || speed !in PlayerPlaybackSpeeds) {
+            return false
+        }
+        return try {
+            if (!player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+                return false
+            }
+            player.playbackParameters = player.playbackParameters.withSpeed(speed)
+            currentPlaybackSpeed = speed
+            savePlaybackSpeedPreference(speed)
+            true
+        } catch (_: SecurityException) {
+            false
+        } catch (_: IllegalArgumentException) {
+            false
+        } catch (_: UnsupportedOperationException) {
+            false
+        }
     }
 
     fun pause() {

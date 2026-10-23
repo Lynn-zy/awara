@@ -7,48 +7,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlin.math.abs
 
-/** 手势方向判定结果。 */
-enum class GestureDirectionDecision {
-    /** 尚未超过 touchSlop，方向未决 */
-    Undecided,
-
-    /** 横向位移明显占优，锁定横向 seek 手势 */
-    LockedHorizontal,
-
-    /** 纵向位移占优或横向优势不足，拒绝整个手势序列 */
-    Rejected,
-}
-
-/**
- * 评估触摸手势方向锁定。
- *
- * 规格要求：
- * 1. 超过系统 touchSlop 且横向明显占优（absX >= 1.5 * absY）才锁定为横向 seek；
- * 2. 竖向占优或未达到 1.5 倍阈值拒绝整个序列，后续不能转横；
- * 3. 未超过 touchSlop 时保持未决状态。
- *
- * @param dx X轴相对位移
- * @param dy Y轴相对位移
- * @param touchSlop 系统滑动手势判定阈值
- * @return 手势方向决策
- */
-fun evaluateGestureDirection(dx: Float, dy: Float, touchSlop: Float): GestureDirectionDecision {
-    val absX = abs(dx)
-    val absY = abs(dy)
-
-    // 尚未越过阈值
-    if (absX < touchSlop && absY < touchSlop) {
-        return GestureDirectionDecision.Undecided
-    }
-
-    // 横向明显占优：absX >= touchSlop 且 absX >= 1.5 * absY
-    return if (absX >= touchSlop && absX >= 1.5f * absY) {
-        GestureDirectionDecision.LockedHorizontal
-    } else {
-        GestureDirectionDecision.Rejected
-    }
-}
-
 /**
  * 判断触控坐标是否位于边缘保护区域内。
  *

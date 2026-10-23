@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.FitScreen
@@ -27,6 +28,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource as composeStringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -240,7 +243,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     fullscreen = fullscreen,
                     modifier = Modifier.fillMaxSize(),
                     navigationIcon = { BackButton() },
-                    actions = {
+                    actions = { speedSelector ->
                         // 保留DLNA投屏状态与选择逻辑，顶部投屏按钮按需求隐藏展示
                         if (fullscreen) {
                             IconButton(
@@ -257,6 +260,8 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                 Icon(Icons.Outlined.FitScreen, null)
                             }
                         }
+
+                        speedSelector()
 
                         val localDownload = vm.state.localDownload
                         val playableUrls = vm.state.urls.playableVideoFiles()
@@ -284,6 +289,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                             Box {
                                 var expandedVideoQuality by remember { mutableStateOf(false) }
                                 TextButton(
+                                    modifier = Modifier.widthIn(max = 128.dp),
                                     onClick = {
                                         expandedVideoQuality = true
                                         if (
@@ -293,9 +299,14 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                         ) {
                                             vm.requestOnlineUrls()
                                         }
-                                    }
+                                    },
                                 ) {
-                                    Text(text = displayQualityText, color = Color.White)
+                                    Text(
+                                        text = displayQualityText,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                                 DropdownMenu(
                                     expanded = expandedVideoQuality,

@@ -1,17 +1,25 @@
 package me.rerere.awara.ui.component.player
 
+import android.app.Activity
+import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.view.Window
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -22,12 +30,18 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.datasource.ByteArrayDataSource
 import androidx.media3.datasource.DataSource
@@ -38,6 +52,7 @@ import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.runBlocking
+import me.rerere.awara.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -52,14 +67,65 @@ import org.junit.runner.RunWith
 class PlayerSeekInteractionTest {
     @get:Rule val compose = createComposeRule()
 
+    /** 所有控制层触摸测试都使用替身，避免自动化测试改变设备亮度、媒体音量或真实倍速。 */
+    private class RecordingControls : PlayerGestureControlTarget {
+        var brightness = 0.5f
+        var volume = 0.5f
+        var speed = 1.25f
+        var brightnessWrites = 0
+        var volumeWrites = 0
+
+        override fun readBrightness() = brightness
+
+        override fun writeBrightness(value: Float): Float {
+            brightnessWrites++
+            brightness = value
+            return value
+        }
+
+        override fun restoreBrightness() {
+            brightness = 0.5f
+        }
+
+        override fun readVolume() = volume
+
+        override fun writeVolume(value: Float): Float {
+            volumeWrites++
+            volume = value
+            return value
+        }
+
+        override fun readSpeed() = speed
+
+        override fun writeSpeed(value: Float): Boolean {
+            speed = value
+            return true
+        }
+    }
+
     private class RecordingPlayer : InvocationHandler {
         var positionMs = 10_000L
         var seekCount = 0
         var pauseCount = 0
         var mediaItem: MediaItem? = null
+        val listeners = mutableSetOf<Player.Listener>()
+        var parameters = PlaybackParameters(1.25f, 0.8f)
 
         override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
             when (method.name) {
+                "getPlaybackParameters" -> return parameters
+                "setPlaybackParameters" -> {
+                    parameters = args!![0] as PlaybackParameters
+                    return null
+                }
+                "addListener" -> {
+                    listeners += args!![0] as Player.Listener
+                    return null
+                }
+                "removeListener" -> {
+                    listeners -= args!![0] as Player.Listener
+                    return null
+                }
                 "getCurrentMediaItem" -> return mediaItem
                 "getCurrentPosition" -> return positionMs
                 "getDuration" -> return 60_000L
@@ -97,12 +163,18 @@ class PlayerSeekInteractionTest {
         val state: PlayerState,
         val player: RecordingPlayer,
         val preview: SeekPreviewState,
+        val controls: PlayerGestureControlState,
+        val target: RecordingControls,
+        val lifecycle: LifecycleRegistry,
+        val mounted: MutableState<Boolean>,
+        val savedSpeed: MutableState<Float?>,
     )
 
     private fun renderController(
         sourceUri: String? = null,
         thumbnailEnabled: MutableState<Boolean> = mutableStateOf(true),
         position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
+        qualityAction: Boolean = false,
     ): Fixture {
         val handler = RecordingPlayer()
         handler.mediaItem = sourceUri?.let { MediaItem.fromUri(it) }
@@ -112,27 +184,458 @@ class PlayerSeekInteractionTest {
                 arrayOf(Player::class.java),
                 handler,
             ) as Player
-        val state = PlayerState(player, "Source", {})
+        val savedSpeed = mutableStateOf<Float?>(null)
+        val state =
+            PlayerState(
+                player,
+                "Source",
+                {},
+                savePlaybackSpeedPreference = { savedSpeed.value = it },
+            )
         state.duration = 60_000L
         state.playing = true
         state.state = PlayerState.State.READY
         val preview = SeekPreviewState()
+        val target = RecordingControls()
+        val controls = PlayerGestureControlState(target)
+        val mounted = mutableStateOf(true)
+        val owner =
+            object : LifecycleOwner {
+                override val lifecycle = LifecycleRegistry(this)
+            }
+        compose.runOnUiThread { owner.lifecycle.currentState = Lifecycle.State.RESUMED }
         compose.setContent {
-            MaterialTheme {
-                Box(Modifier.size(320.dp, 240.dp)) {
-                    PlayerController(
-                        Modifier.fillMaxSize(),
-                        state,
-                        false,
-                        preview,
-                        thumbnailEnabled = thumbnailEnabled.value,
-                        previewPosition = position,
-                    )
+            if (mounted.value) {
+                CompositionLocalProvider(LocalLifecycleOwner provides owner) {
+                    MaterialTheme {
+                        Box(Modifier.size(320.dp, 240.dp)) {
+                            PlayerController(
+                                Modifier.fillMaxSize(),
+                                state,
+                                false,
+                                preview,
+                                thumbnailEnabled = thumbnailEnabled.value,
+                                previewPosition = position,
+                                controls = controls,
+                                actions = { speedSelector ->
+                                    speedSelector()
+                                    if (qualityAction)
+                                        TextButton(
+                                            onClick = {},
+                                            modifier = Modifier.testTag("test_quality_selector"),
+                                        ) {
+                                            Text("720p")
+                                        }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
         compose.waitForIdle()
-        return Fixture(state, handler, preview)
+        return Fixture(
+            state,
+            handler,
+            preview,
+            controls,
+            target,
+            owner.lifecycle,
+            mounted,
+            savedSpeed,
+        )
+    }
+
+    /** 直接测量生产反馈组件，不以修改手势状态代替原有触摸用例。 */
+    private fun renderFeedback(
+        fullscreen: Boolean,
+        rtl: Boolean = false,
+        height: Int = 240,
+        fontScale: Float = 1f,
+    ): MutableState<PlayerControlFeedback> {
+        val feedback = mutableStateOf(PlayerControlFeedback(PlayerControlKind.Brightness, 0.4f))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                LocalDensity provides Density(density.density, fontScale),
+            ) {
+                MaterialTheme {
+                    Box(Modifier.size(320.dp, height.dp).testTag("feedback_bounds")) {
+                        PlayerGestureFeedback(feedback.value, fullscreen)
+                    }
+                }
+            }
+        }
+        return feedback
+    }
+
+    @Test
+    fun fullscreenLevelFeedbackUsesPhysicalSidesAndVerticalProgress() {
+        val feedback = renderFeedback(fullscreen = true)
+        val root = compose.onNodeWithTag("feedback_bounds").fetchSemanticsNode().boundsInRoot
+        val left =
+            compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
+        val bar = compose.onNodeWithTag("player_control_level").fetchSemanticsNode()
+        assertTrue(left.right < root.center.x)
+        assertTrue(bar.boundsInRoot.height > bar.boundsInRoot.width)
+        assertEquals(0.4f, bar.config[SemanticsProperties.ProgressBarRangeInfo].current, 0.001f)
+        compose.runOnIdle { feedback.value = PlayerControlFeedback(PlayerControlKind.Volume, 0.7f) }
+        val right =
+            compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
+        assertTrue(right.left > root.center.x)
+        assertEquals(
+            0.7f,
+            compose
+                .onNodeWithTag("player_control_level")
+                .fetchSemanticsNode()
+                .config[SemanticsProperties.ProgressBarRangeInfo]
+                .current,
+            0.001f,
+        )
+    }
+
+    @Test
+    fun fullscreenFeedbackDoesNotSwapPhysicalSidesInRtl() {
+        val feedback = renderFeedback(fullscreen = true, rtl = true)
+        val root = compose.onNodeWithTag("feedback_bounds").fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            compose
+                .onNodeWithTag("player_control_feedback")
+                .fetchSemanticsNode()
+                .boundsInRoot
+                .right < root.center.x
+        )
+        compose.runOnIdle { feedback.value = PlayerControlFeedback(PlayerControlKind.Volume, 0.5f) }
+        assertTrue(
+            compose
+                .onNodeWithTag("player_control_feedback")
+                .fetchSemanticsNode()
+                .boundsInRoot
+                .left > root.center.x
+        )
+    }
+
+    @Test
+    fun embeddedFeedbackKeepsPercentCenteredWhileSpeedMovesToTop() {
+        val feedback = renderFeedback(fullscreen = false)
+        val root = compose.onNodeWithTag("feedback_bounds").fetchSemanticsNode().boundsInRoot
+        val centered =
+            compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
+        assertEquals(root.center.x, centered.center.x, 1f)
+        assertEquals(root.center.y, centered.center.y, 1f)
+        compose.onNodeWithTag("player_control_level").assertDoesNotExist()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose
+            .onNodeWithText(context.getString(R.string.player_gesture_brightness, 40))
+            .assertIsDisplayed()
+        compose.runOnIdle { feedback.value = PlayerControlFeedback(PlayerControlKind.Speed, 2f) }
+        val speed =
+            compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
+        assertEquals(root.center.x, speed.center.x, 1f)
+        assertTrue(speed.bottom < root.center.y)
+        compose.onNodeWithTag("player_control_level").assertDoesNotExist()
+    }
+
+    @Test
+    fun fullscreenSpeedStaysAtTopAndSmallFeedbackStaysWithinBounds() {
+        val feedback = renderFeedback(fullscreen = true, height = 100, fontScale = 1.6f)
+        val root = compose.onNodeWithTag("feedback_bounds").fetchSemanticsNode().boundsInRoot
+        val bar = compose.onNodeWithTag("player_control_level").fetchSemanticsNode().boundsInRoot
+        assertTrue(bar.top >= root.top && bar.bottom <= root.bottom)
+        compose.runOnIdle { feedback.value = PlayerControlFeedback(PlayerControlKind.Speed, 2f) }
+        val speed =
+            compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
+        assertTrue(speed.top >= root.top && speed.top < root.center.y)
+        assertTrue(
+            speed.bottom <= root.bottom && speed.left >= root.left && speed.right <= root.right
+        )
+    }
+
+    @Test
+    fun speedMenuIsBeforeQualityAndPersistsOnlyChosenValues() {
+        val fixture = renderController(qualityAction = true)
+        val speedButton =
+            compose.onNodeWithTag("player_speed_selector").fetchSemanticsNode().boundsInRoot
+        val qualityButton =
+            compose.onNodeWithTag("test_quality_selector").fetchSemanticsNode().boundsInRoot
+        assertTrue(speedButton.right <= qualityButton.left)
+        listOf(0.5f, 1f, 1.5f, 2f).forEach { speed ->
+            compose.onNodeWithTag("player_speed_selector").performClick()
+            compose.onNodeWithTag("player_speed_option_${speed}").performClick()
+            compose.runOnIdle {
+                assertEquals(speed, fixture.state.currentPlaybackSpeed, 0f)
+                assertEquals(speed, fixture.player.parameters.speed, 0f)
+                assertEquals(speed, fixture.savedSpeed.value!!, 0f)
+                assertEquals(0.8f, fixture.player.parameters.pitch, 0f)
+                assertEquals(0, fixture.player.seekCount)
+                assertEquals(0, fixture.player.pauseCount)
+            }
+        }
+    }
+
+    @Test
+    fun speedMenuRemainsOpenPastControllerAutoHideTime() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_speed_selector").performClick()
+        compose.mainClock.advanceTimeBy(5000)
+        compose.onNodeWithTag("player_speed_option_1.5").assertIsDisplayed()
+        compose.runOnIdle { assertNull(fixture.savedSpeed.value) }
+    }
+
+    @Test
+    fun failedSpeedChoiceKeepsMenuOpenWithError() {
+        val expanded = mutableStateOf(false)
+        compose.setContent {
+            MaterialTheme {
+                PlayerSpeedSelector(1f, expanded.value, true, { expanded.value = it }, { false })
+            }
+        }
+        compose.onNodeWithTag("player_speed_selector").performClick()
+        compose.onNodeWithTag("player_speed_option_1.5").performClick()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose
+            .onNodeWithText(context.getString(R.string.player_speed_change_failed))
+            .assertIsDisplayed()
+        compose.runOnIdle { assertTrue(expanded.value) }
+    }
+
+    @Test
+    fun leftVerticalDragChangesOnlyBrightnessAndKeepsItsSide() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.9f))
+            moveTo(Offset(center.x * 0.5f, center.y * 0.5f))
+            moveTo(Offset(center.x * 1.5f, center.y * 0.4f))
+        }
+        compose.onNodeWithTag("player_control_feedback").assertIsDisplayed()
+        compose.runOnIdle {
+            assertTrue(fixture.target.brightness > 0.5f)
+            assertEquals(0, fixture.target.volumeWrites)
+            assertEquals(0, fixture.player.seekCount)
+            assertEquals(PlayerControlKind.Brightness, fixture.controls.feedback!!.kind)
+        }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.onNodeWithTag("player_control_feedback").assertDoesNotExist()
+        compose.runOnIdle { fixture.mounted.value = false }
+        compose.runOnIdle { assertEquals(0.5f, fixture.target.brightness, 0f) }
+    }
+
+    @Test
+    fun rightVerticalDragChangesOnlyMediaVolumeAndNeverSeeks() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 1.5f, center.y * 0.9f))
+            moveTo(Offset(center.x * 1.5f, center.y * 0.5f))
+            up()
+        }
+        compose.runOnIdle {
+            assertTrue(fixture.target.volume > 0.5f)
+            assertEquals(0, fixture.target.brightnessWrites)
+            assertEquals(0, fixture.player.seekCount)
+            assertNull(fixture.controls.feedback)
+        }
+    }
+
+    /** 分开注入按下与时间推进，检查按住期间就加速，而不是松手后才触发回调。 */
+    private fun holdForSpeed() {
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(700)
+        compose.waitForIdle()
+        compose.onNodeWithTag("player_control_feedback").assertIsDisplayed()
+    }
+
+    @Test
+    fun bufferingKeepsHeldSpeedButPauseIntentRestoresIt() {
+        val fixture = renderController()
+        holdForSpeed()
+        compose.runOnIdle {
+            fixture.player.listeners.toList().forEach {
+                it.onPlaybackStateChanged(Player.STATE_BUFFERING)
+                it.onIsPlayingChanged(false)
+            }
+            assertEquals(2f, fixture.target.speed, 0f)
+            fixture.player.listeners.toList().forEach {
+                it.onPlayWhenReadyChanged(false, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            }
+            assertEquals(1.25f, fixture.target.speed, 0f)
+        }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+    }
+
+    @Test
+    fun simultaneousTwoFingerHoldCannotBoost() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(0, Offset(center.x * 0.7f, center.y * 0.7f))
+            down(1, Offset(center.x * 1.3f, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(700)
+        compose.runOnIdle {
+            assertEquals(1.25f, fixture.target.speed, 0f)
+            assertEquals(0, fixture.player.seekCount)
+        }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { cancel() }
+    }
+
+    @Test
+    fun systemEdgeHoldAndDiagonalHoldDoNotBoost() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(1f, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(700)
+        compose.runOnIdle { assertEquals(1.25f, fixture.target.speed, 0f) }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { cancel() }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.6f))
+            moveTo(Offset(center.x, center.y * 1.25f))
+        }
+        compose.mainClock.advanceTimeBy(700)
+        compose.runOnIdle {
+            assertEquals(1.25f, fixture.target.speed, 0f)
+            assertEquals(0, fixture.player.seekCount)
+            assertEquals(0, fixture.target.brightnessWrites)
+            assertEquals(0, fixture.target.volumeWrites)
+        }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { cancel() }
+    }
+
+    @Test
+    fun sliderLongPressDoesNotStartParentControls() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_slider").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(700)
+        compose.runOnIdle {
+            assertEquals(1.25f, fixture.target.speed, 0f)
+            assertEquals(0, fixture.target.brightnessWrites)
+            assertEquals(0, fixture.target.volumeWrites)
+        }
+        compose.onNodeWithTag("player_seek_slider").performTouchInput { cancel() }
+    }
+
+    /** 真实窗口适配器与代理 Player 联用，核对 -1 自动亮度还原及音调不被临时倍速覆盖。 */
+    @Test
+    fun platformControlsRestoreWindowAndKeepPitchOnDispose() {
+        val handler = RecordingPlayer()
+        val player =
+            Proxy.newProxyInstance(
+                Player::class.java.classLoader,
+                arrayOf(Player::class.java),
+                handler,
+            ) as Player
+        var savedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player,
+                "Source",
+                {},
+                initialPlaybackSpeed = 1.5f,
+                savePlaybackSpeedPreference = { savedSpeed = it },
+            )
+        val mounted = mutableStateOf(true)
+        var controls: PlayerGestureControlState? = null
+        var window: Window? = null
+        var initialBrightness = Float.NaN
+        compose.setContent {
+            if (mounted.value) {
+                val current = rememberPlayerGestureControls(state)
+                val view = LocalView.current
+                SideEffect {
+                    controls = current
+                    var context = view.context
+                    while (context is ContextWrapper && context !is Activity) context =
+                        context.baseContext
+                    window = (context as Activity).window
+                    if (initialBrightness.isNaN())
+                        initialBrightness = window!!.attributes.screenBrightness
+                }
+            }
+        }
+        try {
+            compose.runOnIdle {
+                controls!!.startVertical(true)
+                controls!!.updateVertical(-50f, 100f)
+                assertTrue(window!!.attributes.screenBrightness in 0.02f..1f)
+                assertTrue(state.updatePlaybackSpeed(0.5f))
+                assertTrue(controls!!.startTemporarySpeed())
+                assertEquals(2f, handler.parameters.speed, 0f)
+                assertEquals(0.5f, state.currentPlaybackSpeed, 0f)
+                assertEquals(0.5f, savedSpeed!!, 0f)
+                assertEquals(0.8f, handler.parameters.pitch, 0f)
+                mounted.value = false
+            }
+            compose.runOnIdle {
+                assertEquals(initialBrightness, window!!.attributes.screenBrightness, 0f)
+                assertEquals(0.5f, handler.parameters.speed, 0f)
+                assertEquals(0.8f, handler.parameters.pitch, 0f)
+            }
+        } finally {
+            compose.runOnIdle {
+                controls?.restore()
+                mounted.value = false
+            }
+        }
+    }
+
+    @Test
+    fun longPressRestoresOriginalSpeedOnReleaseWithoutTapOrSeek() {
+        val fixture = renderController()
+        holdForSpeed()
+        compose.runOnIdle { assertEquals(2f, fixture.target.speed, 0f) }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.mainClock.advanceTimeBy(600)
+        compose.runOnIdle {
+            assertEquals(1.25f, fixture.target.speed, 0f)
+            assertEquals(0, fixture.player.seekCount)
+            assertEquals(0, fixture.player.pauseCount)
+        }
+        compose.onNodeWithTag("player_seek_slider").assertIsDisplayed()
+    }
+
+    @Test
+    fun longPressRestoresOnCancelAndSecondPointerCannotRestartIt() {
+        val fixture = renderController()
+        holdForSpeed()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(1, Offset(center.x * 1.5f, center.y * 0.7f))
+        }
+        compose.runOnIdle { assertEquals(1.25f, fixture.target.speed, 0f) }
+        compose.mainClock.advanceTimeBy(700)
+        compose.runOnIdle { assertEquals(1.25f, fixture.target.speed, 0f) }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { cancel() }
+        compose.runOnIdle { assertNull(fixture.controls.feedback) }
+    }
+
+    @Test
+    fun longPressRestoresWhenMediaChanges() {
+        val fixture = renderController()
+        holdForSpeed()
+        compose.runOnIdle {
+            fixture.state.currentMediaItem = MediaItem.Builder().setMediaId("next").build()
+        }
+        compose.runOnIdle { assertEquals(1.25f, fixture.target.speed, 0f) }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.runOnIdle { assertEquals(0, fixture.player.seekCount) }
+    }
+
+    @Test
+    fun backgroundRestoresSpeedAndWindowBrightness() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.9f))
+            moveTo(Offset(center.x * 0.5f, center.y * 0.4f))
+            up()
+        }
+        holdForSpeed()
+        compose.runOnIdle { fixture.lifecycle.currentState = Lifecycle.State.CREATED }
+        compose.runOnIdle {
+            assertEquals(1.25f, fixture.target.speed, 0f)
+            assertEquals(0.5f, fixture.target.brightness, 0f)
+        }
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { cancel() }
     }
 
     @Test

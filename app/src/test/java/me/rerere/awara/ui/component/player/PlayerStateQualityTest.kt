@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.component.player
 
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -15,6 +16,14 @@ import org.junit.Test
 
 class PlayerStateQualityTest {
 
+    @Test
+    fun playbackSpeedLabelsMatchTheFourMenuOptions() {
+        assertEquals(
+            listOf("0.5x", "1.0x", "1.5x", "2x"),
+            PlayerPlaybackSpeeds.map(::playbackSpeedLabel),
+        )
+    }
+
     private class MockPlayerInvocationHandler : InvocationHandler {
         var currentPositionValue: Long = 42000L
         var playWhenReadyValue: Boolean = false
@@ -24,6 +33,10 @@ class PlayerStateQualityTest {
         val listeners = mutableListOf<Player.Listener>()
         var isPlayingValue: Boolean = false
         var isLoadingValue: Boolean = false
+        var canSetSpeedAndPitch: Boolean = false
+        var playbackParametersValue: PlaybackParameters = PlaybackParameters(1f, 1f)
+        var lastSetPlaybackParameters: PlaybackParameters? = null
+        var throwOnSetPlaybackParameters: RuntimeException? = null
 
         override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
             val name = method.name
@@ -43,6 +56,24 @@ class PlayerStateQualityTest {
                 name == "getPlayWhenReady" && argCount == 0 -> return playWhenReadyValue
                 name == "setPlayWhenReady" && argCount == 1 -> {
                     playWhenReadyValue = args!![0] as Boolean
+                    return null
+                }
+                name == "isCommandAvailable" && argCount == 1 -> {
+                    val command = args!![0] as Int
+                    return if (command == Player.COMMAND_SET_SPEED_AND_PITCH) {
+                        canSetSpeedAndPitch
+                    } else {
+                        false
+                    }
+                }
+                name == "getPlaybackParameters" && argCount == 0 -> {
+                    return playbackParametersValue
+                }
+                name == "setPlaybackParameters" && argCount == 1 -> {
+                    throwOnSetPlaybackParameters?.let { throw it }
+                    val params = args!![0] as PlaybackParameters
+                    playbackParametersValue = params
+                    lastSetPlaybackParameters = params
                     return null
                 }
                 name == "setMediaItem" && argCount == 1 -> {
@@ -296,5 +327,305 @@ class PlayerStateQualityTest {
         val domainVideoSize = PlayerState.VideoSize.from(media3VideoSize)
         assertEquals(1920, domainVideoSize.width)
         assertEquals(1080, domainVideoSize.height)
+    }
+
+    @Test
+    fun playbackSpeedConstantsAndAvailableSpeedsAreConfiguredCorrectly() {
+        // 验证持久化配置键严格为约定字段
+        assertEquals("setting.player_speed", PREFERENCE_KEY_PLAYER_SPEED)
+        // 验证支持的倍速档位严格为 0.5x, 1.0x, 1.5x, 2.0x
+        assertEquals(listOf(0.5f, 1f, 1.5f, 2f), PlayerPlaybackSpeeds)
+    }
+
+    @Test
+    fun normalizePlaybackSpeedHandlesValidAndInvalidValues() {
+        // 验证四档合法值保持原样
+        assertEquals(0.5f, normalizePlaybackSpeed(0.5f), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(1f), 0.0f)
+        assertEquals(1.5f, normalizePlaybackSpeed(1.5f), 0.0f)
+        assertEquals(2f, normalizePlaybackSpeed(2f), 0.0f)
+
+        // 验证非法浮点值或非四档数值回退为默认的 1.0x
+        assertEquals(1f, normalizePlaybackSpeed(0f), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(0.3f), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(0.8f), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(1.2f), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(3.0f), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(-1.0f), 0.0f)
+
+        // 验证 NaN 及无穷大回退为 1.0x
+        assertEquals(1f, normalizePlaybackSpeed(Float.NaN), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(Float.POSITIVE_INFINITY), 0.0f)
+        assertEquals(1f, normalizePlaybackSpeed(Float.NEGATIVE_INFINITY), 0.0f)
+    }
+
+    @Test
+    fun playerStateColdStartAppliesPersistedSpeedWhenCommandAvailableWithoutWritingPreference() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = true
+        // 模拟播放器原音高为 1.25f，验证冷加载保音高
+        handler.playbackParametersValue = PlaybackParameters(1f, 1.25f)
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1.5f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        // 验证 State 记录的当前倍速为 1.5x
+        assertEquals(1.5f, state.currentPlaybackSpeed, 0.0f)
+        // 验证已将 1.5x 应用至播放器，同时保留原音高 1.25f
+        assertEquals(1.5f, handler.playbackParametersValue.speed, 0.0f)
+        assertEquals(1.25f, handler.playbackParametersValue.pitch, 0.0f)
+        // 验证冷加载期间绝不写偏好（仅在用户显式选定后持久化）
+        assertNull(persistedSpeed)
+    }
+
+    @Test
+    fun playerStateColdStartDoesNotCrashOrApplyWhenCommandUnavailable() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = false
+        handler.playbackParametersValue = PlaybackParameters(1f, 1f)
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1.5f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        // 不支持命令时，State 记录目标初始倍速，但底层未执行设置，未持久化
+        assertEquals(1.5f, state.currentPlaybackSpeed, 0.0f)
+        assertNull(handler.lastSetPlaybackParameters)
+        assertNull(persistedSpeed)
+    }
+
+    @Test
+    fun updatePlaybackSpeedSuccessUpdatesPlayerStateAndPersistsPreservingPlaybackStateAndPitch() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = true
+        handler.playbackParametersValue = PlaybackParameters(1f, 1.3f)
+        handler.currentPositionValue = 30000L
+        handler.playWhenReadyValue = false
+        handler.prepareCount = 0
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        handler.lastSetMediaItem = null
+
+        // 用户主动从菜单切换为 2.0x
+        val updateResult = state.updatePlaybackSpeed(2f)
+
+        // 验证更新成功、状态更新、偏好持久化被触发
+        assertTrue(updateResult)
+        assertEquals(2f, state.currentPlaybackSpeed, 0.0f)
+        assertEquals(2f, persistedSpeed)
+
+        // 验证播放器参数更新且音高保留
+        assertEquals(2f, handler.playbackParametersValue.speed, 0.0f)
+        assertEquals(1.3f, handler.playbackParametersValue.pitch, 0.0f)
+
+        // 验证无换源、不触发 prepare、不重新 seek、保持暂停状态
+        assertNull(handler.lastSetMediaItem)
+        assertEquals(0, handler.prepareCount)
+        assertFalse(handler.playWhenReadyValue)
+        assertEquals(30000L, handler.currentPositionValue)
+    }
+
+    @Test
+    fun updatePlaybackSpeedRejectsInvalidSpeedsWithoutChangingStateOrPersisting() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = true
+        handler.playbackParametersValue = PlaybackParameters(1f, 1f)
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        val invalidSpeeds = listOf(0.3f, 0.9f, 1.25f, 3.0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)
+        for (speed in invalidSpeeds) {
+            val result = state.updatePlaybackSpeed(speed)
+            assertFalse("Speed $speed should be rejected", result)
+            assertEquals(1f, state.currentPlaybackSpeed, 0.0f)
+            assertNull(persistedSpeed)
+            assertEquals(1f, handler.playbackParametersValue.speed, 0.0f)
+        }
+    }
+
+    @Test
+    fun updatePlaybackSpeedWhenCommandUnavailableReturnsFalseWithoutPersisting() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = false
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        val result = state.updatePlaybackSpeed(1.5f)
+        assertFalse(result)
+        assertEquals(1f, state.currentPlaybackSpeed, 0.0f)
+        assertNull(persistedSpeed)
+        assertNull(handler.lastSetPlaybackParameters)
+    }
+
+    @Test
+    fun updatePlaybackSpeedHandlesPlatformExceptionsWithoutCrashingOrPersisting() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = true
+        // 模拟底层抛出系统安全限制异常
+        handler.throwOnSetPlaybackParameters = SecurityException("Mock system restriction")
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        val result = state.updatePlaybackSpeed(1.5f)
+        assertFalse(result)
+        assertEquals(1f, state.currentPlaybackSpeed, 0.0f)
+        assertNull(persistedSpeed)
+    }
+
+    @Test
+    fun temporaryPlayerSpeedChangeDoesNotPollutePreferredSpeedOrWritePreference() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = true
+        handler.playbackParametersValue = PlaybackParameters(1f, 1f)
+
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        // 模拟手势控制器临时将倍速提升为 2.0x 快进
+        handler.playbackParametersValue = PlaybackParameters(2f, 1f)
+
+        // 模拟外部触发播放器事件（如状态回调）
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_READY)
+
+        // 验证常驻偏好与当前 UI 显示状态未被临时 2.0x 污染
+        assertEquals(1f, state.currentPlaybackSpeed, 0.0f)
+        assertNull(persistedSpeed)
+    }
+
+    @Test
+    fun qualitySwitchAndItemUpdatePreservePlaybackSpeedWithoutExtraPreferenceWrites() {
+        val (player, handler) = createMockPlayer()
+        handler.canSetSpeedAndPitch = true
+        handler.currentPositionValue = 18000L
+        handler.playWhenReadyValue = false
+
+        var persistedQuality: String? = null
+        var persistedSpeed: Float? = null
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "720",
+                saveQualityPreference = { persistedQuality = it },
+                initialPlaybackSpeed = 1.5f,
+                savePlaybackSpeedPreference = { persistedSpeed = it },
+            )
+
+        assertEquals(1.5f, state.currentPlaybackSpeed, 0.0f)
+        assertEquals(1.5f, handler.playbackParametersValue.speed, 0.0f)
+
+        val item720 = PlayerState.PlayerItem("720", MediaItem.Builder().setMediaId("v1").build())
+        val item1080 = PlayerState.PlayerItem("1080", MediaItem.Builder().setMediaId("v1").build())
+
+        // 载入源并切换清晰度
+        state.updatePlayerItems(listOf(item720, item1080))
+        state.updateCurrentQuality("1080")
+
+        // 验证清晰度成功切换并持久化
+        assertEquals("1080", state.currentQuality)
+        assertEquals("1080", persistedQuality)
+
+        // 验证播放倍速保持 1.5x、底层播放器参数不变、不多写 speed 偏好
+        assertEquals(1.5f, state.currentPlaybackSpeed, 0.0f)
+        assertEquals(1.5f, handler.playbackParametersValue.speed, 0.0f)
+        assertNull(persistedSpeed)
+
+        // 验证保留当前播放进度与暂停状态
+        assertEquals(18000L, handler.lastSetPositionMs)
+        assertFalse(handler.playWhenReadyValue)
+    }
+
+    @Test
+    fun simulatedStorageRoundTripAcrossStateInstances() {
+        var simulatedStorage: String? = null
+        val saveToStorage: (Float) -> Unit = { simulatedStorage = it.toString() }
+
+        val (player1, handler1) = createMockPlayer()
+        handler1.canSetSpeedAndPitch = true
+        val state1 =
+            PlayerState(
+                player = player1,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = 1f,
+                savePlaybackSpeedPreference = saveToStorage,
+            )
+
+        // 实例 1 更新倍速至 2.0x
+        assertTrue(state1.updatePlaybackSpeed(2f))
+        assertEquals("2.0", simulatedStorage)
+
+        // 模拟应用冷重启：读取存储中的值并构造实例 2
+        val readValueFromStorage = normalizePlaybackSpeed(simulatedStorage?.toFloatOrNull() ?: 1f)
+        assertEquals(2f, readValueFromStorage, 0.0f)
+
+        val (player2, handler2) = createMockPlayer()
+        handler2.canSetSpeedAndPitch = true
+        var state2PersistTriggered: Float? = null
+        val state2 =
+            PlayerState(
+                player = player2,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                initialPlaybackSpeed = readValueFromStorage,
+                savePlaybackSpeedPreference = { state2PersistTriggered = it },
+            )
+
+        // 实例 2 初始化即恢复 2.0x 状态并应用到底层，且无重复写入
+        assertEquals(2f, state2.currentPlaybackSpeed, 0.0f)
+        assertEquals(2f, handler2.playbackParametersValue.speed, 0.0f)
+        assertNull(state2PersistTriggered)
     }
 }

@@ -3,6 +3,7 @@ package me.rerere.awara.ui.component.player
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -10,23 +11,35 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Brightness6
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Replay
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -34,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -43,6 +57,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -58,6 +73,12 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -66,7 +87,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as MediaPlayer
 import androidx.media3.common.util.UnstableApi
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import me.rerere.awara.R
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
 
@@ -79,7 +102,9 @@ fun Player(
     fullscreen: Boolean,
     navigationIcon: @Composable (() -> Unit)? = null,
     controllerTrail: @Composable (() -> Unit)? = null,
-    actions: @Composable RowScope.() -> Unit = {},
+    actions: @Composable RowScope.(speedSelector: @Composable () -> Unit) -> Unit = { selector ->
+        selector()
+    },
 ) {
     val thumbnailEnabled by
         rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
@@ -115,10 +140,13 @@ internal fun PlayerController(
     fullscreen: Boolean,
     previewState: SeekPreviewState = rememberSeekPreviewState(),
     navigationIcon: @Composable (() -> Unit)? = null,
-    actions: @Composable RowScope.() -> Unit = {},
+    actions: @Composable RowScope.(speedSelector: @Composable () -> Unit) -> Unit = { selector ->
+        selector()
+    },
     controllerTrail: @Composable (() -> Unit)? = null,
     thumbnailEnabled: Boolean = true,
     previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
+    controls: PlayerGestureControlState = rememberPlayerGestureControls(state),
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val windowInfo = LocalWindowInfo.current
@@ -150,10 +178,11 @@ internal fun PlayerController(
         } else SeekThumbnailState()
 
     // 媒体与窗口变更均使未提交预览失效，不能把旧目标提交到新视频。
-    DisposableEffect(state.player, lifecycleOwner, previewState) {
+    DisposableEffect(state.player, lifecycleOwner, previewState, controls) {
         val observer = LifecycleEventObserver { _, _ ->
             foreground = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             if (!foreground) {
+                controls.restore()
                 previewState.cancel()
                 previewState.clearPending()
             }
@@ -161,14 +190,30 @@ internal fun PlayerController(
         val listener =
             object : MediaPlayer.Listener {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    controls.finishGesture()
                     previewState.cancel()
                     previewState.clearPending()
                     mediaGeneration++
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
+                    controls.finishGesture()
                     previewState.cancel()
                     previewState.clearPending()
+                }
+
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    if (!playWhenReady && controls.feedback?.kind == PlayerControlKind.Speed)
+                        controls.finishGesture()
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (
+                        (playbackState == MediaPlayer.STATE_ENDED ||
+                            playbackState == MediaPlayer.STATE_IDLE) &&
+                            controls.feedback?.kind == PlayerControlKind.Speed
+                    )
+                        controls.finishGesture()
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -178,12 +223,19 @@ internal fun PlayerController(
             state.player.removeListener(listener)
             previewState.cancel()
             previewState.clearPending()
+            controls.restore()
         }
     }
+    DisposableEffect(inputEnabled, controls) {
+        if (!inputEnabled) controls.restore()
+        onDispose { controls.restore() }
+    }
     DisposableEffect(inputEnabled, mediaItem, mediaGeneration, fullscreen, playerSize) {
+        controls.finishGesture()
         previewState.cancel()
         previewState.clearPending()
         onDispose {
+            controls.finishGesture()
             previewState.cancel()
             previewState.clearPending()
         }
@@ -219,9 +271,23 @@ internal fun PlayerController(
         } else 0f
 
     var visible by remember { mutableStateOf(true) }
+    var speedMenuExpanded by remember(state) { mutableStateOf(false) }
     var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(visible, state.playing, previewState.isActive, lastInteract) {
-        if (visible && state.playing && !previewState.isActive) {
+    LaunchedEffect(
+        visible,
+        state.playing,
+        previewState.isActive,
+        controls.feedback,
+        speedMenuExpanded,
+        lastInteract,
+    ) {
+        if (
+            visible &&
+                state.playing &&
+                !previewState.isActive &&
+                controls.feedback == null &&
+                !speedMenuExpanded
+        ) {
             delay(3000)
             visible = false
         }
@@ -281,10 +347,21 @@ internal fun PlayerController(
                         },
                     )
                 }
-                .playerSeekGestures(
+                .playerControlGestures(
                     previewState = previewState,
+                    controls = controls,
                     gestureKey =
                         listOf(mediaItem, mediaGeneration, fullscreen, playerSize, inputEnabled),
+                    canInteract = {
+                        foreground &&
+                            windowInfo.isWindowFocused &&
+                            mediaGeneration == renderedGeneration
+                    },
+                    canBoost = {
+                        state.player.playWhenReady &&
+                            state.state != PlayerState.State.ENDED &&
+                            state.state != PlayerState.State.IDLE
+                    },
                     canSeek = {
                         inputEnabled &&
                             mediaGeneration == renderedGeneration &&
@@ -344,15 +421,38 @@ internal fun PlayerController(
                     Text(
                         text = state.currentMediaItem?.mediaMetadata?.title?.toString() ?: "Player",
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f),
                     )
 
-                    actions()
+                    actions {
+                        PlayerSpeedSelector(
+                            currentSpeed = state.currentPlaybackSpeed,
+                            expanded = speedMenuExpanded,
+                            enabled =
+                                state.player.isCommandAvailable(
+                                    MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
+                                ),
+                            onExpandedChange = { expanded ->
+                                speedMenuExpanded = expanded
+                                visible = true
+                                lastInteract = System.currentTimeMillis()
+                            },
+                            onSpeedSelected = { speed ->
+                                // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
+                                controls.finishGesture()
+                                state.updatePlaybackSpeed(speed)
+                            },
+                        )
+                    }
                 }
 
                 // 两种位置都只使用现有剩余空间，不挤压 Slider 或底部按钮。
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
                     if (previewState.isActive) {
                         PlayerSeekPreview(
                             targetTime = previewState.targetTimeText,
@@ -362,6 +462,7 @@ internal fun PlayerController(
                             position = previewPosition,
                         )
                     }
+                    controls.feedback?.let { PlayerGestureFeedback(it, fullscreen) }
                 }
 
                 // 底部控制与进度条排布：Slider 单独一行避免窄屏被时间挤占
@@ -426,14 +527,15 @@ internal fun PlayerController(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // 延迟 350ms 后显示缓冲指示，且手势预览期间不遮盖提示
-            if (delayedLoading && !previewState.isActive) {
+            if (delayedLoading && !previewState.isActive && controls.feedback == null) {
                 CircularProgressIndicator(color = Color.White)
             }
 
             if (
                 state.state == PlayerState.State.ENDED &&
                     state.duration > 0 &&
-                    !previewState.isActive
+                    !previewState.isActive &&
+                    controls.feedback == null
             ) {
                 IconButton(
                     onClick = {
@@ -443,6 +545,151 @@ internal fun PlayerController(
                 ) {
                     Icon(Icons.Outlined.Replay, "Replay")
                 }
+            }
+        }
+    }
+}
+
+/** 数值标签保持四档约定，常驻菜单不展示或持久化长按中的临时速度。 */
+internal fun playbackSpeedLabel(speed: Float): String = if (speed == 2f) "2x" else "${speed}x"
+
+@Composable
+internal fun PlayerSpeedSelector(
+    currentSpeed: Float,
+    expanded: Boolean,
+    enabled: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSpeedSelected: (Float) -> Boolean,
+) {
+    var failed by remember(expanded) { mutableStateOf(false) }
+    val description = stringResource(R.string.player_playback_speed)
+    Box {
+        TextButton(
+            onClick = { onExpandedChange(true) },
+            enabled = enabled,
+            modifier =
+                Modifier.width(64.dp).testTag("player_speed_selector").semantics {
+                    contentDescription = description
+                },
+        ) {
+            Text(
+                playbackSpeedLabel(currentSpeed),
+                color = if (enabled) Color.White else Color.White.copy(alpha = 0.38f),
+                maxLines = 1,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            PlayerPlaybackSpeeds.forEach { speed ->
+                DropdownMenuItem(
+                    text = { Text(playbackSpeedLabel(speed)) },
+                    trailingIcon =
+                        if (speed == currentSpeed) {
+                            { Icon(Icons.Outlined.Check, null) }
+                        } else null,
+                    onClick = {
+                        if (onSpeedSelected(speed)) onExpandedChange(false) else failed = true
+                    },
+                    modifier = Modifier.testTag("player_speed_option_${speed}"),
+                )
+            }
+            if (failed)
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.player_speed_change_failed)) },
+                    enabled = false,
+                    onClick = {},
+                )
+        }
+    }
+}
+
+/** 倍速避开中央画面；全屏时按物理操作侧显示竖条，嵌入模式保持中央百分比。 */
+@Composable
+internal fun PlayerGestureFeedback(
+    feedback: PlayerControlFeedback,
+    fullscreen: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val icon =
+        when (feedback.kind) {
+            PlayerControlKind.Brightness -> Icons.Outlined.Brightness6
+            PlayerControlKind.Volume -> Icons.Outlined.VolumeUp
+            PlayerControlKind.Speed -> Icons.Outlined.FastForward
+        }
+    val value = feedback.value?.takeIf { it.isFinite() }
+    val label =
+        when {
+            value == null -> stringResource(R.string.player_gesture_unavailable)
+            feedback.kind == PlayerControlKind.Speed ->
+                stringResource(R.string.player_gesture_speed, value)
+            feedback.kind == PlayerControlKind.Brightness ->
+                stringResource(R.string.player_gesture_brightness, (value * 100).roundToInt())
+            else -> stringResource(R.string.player_gesture_volume, (value * 100).roundToInt())
+        }
+    val foreground = Color(0xFFE3E5E8)
+    val background = Color.Black.copy(alpha = 0.6f)
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize().padding(8.dp).testTag("player_control_feedback_area")
+    ) {
+        val alignment =
+            when {
+                feedback.kind == PlayerControlKind.Speed -> Alignment.TopCenter
+                fullscreen && feedback.kind == PlayerControlKind.Brightness ->
+                    AbsoluteAlignment.CenterLeft
+                fullscreen -> AbsoluteAlignment.CenterRight
+                else -> Alignment.Center
+            }
+        if (fullscreen && feedback.kind != PlayerControlKind.Speed && value != null) {
+            // 使用真实剩余高度限制竖条，避免小窗口和系统栏挤压底部播放控件。
+            val barHeight = (maxHeight - 56.dp).coerceIn(0.dp, 120.dp)
+            val level = value.coerceIn(0f, 1f)
+            Column(
+                modifier =
+                    Modifier.align(alignment)
+                        .width(44.dp)
+                        .background(background, RoundedCornerShape(4.dp))
+                        .padding(10.dp)
+                        .testTag("player_control_feedback"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(icon, null, Modifier.size(20.dp), tint = foreground)
+                Box(
+                    modifier =
+                        Modifier.width(4.dp)
+                            .height(barHeight)
+                            .background(foreground.copy(alpha = 0.2f), RoundedCornerShape(2.dp))
+                            .semantics {
+                                contentDescription = label
+                                progressBarRangeInfo = ProgressBarRangeInfo(level, 0f..1f)
+                            }
+                            .testTag("player_control_level")
+                ) {
+                    Box(
+                        Modifier.align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .fillMaxHeight(level)
+                            .background(foreground, RoundedCornerShape(2.dp))
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier =
+                    Modifier.align(alignment)
+                        .widthIn(max = 240.dp)
+                        .background(background, RoundedCornerShape(4.dp))
+                        .padding(10.dp)
+                        .testTag("player_control_feedback"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(icon, null, Modifier.size(20.dp), tint = foreground)
+                Text(
+                    label,
+                    color = foreground,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                )
             }
         }
     }

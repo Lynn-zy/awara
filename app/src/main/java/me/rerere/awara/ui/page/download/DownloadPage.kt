@@ -481,7 +481,7 @@ fun DownloadPage(
                         BackButton()
                     }
                 },
-                actions = {
+                actions = { speedSelector ->
                     if (fullscreen) {
                         IconButton(
                             onClick = {
@@ -494,6 +494,7 @@ fun DownloadPage(
                             Icon(Icons.Outlined.FitScreen, null)
                         }
                     }
+                    speedSelector()
                 },
                 controllerTrail = {
                     IconButton(

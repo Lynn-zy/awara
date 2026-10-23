@@ -1,4 +1,10 @@
 <resources>
+    <string name="player_playback_speed">Playback speed</string>
+    <string name="player_speed_change_failed">Could not change playback speed</string>
+    <string name="player_gesture_brightness">Brightness %1$d%%</string>
+    <string name="player_gesture_volume">Media volume %1$d%%</string>
+    <string name="player_gesture_speed">Temporary speed %1$.2fx</string>
+    <string name="player_gesture_unavailable">Control unavailable</string>
     <string name="setting_player_seek_thumbnail">Seek thumbnail preview</string>
     <string name="setting_player_seek_preview_position">Thumbnail position</string>
     <string name="setting_player_seek_preview_center">Center</string>

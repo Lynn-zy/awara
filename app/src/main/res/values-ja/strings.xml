@@ -1,4 +1,10 @@
 <resources>
+    <string name="player_playback_speed">再生速度</string>
+    <string name="player_speed_change_failed">再生速度を変更できません</string>
+    <string name="player_gesture_brightness">明るさ %1$d%%</string>
+    <string name="player_gesture_volume">メディア音量 %1$d%%</string>
+    <string name="player_gesture_speed">一時再生速度 %1$.2fx</string>
+    <string name="player_gesture_unavailable">調整できません</string>
     <string name="setting_player_seek_thumbnail">シーク中にサムネイルを表示</string>
     <string name="setting_player_seek_preview_position">サムネイルの表示位置</string>
     <string name="setting_player_seek_preview_center">中央</string>

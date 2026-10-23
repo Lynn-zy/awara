@@ -1,4 +1,10 @@
 <resources>
+    <string name="player_playback_speed">播放倍速</string>
+    <string name="player_speed_change_failed">暫時無法調整播放倍速</string>
+    <string name="player_gesture_brightness">亮度 %1$d%%</string>
+    <string name="player_gesture_volume">媒體音量 %1$d%%</string>
+    <string name="player_gesture_speed">暫時倍速 %1$.2fx</string>
+    <string name="player_gesture_unavailable">暫時無法調整</string>
     <string name="setting_player_seek_thumbnail">滑動縮圖預覽</string>
     <string name="setting_player_seek_preview_position">縮圖顯示位置</string>
     <string name="setting_player_seek_preview_center">中間</string>

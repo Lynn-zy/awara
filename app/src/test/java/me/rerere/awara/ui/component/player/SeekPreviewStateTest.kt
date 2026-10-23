@@ -70,24 +70,28 @@ class SeekPreviewStateTest {
     fun horizontalDominanceLocksGesture() {
         val touchSlop = 10f
         // 横向移动 15f，纵向移动 5f，满足 absX >= touchSlop 且 absX >= 1.5 * absY
-        val decision = evaluateGestureDirection(dx = 15f, dy = 5f, touchSlop = touchSlop)
-        assertEquals(GestureDirectionDecision.LockedHorizontal, decision)
+        val decision = playerGestureDirection(dx = 15f, dy = 5f, slop = touchSlop)
+        assertEquals(PlayerGestureDirection.Horizontal, decision)
     }
 
     @Test
-    fun verticalDominanceOrUnclearDirectionRejectsSequence() {
+    fun verticalDominanceLocksAndUnclearDirectionRejectsSequence() {
         val touchSlop = 10f
         // 纵向占优
-        val verticalDominant = evaluateGestureDirection(dx = 2f, dy = 12f, touchSlop = touchSlop)
-        assertEquals(GestureDirectionDecision.Rejected, verticalDominant)
+        val verticalDominant = playerGestureDirection(dx = 2f, dy = 12f, slop = touchSlop)
+        assertEquals(PlayerGestureDirection.Vertical, verticalDominant)
 
         // 横向虽大于 touchSlop，但未达到 1.5 倍纵向（12 < 1.5 * 10 = 15）
-        val unclearDirection = evaluateGestureDirection(dx = 12f, dy = 10f, touchSlop = touchSlop)
-        assertEquals(GestureDirectionDecision.Rejected, unclearDirection)
+        val unclearDirection = playerGestureDirection(dx = 12f, dy = 10f, slop = touchSlop)
+        assertEquals(PlayerGestureDirection.Rejected, unclearDirection)
 
         // 未达到 touchSlop
-        val belowSlop = evaluateGestureDirection(dx = 5f, dy = 5f, touchSlop = touchSlop)
-        assertEquals(GestureDirectionDecision.Undecided, belowSlop)
+        val belowSlop = playerGestureDirection(dx = 5f, dy = 5f, slop = touchSlop)
+        assertEquals(PlayerGestureDirection.Pending, belowSlop)
+        assertEquals(
+            PlayerGestureDirection.Rejected,
+            playerGestureDirection(Float.NaN, 0f, touchSlop),
+        )
     }
 
     @Test
