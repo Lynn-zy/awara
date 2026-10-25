@@ -335,7 +335,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
 }
 
 @Composable
-private fun DownloadTaskCard(
+internal fun DownloadTaskCard(
     task: DownloadTask,
     isOperating: Boolean,
     onPause: () -> Unit,
@@ -476,7 +476,9 @@ private fun DownloadTaskCard(
                     )
                 }
 
-                val progressTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                // Card 背景同为 surfaceVariant，改用对比色让未下载部分的完整底轨可见。
+                val progressTrackColor =
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
                 when (task.status) {
                     DownloadTaskStatus.RUNNING -> {
                         if (hasKnownTotal) {
