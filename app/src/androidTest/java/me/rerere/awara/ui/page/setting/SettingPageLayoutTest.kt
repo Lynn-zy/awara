@@ -173,4 +173,42 @@ class SettingPageLayoutTest {
         compose.onNodeWithTag("picker_item").performClick()
         compose.onNodeWithText("选项一").assertIsDisplayed()
     }
+
+    /**
+     * 测试生产组件 PlayerMinimalProgressSetting：
+     * 1. 验证设置项标题与开关正常渲染并显示
+     * 2. 验证点击组件整行可操作切换状态（true -> false -> true）
+     * 3. 验证状态在多次交互中的保持与响应
+     */
+    @Test
+    fun playerMinimalProgressSettingTogglesAndRetainsState() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        // 初始化开关状态包装对象，默认设置为 true
+        val enabledState = mutableStateOf(true)
+        val testTag = "player_minimal_progress_setting"
+
+        compose.setContent {
+            MaterialTheme {
+                PlayerMinimalProgressSetting(
+                    enabled = enabledState,
+                    modifier = Modifier.testTag(testTag),
+                )
+            }
+        }
+
+        // 从资源中读取本地化标题文案
+        val titleText = context.getString(R.string.setting_player_minimal_progress)
+
+        // 初始断言：标题正常展示且状态为 true
+        compose.onNodeWithText(titleText).assertIsDisplayed()
+        assertEquals(true, enabledState.value)
+
+        // 首次点击：整行可点击切换，状态从 true 切换为 false
+        compose.onNodeWithTag(testTag).performClick()
+        compose.runOnIdle { assertEquals(false, enabledState.value) }
+
+        // 再次点击：从 false 恢复为 true，验证状态可操作性与状态保持
+        compose.onNodeWithTag(testTag).performClick()
+        compose.runOnIdle { assertEquals(true, enabledState.value) }
+    }
 }

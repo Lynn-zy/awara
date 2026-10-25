@@ -9,6 +9,8 @@
     <string name="setting_player_seek_preview_position">Thumbnail position</string>
     <string name="setting_player_seek_preview_center">Center</string>
     <string name="setting_player_seek_preview_follow_slider">Follow seek slider</string>
+    <!-- 播放器设置：收起控件时底部细进度条 -->
+    <string name="setting_player_minimal_progress">Show slim progress bar at bottom when controls are hidden</string>
     <string name="player_seek_keyframe">Nearby keyframe preview</string>
     <string name="player_seek_thumbnail_unavailable">Preview unavailable</string>
     <string name="comment_action_more">Comment actions</string>

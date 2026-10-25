@@ -9,6 +9,8 @@
     <string name="setting_player_seek_preview_position">サムネイルの表示位置</string>
     <string name="setting_player_seek_preview_center">中央</string>
     <string name="setting_player_seek_preview_follow_slider">シークバーに追従</string>
+    <!-- プレーヤー設定：コントロール非表示時の下部細プログレスバー -->
+    <string name="setting_player_minimal_progress">コントロール非表示時に下部に細いプログレスバーを表示</string>
     <string name="login_title">ログイン</string>
     <string name="login_button">ログイン</string>
     <string name="login_user">ユーザー名/メールアドレス</string>

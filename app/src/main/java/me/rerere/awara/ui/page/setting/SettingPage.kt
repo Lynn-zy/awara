@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.LinearScale
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Source
@@ -73,6 +74,7 @@ import me.rerere.awara.ui.component.common.Avatar
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
+import me.rerere.awara.ui.component.player.PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS
 import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_PREVIEW_POSITION
 import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED
 import me.rerere.awara.ui.component.player.SeekPreviewPosition
@@ -110,6 +112,20 @@ internal fun SeekThumbnailSettings(enabled: MutableState<Boolean>, position: Mut
             icon = { Icon(Icons.Outlined.Image, null) },
         )
     }
+}
+
+/** 复用整行可点击的开关，偏好由调用方持久化，播放器即时读取更新。 */
+@Composable
+internal fun PlayerMinimalProgressSetting(
+    enabled: MutableState<Boolean>,
+    modifier: Modifier = Modifier,
+) {
+    SettingBooleanItem(
+        modifier = modifier,
+        state = enabled,
+        title = { Text(stringResource(R.string.setting_player_minimal_progress)) },
+        icon = { Icon(Icons.Outlined.LinearScale, null) },
+    )
 }
 
 @Composable
@@ -453,6 +469,15 @@ fun SettingPage() {
                                 key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
                                 default = SeekPreviewPosition.FollowSlider.key,
                             ),
+                    )
+
+                    // 收起控件时显示贴底全宽细进度条配置项（默认开启）
+                    PlayerMinimalProgressSetting(
+                        enabled =
+                            rememberBooleanPreference(
+                                key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS,
+                                default = true,
+                            )
                     )
 
                     // 下载视频播放器选择：内置（internal）/ 第三方（external）

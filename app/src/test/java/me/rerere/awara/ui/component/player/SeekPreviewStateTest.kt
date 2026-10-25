@@ -10,6 +10,68 @@ import org.junit.Test
 /** 播放器手势滑动与进度预览状态单元测试。 */
 class SeekPreviewStateTest {
 
+    /** 真实缓冲端点独立于拖动目标，未知时长和越界值均不会污染轨道。 */
+    @Test
+    fun playbackAndBufferedProgressClampWithoutIntegerOverflow() {
+        assertEquals(0.25f, playerProgressFraction(15_000L, 60_000L), 0.0001f)
+        assertEquals(0.75f, playerProgressFraction(45_000L, 60_000L), 0.0001f)
+        assertEquals(0f, playerProgressFraction(-1L, 60_000L), 0f)
+        assertEquals(0f, playerProgressFraction(10L, -9223372036854775807L), 0f)
+        assertEquals(0f, playerProgressFraction(10L, 0L), 0f)
+        assertEquals(1f, playerProgressFraction(Long.MAX_VALUE, 60_000L), 0f)
+        assertEquals(1f, playerProgressFraction(Long.MAX_VALUE, Long.MAX_VALUE), 0f)
+    }
+
+    /** 同排布局中的预览使用 Slider 的局部范围，而非把整屏误当作轨道。 */
+    @Test
+    fun thumbnailPreviewUsesMeasuredInlineSliderBounds() {
+        assertEquals(
+            226,
+            calculateSeekPreviewLeft(
+                1000,
+                160,
+                0.25f,
+                12f,
+                false,
+                trackLeft = 100f,
+                trackWidth = 800f,
+            ),
+        )
+        assertEquals(
+            614,
+            calculateSeekPreviewLeft(
+                1000,
+                160,
+                0.25f,
+                12f,
+                true,
+                trackLeft = 100f,
+                trackWidth = 800f,
+            ),
+        )
+        assertEquals(
+            32,
+            calculateSeekPreviewLeft(1000, 160, 0f, 12f, false, trackLeft = 100f, trackWidth = 800f),
+        )
+        assertEquals(
+            808,
+            calculateSeekPreviewLeft(1000, 160, 1f, 12f, false, trackLeft = 100f, trackWidth = 800f),
+        )
+        assertEquals(
+            420,
+            calculateSeekPreviewLeft(
+                1000,
+                160,
+                1f,
+                12f,
+                false,
+                SeekPreviewPosition.Center,
+                100f,
+                800f,
+            ),
+        )
+    }
+
     /** 非边缘位置的预览中心与滑块中心一致，不再固定于播放器正中。 */
     @Test
     fun thumbnailPreviewFollowsThumbAcrossTrack() {

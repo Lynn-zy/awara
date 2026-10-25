@@ -4,9 +4,11 @@ import android.app.Activity
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.view.Window
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -16,6 +18,8 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -25,6 +29,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -34,6 +39,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -105,6 +111,8 @@ class PlayerSeekInteractionTest {
 
     private class RecordingPlayer : InvocationHandler {
         var positionMs = 10_000L
+        var bufferedPositionMs = 45_000L
+        var durationMs = 60_000L
         var seekCount = 0
         var pauseCount = 0
         var mediaItem: MediaItem? = null
@@ -128,7 +136,8 @@ class PlayerSeekInteractionTest {
                 }
                 "getCurrentMediaItem" -> return mediaItem
                 "getCurrentPosition" -> return positionMs
-                "getDuration" -> return 60_000L
+                "getBufferedPosition" -> return bufferedPositionMs
+                "getDuration" -> return durationMs
                 "isCurrentMediaItemSeekable",
                 "isCommandAvailable",
                 "getPlayWhenReady",
@@ -175,6 +184,9 @@ class PlayerSeekInteractionTest {
         thumbnailEnabled: MutableState<Boolean> = mutableStateOf(true),
         position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
         qualityAction: Boolean = false,
+        minimalProgressEnabled: MutableState<Boolean> = mutableStateOf(true),
+        fullscreen: Boolean = false,
+        fontScale: Float = 1f,
     ): Fixture {
         val handler = RecordingPlayer()
         handler.mediaItem = sourceUri?.let { MediaItem.fromUri(it) }
@@ -206,17 +218,30 @@ class PlayerSeekInteractionTest {
         compose.runOnUiThread { owner.lifecycle.currentState = Lifecycle.State.RESUMED }
         compose.setContent {
             if (mounted.value) {
-                CompositionLocalProvider(LocalLifecycleOwner provides owner) {
+                val density = LocalDensity.current
+                CompositionLocalProvider(
+                    LocalLifecycleOwner provides owner,
+                    LocalDensity provides Density(density.density, fontScale),
+                ) {
                     MaterialTheme {
-                        Box(Modifier.size(320.dp, 240.dp)) {
+                        Box(Modifier.size(320.dp, 240.dp).background(Color.Black)) {
                             PlayerController(
                                 Modifier.fillMaxSize(),
                                 state,
-                                false,
+                                fullscreen,
                                 preview,
                                 thumbnailEnabled = thumbnailEnabled.value,
                                 previewPosition = position,
                                 controls = controls,
+                                minimalProgressEnabled = minimalProgressEnabled.value,
+                                controllerTrail = {
+                                    IconButton(
+                                        onClick = {},
+                                        modifier = Modifier.testTag("test_fullscreen_button"),
+                                    ) {
+                                        Text("F")
+                                    }
+                                },
                                 actions = { speedSelector ->
                                     speedSelector()
                                     if (qualityAction)
@@ -246,6 +271,140 @@ class PlayerSeekInteractionTest {
         )
     }
 
+    /** 播放、Slider、时间与全屏按钮必须在同一行，细轨道仍有完整触摸高度。 */
+    @Test
+    fun compactBottomControlsShareOneRowAndKeepSliderTouchTarget() {
+        renderController()
+        val play = compose.onNodeWithTag("player_play_pause").fetchSemanticsNode().boundsInRoot
+        val slider = compose.onNodeWithTag("player_seek_slider").fetchSemanticsNode().boundsInRoot
+        val time = compose.onNodeWithTag("player_playback_time").fetchSemanticsNode().boundsInRoot
+        val fullscreen =
+            compose.onNodeWithTag("test_fullscreen_button").fetchSemanticsNode().boundsInRoot
+        assertTrue(play.right <= slider.left)
+        assertTrue(slider.right <= time.left)
+        assertTrue(time.right <= fullscreen.left)
+        assertEquals(play.center.y, slider.center.y, 1f)
+        assertEquals(play.center.y, time.center.y, 1f)
+        assertEquals(play.center.y, fullscreen.center.y, 1f)
+        assertTrue(slider.height >= play.height)
+        val track =
+            compose
+                .onNodeWithTag("player_buffered_track", useUnmergedTree = true)
+                .fetchSemanticsNode()
+                .boundsInRoot
+        val thumb =
+            compose
+                .onNodeWithTag("player_seek_thumb", useUnmergedTree = true)
+                .fetchSemanticsNode()
+                .boundsInRoot
+        assertTrue(track.height < thumb.height)
+        assertTrue(thumb.height < slider.height)
+        assertEquals(track.center.y, thumb.center.y, 1f)
+        assertEquals(slider.center.y, thumb.center.y, 1f)
+    }
+
+    /** 标题使用紧凑单行正文层级；全屏不另行放大字号。 */
+    @Test
+    fun fullscreenTitleUsesCompactSingleLineTypography() {
+        val fixture = renderController(fullscreen = true)
+        compose.runOnIdle {
+            fixture.state.currentMediaItem =
+                MediaItem.Builder()
+                    .setMediaId("long-title")
+                    .setMediaMetadata(
+                        androidx.media3.common.MediaMetadata.Builder()
+                            .setTitle("A long video title that must not cover the picture")
+                            .build()
+                    )
+                    .build()
+        }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag("player_title").performSemanticsAction(
+            SemanticsActions.GetTextLayoutResult
+        ) {
+            it(layouts)
+        }
+        assertEquals(1, layouts.single().lineCount)
+        assertEquals(16f, layouts.single().layoutInput.style.fontSize.value, 0f)
+    }
+
+    /** 大字号及小时级时长不能把时间或全屏按钮推出播放器边界。 */
+    @Test
+    fun compactControlsKeepLongTimesWithinBoundsAtLargeFontScale() {
+        val fixture = renderController(fontScale = 1.6f)
+        compose.runOnIdle {
+            fixture.player.durationMs = 360_000_000L
+            fixture.player.positionMs = 320_000_000L
+            fixture.state.duration = fixture.player.durationMs
+        }
+        val root = compose.onNodeWithTag("player_seek_surface").fetchSemanticsNode().boundsInRoot
+        val time = compose.onNodeWithTag("player_playback_time").fetchSemanticsNode().boundsInRoot
+        val slider = compose.onNodeWithTag("player_seek_slider").fetchSemanticsNode().boundsInRoot
+        val fullscreen =
+            compose.onNodeWithTag("test_fullscreen_button").fetchSemanticsNode().boundsInRoot
+        assertTrue(slider.width > 0f)
+        assertTrue(slider.right <= time.left)
+        assertTrue(time.right <= fullscreen.left)
+        assertTrue(time.bottom <= root.bottom)
+        assertTrue(fullscreen.right <= root.right)
+    }
+
+    /** 缓冲轨道在未播放背景上明显可辨，并随播放器真实端点变化。 */
+    @Test
+    fun bufferedTrackShowsAndUpdatesActualBufferedPosition() {
+        val fixture = renderController()
+        val track = compose.onNodeWithTag("player_buffered_track", useUnmergedTree = true)
+        val initial = track.captureToImage().toPixelMap()
+        assertTrue(
+            initial[(initial.width * 0.55f).toInt(), initial.height / 2].red >
+                initial[(initial.width * 0.9f).toInt(), initial.height / 2].red + 0.2f
+        )
+        compose.runOnIdle { fixture.player.bufferedPositionMs = 20_000L }
+        compose.waitUntil(3000) {
+            val pixels = track.captureToImage().toPixelMap()
+            pixels[(pixels.width * 0.55f).toInt(), pixels.height / 2].red < 0.4f
+        }
+        compose.runOnIdle { assertEquals(0, fixture.player.seekCount) }
+    }
+
+    /** 收起细条必须全宽贴底、没有可拖动语义；偏好切换立即生效且不触发 seek。 */
+    @Test
+    fun minimalProgressHugsBottomAndRespondsToPreferenceWithoutSeeking() {
+        val enabled = mutableStateOf(true)
+        val fixture = renderController(minimalProgressEnabled = enabled)
+        compose.onNodeWithTag("player_minimal_progress").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(600)
+        val root = compose.onNodeWithTag("player_seek_surface").fetchSemanticsNode().boundsInRoot
+        val progress =
+            compose
+                .onNodeWithTag("player_minimal_progress")
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+        assertEquals(root.left, progress.boundsInRoot.left, 1f)
+        assertEquals(root.right, progress.boundsInRoot.right, 1f)
+        assertEquals(root.bottom, progress.boundsInRoot.bottom, 1f)
+        assertEquals(
+            10_000f / 60_000f,
+            progress.config[SemanticsProperties.ProgressBarRangeInfo].current,
+            0.001f,
+        )
+        assertFalse(progress.config.contains(SemanticsActions.SetProgress))
+        compose.runOnIdle { enabled.value = false }
+        compose.onNodeWithTag("player_minimal_progress").assertDoesNotExist()
+        compose.runOnIdle { enabled.value = true }
+        compose.onNodeWithTag("player_minimal_progress").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithTag("player_minimal_progress").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_slider").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, fixture.player.seekCount) }
+    }
+
     /** 直接测量生产反馈组件，不以修改手势状态代替原有触摸用例。 */
     private fun renderFeedback(
         fullscreen: Boolean,
@@ -271,19 +430,19 @@ class PlayerSeekInteractionTest {
     }
 
     @Test
-    fun fullscreenLevelFeedbackUsesPhysicalSidesAndVerticalProgress() {
+    fun fullscreenLevelFeedbackUsesOppositePhysicalSidesAndVerticalProgress() {
         val feedback = renderFeedback(fullscreen = true)
         val root = compose.onNodeWithTag("feedback_bounds").fetchSemanticsNode().boundsInRoot
-        val left =
+        val brightness =
             compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
         val bar = compose.onNodeWithTag("player_control_level").fetchSemanticsNode()
-        assertTrue(left.right < root.center.x)
+        assertTrue(brightness.left > root.center.x)
         assertTrue(bar.boundsInRoot.height > bar.boundsInRoot.width)
         assertEquals(0.4f, bar.config[SemanticsProperties.ProgressBarRangeInfo].current, 0.001f)
         compose.runOnIdle { feedback.value = PlayerControlFeedback(PlayerControlKind.Volume, 0.7f) }
-        val right =
+        val volume =
             compose.onNodeWithTag("player_control_feedback").fetchSemanticsNode().boundsInRoot
-        assertTrue(right.left > root.center.x)
+        assertTrue(volume.right < root.center.x)
         assertEquals(
             0.7f,
             compose
@@ -304,7 +463,7 @@ class PlayerSeekInteractionTest {
                 .onNodeWithTag("player_control_feedback")
                 .fetchSemanticsNode()
                 .boundsInRoot
-                .right < root.center.x
+                .left > root.center.x
         )
         compose.runOnIdle { feedback.value = PlayerControlFeedback(PlayerControlKind.Volume, 0.5f) }
         assertTrue(
@@ -312,7 +471,7 @@ class PlayerSeekInteractionTest {
                 .onNodeWithTag("player_control_feedback")
                 .fetchSemanticsNode()
                 .boundsInRoot
-                .left > root.center.x
+                .right < root.center.x
         )
     }
 

@@ -3,6 +3,7 @@ package me.rerere.awara.ui.component.player
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -17,14 +18,18 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -40,6 +45,7 @@ import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -61,9 +67,12 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
@@ -79,7 +88,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -95,6 +106,17 @@ import me.rerere.compose_setting.preference.rememberStringPreference
 
 private const val TAG = "Player"
 
+/** 控制栏收起后的底部细条开关，默认开启且与缩略图偏好独立保存。 */
+internal const val PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS = "setting.player_minimal_progress"
+
+/** 同一次轮询同时读取播放位置与缓冲端点，供展开和收起两种轨道共用。 */
+private data class PlayerTimelineProgress(val positionMs: Long, val bufferedPositionMs: Long)
+
+/** 使用浮点除法归一化时间，拒绝未知时长并夹紧内核可能报告的越界端点。 */
+internal fun playerProgressFraction(positionMs: Long, durationMs: Long): Float =
+    if (durationMs <= 0L || positionMs <= 0L) 0f
+    else (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
+
 @Composable
 fun Player(
     modifier: Modifier,
@@ -108,6 +130,8 @@ fun Player(
 ) {
     val thumbnailEnabled by
         rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
+    val minimalProgressEnabled by
+        rememberBooleanPreference(key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS, default = true)
     val previewPosition by
         rememberStringPreference(
             key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
@@ -124,6 +148,7 @@ fun Player(
                 actions = actions,
                 controllerTrail = controllerTrail,
                 thumbnailEnabled = thumbnailEnabled,
+                minimalProgressEnabled = minimalProgressEnabled,
                 previewPosition = SeekPreviewPosition.fromKey(previewPosition),
             )
         }
@@ -147,6 +172,7 @@ internal fun PlayerController(
     thumbnailEnabled: Boolean = true,
     previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
     controls: PlayerGestureControlState = rememberPlayerGestureControls(state),
+    minimalProgressEnabled: Boolean = true,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val windowInfo = LocalWindowInfo.current
@@ -160,6 +186,8 @@ internal fun PlayerController(
     var mediaGeneration by remember(state) { mutableStateOf(0) }
     var playerSize by remember { mutableStateOf(IntSize.Zero) }
     var originInWindow by remember { mutableStateOf(Offset.Zero) }
+    var previewOriginInWindow by remember { mutableStateOf(Offset.Zero) }
+    var sliderBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
     val inputEnabled = foreground && windowInfo.isWindowFocused
     val mediaItem = state.currentMediaItem
     val renderedGeneration = mediaGeneration
@@ -241,15 +269,17 @@ internal fun PlayerController(
         }
     }
 
-    val currentPosition by
+    val timelineProgress by
         produceState(
-            initialValue = state.player.currentPosition,
+            initialValue = PlayerTimelineProgress(0L, 0L),
             key1 = state.player,
             key2 = mediaGeneration,
+            key3 = mediaItem,
         ) {
             while (true) {
-                value = state.player.currentPosition.coerceAtLeast(0L)
-                previewState.notifyCurrentPositionPolled(value)
+                val position = state.player.currentPosition.coerceAtLeast(0L)
+                value = PlayerTimelineProgress(position, state.player.bufferedPosition)
+                previewState.notifyCurrentPositionPolled(position)
                 delay(250)
             }
         }
@@ -262,13 +292,12 @@ internal fun PlayerController(
     val displayPosition =
         when {
             previewState.isActive -> previewState.targetPositionMs
-            else -> previewState.pendingSeekTarget ?: currentPosition
+            else -> previewState.pendingSeekTarget ?: timelineProgress.positionMs
         }.coerceIn(0L, state.duration.coerceAtLeast(0L))
     // 同一比例同时驱动滑块和预览位置，横滑与进度条拖动不会出现两套定位结果。
-    val progressFraction =
-        if (state.duration > 0L) {
-            (displayPosition.toDouble() / state.duration.toDouble()).toFloat().coerceIn(0f, 1f)
-        } else 0f
+    val progressFraction = playerProgressFraction(displayPosition, state.duration)
+    val bufferedFraction =
+        playerProgressFraction(timelineProgress.bufferedPositionMs, state.duration)
 
     var visible by remember { mutableStateOf(true) }
     var speedMenuExpanded by remember(state) { mutableStateOf(false) }
@@ -401,11 +430,11 @@ internal fun PlayerController(
             Column(
                 modifier =
                     Modifier
-                        // 全屏时控制层避开系统栏区域，防止顶部/底部控件被状态栏或导航栏遮挡
+                        // 隐藏系统栏不再预留高度，但仍避开可见系统栏及真实刘海区域。
                         .then(
                             if (fullscreen)
                                 Modifier.windowInsetsPadding(
-                                    WindowInsets.systemBarsIgnoringVisibility
+                                    WindowInsets.systemBars.union(WindowInsets.displayCutout)
                                 )
                             else Modifier
                         )
@@ -414,7 +443,8 @@ internal fun PlayerController(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier =
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("player_top_controls"),
                 ) {
                     navigationIcon?.invoke()
 
@@ -422,8 +452,8 @@ internal fun PlayerController(
                         text = state.currentMediaItem?.mediaMetadata?.title?.toString() ?: "Player",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f).testTag("player_title"),
                     )
 
                     actions {
@@ -450,7 +480,10 @@ internal fun PlayerController(
 
                 // 两种位置都只使用现有剩余空间，不挤压 Slider 或底部按钮。
                 Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier =
+                        Modifier.weight(1f).fillMaxWidth().onGloballyPositioned {
+                            previewOriginInWindow = it.positionInWindow()
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     if (previewState.isActive) {
@@ -460,65 +493,97 @@ internal fun PlayerController(
                             thumbnail = thumbnail,
                             fraction = progressFraction,
                             position = previewPosition,
+                            trackLeft = sliderBoundsInWindow.left - previewOriginInWindow.x,
+                            trackWidth = sliderBoundsInWindow.width,
                         )
                     }
                     controls.feedback?.let { PlayerGestureFeedback(it, fullscreen) }
                 }
 
-                // 底部控制与进度条排布：Slider 单独一行避免窄屏被时间挤占
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    ProgressSlider(
-                        state = state,
-                        previewState = previewState,
-                        fraction = progressFraction,
-                        enabled =
-                            inputEnabled &&
-                                state.duration > 0L &&
-                                state.player.isCurrentMediaItemSeekable,
-                        interactionKey =
-                            listOf(
-                                mediaItem,
-                                mediaGeneration,
-                                fullscreen,
-                                playerSize,
-                                inputEnabled,
-                            ),
-                        onTouch = {
-                            visible = true
-                            lastInteract = System.currentTimeMillis()
-                        },
-                    )
-
+                // 时间区域限宽并允许长时长换行，优先给同排进度条保留可拖动空间。
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val timeMaxWidth = maxWidth * 0.36f
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("player_bottom_controls"),
                     ) {
                         // 播放/暂停按钮
                         if (state.playing) {
-                            IconButton(onClick = { state.pause() }) {
-                                Icon(Icons.Outlined.Pause, "Pause")
+                            IconButton(
+                                onClick = { state.pause() },
+                                modifier = Modifier.testTag("player_play_pause"),
+                            ) {
+                                Icon(Icons.Outlined.Pause, "Pause", Modifier.size(22.dp))
                             }
                         } else {
-                            IconButton(onClick = { state.play() }) {
-                                Icon(Icons.Outlined.PlayArrow, "Play")
+                            IconButton(
+                                onClick = { state.play() },
+                                modifier = Modifier.testTag("player_play_pause"),
+                            ) {
+                                Icon(Icons.Outlined.PlayArrow, "Play", Modifier.size(22.dp))
                             }
                         }
 
+                        ProgressSlider(
+                            state = state,
+                            previewState = previewState,
+                            fraction = progressFraction,
+                            bufferedFraction = bufferedFraction,
+                            enabled =
+                                inputEnabled &&
+                                    state.duration > 0L &&
+                                    state.player.isCurrentMediaItemSeekable,
+                            interactionKey =
+                                listOf(
+                                    mediaItem,
+                                    mediaGeneration,
+                                    fullscreen,
+                                    playerSize,
+                                    inputEnabled,
+                                ),
+                            modifier =
+                                Modifier.weight(1f).onGloballyPositioned {
+                                    sliderBoundsInWindow = it.boundsInWindow()
+                                },
+                            onTouch = {
+                                visible = true
+                                lastInteract = System.currentTimeMillis()
+                            },
+                        )
+
                         Text(
-                            text = "${formatTime(displayPosition)} / ${formatTime(state.duration)}",
-                            maxLines = 1,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.weight(1f),
+                            text = "${formatTime(displayPosition)}/${formatTime(state.duration)}",
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier =
+                                Modifier.widthIn(max = timeMaxWidth).testTag("player_playback_time"),
                         )
 
                         controllerTrail?.invoke()
                     }
                 }
             }
+        }
+
+        if (!visible && minimalProgressEnabled && state.duration > 0L) {
+            PlayerProgressTrack(
+                playedFraction = progressFraction,
+                bufferedFraction = bufferedFraction,
+                modifier =
+                    Modifier.align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .testTag("player_minimal_progress")
+                        .semantics {
+                            progressBarRangeInfo = ProgressBarRangeInfo(progressFraction, 0f..1f)
+                        },
+                rounded = false,
+            )
         }
 
         Column(
@@ -602,7 +667,7 @@ internal fun PlayerSpeedSelector(
     }
 }
 
-/** 倍速避开中央画面；全屏时按物理操作侧显示竖条，嵌入模式保持中央百分比。 */
+/** 倍速避开中央画面；全屏竖条显示在操作对侧，防止被手部遮挡。 */
 @Composable
 internal fun PlayerGestureFeedback(
     feedback: PlayerControlFeedback,
@@ -634,8 +699,8 @@ internal fun PlayerGestureFeedback(
             when {
                 feedback.kind == PlayerControlKind.Speed -> Alignment.TopCenter
                 fullscreen && feedback.kind == PlayerControlKind.Brightness ->
-                    AbsoluteAlignment.CenterLeft
-                fullscreen -> AbsoluteAlignment.CenterRight
+                    AbsoluteAlignment.CenterRight
+                fullscreen -> AbsoluteAlignment.CenterLeft
                 else -> Alignment.Center
             }
         if (fullscreen && feedback.kind != PlayerControlKind.Speed && value != null) {
@@ -705,13 +770,16 @@ internal fun PlayerGestureFeedback(
  * 4. 结合 pendingSeekTarget 防止松手后因轮询旧位置导致 slider 回弹。
  */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun ProgressSlider(
     state: PlayerState,
     previewState: SeekPreviewState,
     fraction: Float,
+    bufferedFraction: Float,
     enabled: Boolean,
     interactionKey: Any,
     onTouch: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     var isDragCancelled by remember { mutableStateOf(false) }
@@ -733,7 +801,7 @@ private fun ProgressSlider(
         }
     }
 
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
         Slider(
             value = fraction,
             onValueChange = { ratio ->
@@ -757,10 +825,25 @@ private fun ProgressSlider(
             enabled = enabled,
             interactionSource = interactionSource,
             thumb = {
-                SliderDefaults.Thumb(
-                    interactionSource = interactionSource,
-                    enabled = enabled,
-                    modifier = Modifier.size(PlayerSeekThumbDiameter).testTag("player_seek_thumb"),
+                // Material3 为滑块保留至少 20dp，需在槽内居中较小的可见圆球。
+                Box(
+                    modifier = Modifier.size(PlayerSeekThumbLayoutSize),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    SliderDefaults.Thumb(
+                        interactionSource = interactionSource,
+                        enabled = enabled,
+                        thumbSize = DpSize(PlayerSeekThumbDiameter, PlayerSeekThumbDiameter),
+                        modifier =
+                            Modifier.size(PlayerSeekThumbDiameter).testTag("player_seek_thumb"),
+                    )
+                }
+            },
+            track = { positions ->
+                PlayerProgressTrack(
+                    playedFraction = positions.activeRange.endInclusive,
+                    bufferedFraction = bufferedFraction,
+                    modifier = Modifier.fillMaxWidth().height(2.dp).testTag("player_buffered_track"),
                 )
             },
             modifier =
@@ -802,5 +885,37 @@ private fun ProgressSlider(
                     }
                 },
         )
+    }
+}
+
+/** 三层轨道区分未播放、已缓冲与已播放；只读细条复用绘制且不接管触摸。 */
+@Composable
+internal fun PlayerProgressTrack(
+    playedFraction: Float,
+    bufferedFraction: Float,
+    modifier: Modifier = Modifier,
+    rounded: Boolean = true,
+) {
+    val playedColor = MaterialTheme.colorScheme.primary
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    Canvas(modifier) {
+        val start = if (isRtl) size.width else 0f
+        val end = if (isRtl) 0f else size.width
+        val cap = if (rounded) StrokeCap.Round else StrokeCap.Butt
+        fun drawProgress(fraction: Float, color: Color) {
+            val progress = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
+            if (progress > 0f) {
+                drawLine(
+                    color,
+                    Offset(start, center.y),
+                    Offset(start + (end - start) * progress, center.y),
+                    strokeWidth = size.height,
+                    cap = cap,
+                )
+            }
+        }
+        drawProgress(1f, Color.White.copy(alpha = 0.24f))
+        drawProgress(bufferedFraction, Color.White.copy(alpha = 0.6f))
+        drawProgress(playedFraction, playedColor)
     }
 }

@@ -41,8 +41,11 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import me.rerere.awara.R
 
-/** 滑块直径由 Slider 和预览定位共用，避免轨道内缩与预览锚点不一致。 */
-internal val PlayerSeekThumbDiameter = 20.dp
+/** 圆球保持紧凑，独立于 Material3 为滑块保留的最小布局尺寸。 */
+internal val PlayerSeekThumbDiameter = 12.dp
+
+/** 与当前 Material3 的最小滑块布局一致，供槽内居中和预览轨道内缩共同使用。 */
+internal val PlayerSeekThumbLayoutSize = 20.dp
 
 /** 缩略图开关与显示位置独立保存；关闭图片时仍保留时间定位反馈。 */
 internal const val PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED = "setting.seek_thumbnail_enabled"
@@ -103,6 +106,8 @@ internal fun PlayerSeekPreview(
     fraction: Float,
     modifier: Modifier = Modifier,
     position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
+    trackLeft: Float = 0f,
+    trackWidth: Float? = null,
 ) {
     Layout(
         modifier = modifier.fillMaxSize().padding(bottom = 4.dp),
@@ -198,9 +203,11 @@ internal fun PlayerSeekPreview(
                 containerWidth = constraints.maxWidth,
                 previewWidth = bubble.width,
                 fraction = fraction,
-                thumbInset = PlayerSeekThumbDiameter.toPx() / 2f,
+                thumbInset = PlayerSeekThumbLayoutSize.toPx() / 2f,
                 isRtl = layoutDirection == LayoutDirection.Rtl,
                 position = position,
+                trackLeft = trackLeft,
+                trackWidth = trackWidth ?: constraints.maxWidth.toFloat(),
             )
         val availableHeight = (constraints.maxHeight - bubble.height).coerceAtLeast(0)
         val top =
@@ -220,13 +227,18 @@ internal fun calculateSeekPreviewLeft(
     thumbInset: Float,
     isRtl: Boolean,
     position: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
+    trackLeft: Float = 0f,
+    trackWidth: Float = containerWidth.toFloat(),
 ): Int {
     val width = containerWidth.coerceAtLeast(0)
     val bubbleWidth = previewWidth.coerceIn(0, width)
     if (position == SeekPreviewPosition.Center) return (width - bubbleWidth) / 2
-    val inset = if (thumbInset.isFinite()) thumbInset.coerceIn(0f, width / 2f) else 0f
+    val trackStart = if (trackLeft.isFinite()) trackLeft.coerceIn(0f, width.toFloat()) else 0f
+    val availableTrackWidth =
+        if (trackWidth.isFinite()) trackWidth.coerceIn(0f, width - trackStart) else 0f
+    val inset = if (thumbInset.isFinite()) thumbInset.coerceIn(0f, availableTrackWidth / 2f) else 0f
     val progress = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
     val physicalProgress = if (isRtl) 1f - progress else progress
-    val thumbCenter = inset + (width - 2f * inset) * physicalProgress
+    val thumbCenter = trackStart + inset + (availableTrackWidth - 2f * inset) * physicalProgress
     return (thumbCenter - bubbleWidth / 2f).roundToInt().coerceIn(0, width - bubbleWidth)
 }
