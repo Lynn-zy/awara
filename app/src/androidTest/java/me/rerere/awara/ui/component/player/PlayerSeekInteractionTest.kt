@@ -115,6 +115,7 @@ class PlayerSeekInteractionTest {
         var durationMs = 60_000L
         var seekCount = 0
         var pauseCount = 0
+        var rejectSpeedChange = false
         var mediaItem: MediaItem? = null
         val listeners = mutableSetOf<Player.Listener>()
         var parameters = PlaybackParameters(1.25f, 0.8f)
@@ -123,6 +124,7 @@ class PlayerSeekInteractionTest {
             when (method.name) {
                 "getPlaybackParameters" -> return parameters
                 "setPlaybackParameters" -> {
+                    if (rejectSpeedChange) throw UnsupportedOperationException("测试播放器拒绝倍速")
                     parameters = args!![0] as PlaybackParameters
                     return null
                 }
@@ -187,6 +189,7 @@ class PlayerSeekInteractionTest {
         minimalProgressEnabled: MutableState<Boolean> = mutableStateOf(true),
         fullscreen: Boolean = false,
         fontScale: Float = 1f,
+        fullscreenState: MutableState<Boolean> = mutableStateOf(fullscreen),
     ): Fixture {
         val handler = RecordingPlayer()
         handler.mediaItem = sourceUri?.let { MediaItem.fromUri(it) }
@@ -228,7 +231,7 @@ class PlayerSeekInteractionTest {
                             PlayerController(
                                 Modifier.fillMaxSize(),
                                 state,
-                                fullscreen,
+                                fullscreenState.value,
                                 preview,
                                 thumbnailEnabled = thumbnailEnabled.value,
                                 previewPosition = position,
@@ -236,7 +239,10 @@ class PlayerSeekInteractionTest {
                                 minimalProgressEnabled = minimalProgressEnabled.value,
                                 controllerTrail = {
                                     IconButton(
-                                        onClick = {},
+                                        onClick = {
+                                            state.controllerState.hideTitle()
+                                            fullscreenState.value = true
+                                        },
                                         modifier = Modifier.testTag("test_fullscreen_button"),
                                     ) {
                                         Text("F")
@@ -246,7 +252,7 @@ class PlayerSeekInteractionTest {
                                     speedSelector()
                                     if (qualityAction)
                                         TextButton(
-                                            onClick = {},
+                                            onClick = { state.updateCurrentQuality("720p") },
                                             modifier = Modifier.testTag("test_quality_selector"),
                                         ) {
                                             Text("720p")
@@ -303,10 +309,81 @@ class PlayerSeekInteractionTest {
         assertEquals(slider.center.y, thumb.center.y, 1f)
     }
 
+    /** 横滑期间仅保留底栏，松手同帧即收起，不等待自动隐藏倒计时。 */
+    @Test
+    fun horizontalSeekShowsOnlyBottomAndHidesImmediatelyOnRelease() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.7f))
+            moveTo(Offset(center.x * 1.5f, center.y * 0.7f))
+        }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_preview_time").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(1, fixture.player.seekCount) }
+    }
+
+    /** 竖滑从显示状态进入时也立即隐藏上下控件，只保留操作反馈。 */
+    @Test
+    fun verticalControlHidesBothRegionsWithoutHidingFeedback() {
+        renderController()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            down(Offset(center.x * 0.5f, center.y * 0.9f))
+            moveTo(Offset(center.x * 0.5f, center.y * 0.5f))
+        }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_control_feedback").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+    }
+
+    /** 长按只显示临时倍速提示，释放后不会重新呼出控制栏。 */
+    @Test
+    fun heldSpeedNeverShowsTitleOrBottomControls() {
+        renderController()
+        holdForSpeed()
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput { up() }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+    }
+
+    /** 清晰度成功选择及全屏按钮都走生产状态，避免只验证测试自建显隐值。 */
+    @Test
+    fun qualitySelectionHidesBothRegionsAndFullscreenEntryHidesTitle() {
+        val fixture = renderController(qualityAction = true)
+        compose.runOnIdle {
+            fixture.state.updatePlayerItems(
+                listOf(PlayerState.PlayerItem("720p", MediaItem.fromUri("file:///quality.mp4")))
+            )
+        }
+        compose.onNodeWithTag("test_quality_selector").performClick()
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
+        compose.onNodeWithTag("test_fullscreen_button").performClick()
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+        compose.runOnIdle { fixture.mounted.value = false }
+        compose.runOnIdle { fixture.mounted.value = true }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+    }
+
     /** 标题使用紧凑单行正文层级；全屏不另行放大字号。 */
     @Test
     fun fullscreenTitleUsesCompactSingleLineTypography() {
         val fixture = renderController(fullscreen = true)
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
         compose.runOnIdle {
             fixture.state.currentMediaItem =
                 MediaItem.Builder()
@@ -520,8 +597,15 @@ class PlayerSeekInteractionTest {
             compose.onNodeWithTag("test_quality_selector").fetchSemanticsNode().boundsInRoot
         assertTrue(speedButton.right <= qualityButton.left)
         listOf(0.5f, 1f, 1.5f, 2f).forEach { speed ->
+            if (speed != 0.5f) {
+                compose.onNodeWithTag("player_seek_surface").performTouchInput {
+                    click(Offset(center.x, center.y * 0.7f))
+                }
+            }
             compose.onNodeWithTag("player_speed_selector").performClick()
             compose.onNodeWithTag("player_speed_option_${speed}").performClick()
+            compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+            compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
             compose.runOnIdle {
                 assertEquals(speed, fixture.state.currentPlaybackSpeed, 0f)
                 assertEquals(speed, fixture.player.parameters.speed, 0f)
@@ -557,6 +641,25 @@ class PlayerSeekInteractionTest {
             .onNodeWithText(context.getString(R.string.player_speed_change_failed))
             .assertIsDisplayed()
         compose.runOnIdle { assertTrue(expanded.value) }
+    }
+
+    /** 生产播放器拒绝倍速时不能执行成功后的收起规则，用户仍可看到错误并重试。 */
+    @Test
+    fun rejectedSpeedChangeKeepsProductionControlsAndMenuVisible() {
+        val fixture = renderController()
+        compose.runOnIdle { fixture.player.rejectSpeedChange = true }
+        compose.onNodeWithTag("player_speed_selector").performClick()
+        compose.onNodeWithTag("player_speed_option_1.5").performClick()
+        compose.onNodeWithTag("player_top_controls").assertIsDisplayed()
+        compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose
+            .onNodeWithText(context.getString(R.string.player_speed_change_failed))
+            .assertIsDisplayed()
+        compose.runOnIdle {
+            assertNull(fixture.savedSpeed.value)
+            assertEquals(1f, fixture.state.currentPlaybackSpeed, 0f)
+        }
     }
 
     @Test
@@ -751,7 +854,7 @@ class PlayerSeekInteractionTest {
             assertEquals(0, fixture.player.seekCount)
             assertEquals(0, fixture.player.pauseCount)
         }
-        compose.onNodeWithTag("player_seek_slider").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_slider").assertDoesNotExist()
     }
 
     @Test
@@ -869,12 +972,12 @@ class PlayerSeekInteractionTest {
             up()
         }
         compose.runOnIdle { assertEquals(0, fixture.player.seekCount) }
-        compose.onNodeWithTag("player_seek_slider").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_slider").assertDoesNotExist()
         compose.onNodeWithTag("player_seek_surface").performTouchInput {
             click(Offset(center.x, center.y * 0.7f))
         }
         compose.mainClock.advanceTimeBy(600)
-        compose.onNodeWithTag("player_seek_slider").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_slider").assertIsDisplayed()
     }
 
     @Test
@@ -938,6 +1041,24 @@ class PlayerSeekInteractionTest {
             assertEquals(0, fixture.player.seekCount)
             assertFalse(fixture.preview.isActive)
         }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+    }
+
+    /** 进度条自身的拖动同样只显示底部，释放后立即收起且只提交一次。 */
+    @Test
+    fun sliderReleaseImmediatelyHidesBothRegionsAfterSingleSeek() {
+        val fixture = renderController()
+        compose.onNodeWithTag("player_seek_slider").performTouchInput {
+            down(Offset(width * 0.3f, center.y))
+            moveTo(Offset(width * 0.6f, center.y))
+        }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+        compose.onNodeWithTag("player_seek_slider").performTouchInput { up() }
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(1, fixture.player.seekCount) }
     }
 
     @Test

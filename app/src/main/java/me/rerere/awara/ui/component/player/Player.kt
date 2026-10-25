@@ -1,8 +1,5 @@
 package me.rerere.awara.ui.component.player
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -17,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -299,11 +297,12 @@ internal fun PlayerController(
     val bufferedFraction =
         playerProgressFraction(timelineProgress.bufferedPositionMs, state.duration)
 
-    var visible by remember { mutableStateOf(true) }
+    val controller = state.controllerState
     var speedMenuExpanded by remember(state) { mutableStateOf(false) }
     var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(fullscreen) { if (fullscreen) controller.hideTitle() }
     LaunchedEffect(
-        visible,
+        controller.bottomVisible,
         state.playing,
         previewState.isActive,
         controls.feedback,
@@ -311,14 +310,14 @@ internal fun PlayerController(
         lastInteract,
     ) {
         if (
-            visible &&
+            controller.bottomVisible &&
                 state.playing &&
                 !previewState.isActive &&
                 controls.feedback == null &&
                 !speedMenuExpanded
         ) {
             delay(3000)
-            visible = false
+            controller.hide()
         }
     }
 
@@ -372,7 +371,7 @@ internal fun PlayerController(
                                 return@detectTapGestures
                             }
                             lastInteract = System.currentTimeMillis()
-                            visible = !visible
+                            controller.toggle()
                         },
                     )
                 }
@@ -414,19 +413,19 @@ internal fun PlayerController(
                     getCurrentPosition = { state.player.currentPosition },
                     onSeekCommit = { target -> state.seekTo(target) },
                     onGestureActiveChanged = { active ->
-                        if (active) visible = true
+                        if (active) {
+                            if (previewState.isActive) controller.showSeek() else controller.hide()
+                            speedMenuExpanded = false
+                        } else if (state.player.playWhenReady) {
+                            controller.hide()
+                        }
                         lastInteract = System.currentTimeMillis()
                     },
                     onSuppressTap = { suppressTap = true },
                 )
                 .fillMaxSize()
     ) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.fillMaxSize(),
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier =
                     Modifier
@@ -441,41 +440,50 @@ internal fun PlayerController(
                         .padding(horizontal = 8.dp)
                         .fillMaxSize()
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier =
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("player_top_controls"),
-                ) {
-                    navigationIcon?.invoke()
+                if (controller.topVisible) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("player_top_controls"),
+                    ) {
+                        navigationIcon?.invoke()
 
-                    Text(
-                        text = state.currentMediaItem?.mediaMetadata?.title?.toString() ?: "Player",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.weight(1f).testTag("player_title"),
-                    )
-
-                    actions {
-                        PlayerSpeedSelector(
-                            currentSpeed = state.currentPlaybackSpeed,
-                            expanded = speedMenuExpanded,
-                            enabled =
-                                state.player.isCommandAvailable(
-                                    MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
-                                ),
-                            onExpandedChange = { expanded ->
-                                speedMenuExpanded = expanded
-                                visible = true
-                                lastInteract = System.currentTimeMillis()
-                            },
-                            onSpeedSelected = { speed ->
-                                // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
-                                controls.finishGesture()
-                                state.updatePlaybackSpeed(speed)
-                            },
+                        Text(
+                            text =
+                                state.currentMediaItem?.mediaMetadata?.title?.toString()
+                                    ?: "Player",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f).testTag("player_title"),
                         )
+
+                        actions {
+                            PlayerSpeedSelector(
+                                currentSpeed = state.currentPlaybackSpeed,
+                                expanded = speedMenuExpanded,
+                                enabled =
+                                    state.player.isCommandAvailable(
+                                        MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
+                                    ),
+                                onExpandedChange = { expanded ->
+                                    speedMenuExpanded = expanded
+                                    if (expanded) controller.show()
+                                    lastInteract = System.currentTimeMillis()
+                                },
+                                onSpeedSelected = { speed ->
+                                    // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
+                                    controls.finishGesture()
+                                    state.updatePlaybackSpeed(speed)
+                                },
+                            )
+                        }
                     }
+                } else {
+                    // 保留预览与提示的布局基准，不让隐藏标题改变手势中画面位置。
+                    Spacer(Modifier.height(48.dp))
                 }
 
                 // 两种位置都只使用现有剩余空间，不挤压 Slider 或底部按钮。
@@ -501,76 +509,86 @@ internal fun PlayerController(
                 }
 
                 // 时间区域限宽并允许长时长换行，优先给同排进度条保留可拖动空间。
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val timeMaxWidth = maxWidth * 0.36f
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier =
-                            Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .testTag("player_bottom_controls"),
-                    ) {
-                        // 播放/暂停按钮
-                        if (state.playing) {
-                            IconButton(
-                                onClick = { state.pause() },
-                                modifier = Modifier.testTag("player_play_pause"),
-                            ) {
-                                Icon(Icons.Outlined.Pause, "Pause", Modifier.size(22.dp))
-                            }
-                        } else {
-                            IconButton(
-                                onClick = { state.play() },
-                                modifier = Modifier.testTag("player_play_pause"),
-                            ) {
-                                Icon(Icons.Outlined.PlayArrow, "Play", Modifier.size(22.dp))
-                            }
-                        }
-
-                        ProgressSlider(
-                            state = state,
-                            previewState = previewState,
-                            fraction = progressFraction,
-                            bufferedFraction = bufferedFraction,
-                            enabled =
-                                inputEnabled &&
-                                    state.duration > 0L &&
-                                    state.player.isCurrentMediaItemSeekable,
-                            interactionKey =
-                                listOf(
-                                    mediaItem,
-                                    mediaGeneration,
-                                    fullscreen,
-                                    playerSize,
-                                    inputEnabled,
-                                ),
+                if (controller.bottomVisible) {
+                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                        val timeMaxWidth = maxWidth * 0.36f
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier =
-                                Modifier.weight(1f).onGloballyPositioned {
-                                    sliderBoundsInWindow = it.boundsInWindow()
+                                Modifier.fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("player_bottom_controls"),
+                        ) {
+                            // 播放/暂停按钮
+                            if (state.playing) {
+                                IconButton(
+                                    onClick = { state.pause() },
+                                    modifier = Modifier.testTag("player_play_pause"),
+                                ) {
+                                    Icon(Icons.Outlined.Pause, "Pause", Modifier.size(22.dp))
+                                }
+                            } else {
+                                IconButton(
+                                    onClick = { state.play() },
+                                    modifier = Modifier.testTag("player_play_pause"),
+                                ) {
+                                    Icon(Icons.Outlined.PlayArrow, "Play", Modifier.size(22.dp))
+                                }
+                            }
+
+                            ProgressSlider(
+                                state = state,
+                                previewState = previewState,
+                                fraction = progressFraction,
+                                bufferedFraction = bufferedFraction,
+                                enabled =
+                                    inputEnabled &&
+                                        state.duration > 0L &&
+                                        state.player.isCurrentMediaItemSeekable,
+                                interactionKey =
+                                    listOf(
+                                        mediaItem,
+                                        mediaGeneration,
+                                        fullscreen,
+                                        playerSize,
+                                        inputEnabled,
+                                    ),
+                                modifier =
+                                    Modifier.weight(1f).onGloballyPositioned {
+                                        sliderBoundsInWindow = it.boundsInWindow()
+                                    },
+                                onTouch = {
+                                    controller.showSeek()
+                                    lastInteract = System.currentTimeMillis()
                                 },
-                            onTouch = {
-                                visible = true
-                                lastInteract = System.currentTimeMillis()
-                            },
-                        )
+                                onFinished = {
+                                    if (state.player.playWhenReady) controller.hide()
+                                    lastInteract = System.currentTimeMillis()
+                                },
+                            )
 
-                        Text(
-                            text = "${formatTime(displayPosition)}/${formatTime(state.duration)}",
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier =
-                                Modifier.widthIn(max = timeMaxWidth).testTag("player_playback_time"),
-                        )
+                            Text(
+                                text =
+                                    "${formatTime(displayPosition)}/${formatTime(state.duration)}",
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier =
+                                    Modifier.widthIn(max = timeMaxWidth)
+                                        .testTag("player_playback_time"),
+                            )
 
-                        controllerTrail?.invoke()
+                            controllerTrail?.invoke()
+                        }
                     }
+                } else {
+                    Spacer(Modifier.height(48.dp))
                 }
             }
         }
 
-        if (!visible && minimalProgressEnabled && state.duration > 0L) {
+        if (!controller.bottomVisible && minimalProgressEnabled && state.duration > 0L) {
             PlayerProgressTrack(
                 playedFraction = progressFraction,
                 bufferedFraction = bufferedFraction,
@@ -779,6 +797,7 @@ private fun ProgressSlider(
     enabled: Boolean,
     interactionKey: Any,
     onTouch: () -> Unit,
+    onFinished: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -795,8 +814,9 @@ private fun ProgressSlider(
                 is DragInteraction.Cancel -> {
                     isDragCancelled = true
                     previewState.cancel()
+                    onFinished()
                 }
-                is DragInteraction.Stop -> onTouch()
+                is DragInteraction.Stop -> Unit
             }
         }
     }
@@ -820,6 +840,7 @@ private fun ProgressSlider(
                         state.seekTo(target)
                     }
                     onTouch()
+                    onFinished()
                 }
             },
             enabled = enabled,
@@ -880,7 +901,7 @@ private fun ProgressSlider(
                                 previewState.cancel()
                             }
                             touchInProgress = false
-                            onTouch()
+                            onFinished()
                         }
                     }
                 },

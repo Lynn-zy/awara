@@ -114,6 +114,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     var fullscreen by remember { mutableStateOf(false) }
     fun enterFullScreen() {
         if (state.videoSize == PlayerState.VideoSize.UNKNOWN) return
+        state.controllerState.hideTitle()
         if (state.videoSize.width > state.videoSize.height) {
             fullscreen = true
             requestOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -363,6 +364,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                         state.prepare()
                                                     }
                                                 }
+                                                state.controllerState.hide()
                                             },
                                             text = { Text(localItemLabel) },
                                             trailingIcon =

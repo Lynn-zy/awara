@@ -325,6 +325,7 @@ fun DownloadPage(
     var fullscreen by remember { mutableStateOf(false) }
     fun enterFullScreen() {
         Log.i("DownloadPage", "enterFullScreen: ${state.videoSize.width}")
+        state.controllerState.hideTitle()
         if (state.videoSize.width > state.videoSize.height) {
             fullscreen = true
             requestOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE

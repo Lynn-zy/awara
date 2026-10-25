@@ -8,6 +8,39 @@ import org.junit.Test
 
 /** 使用真实控制状态与可观察替身，验证累计位移、实际反馈和生命周期还原。 */
 class PlayerGestureControlsTest {
+    /** 手势只显示定位所需底栏；收起后必须由用户主动单击重新呼出。 */
+    @Test
+    fun controllerSeparatesSeekControlsFromTitleAndHidesImmediately() {
+        val state = PlayerControllerState()
+        assertTrue(state.topVisible)
+        assertTrue(state.bottomVisible)
+        state.showSeek()
+        assertFalse(state.topVisible)
+        assertTrue(state.bottomVisible)
+        state.hide()
+        assertFalse(state.topVisible)
+        assertFalse(state.bottomVisible)
+        state.toggle()
+        assertTrue(state.topVisible)
+        assertTrue(state.bottomVisible)
+        state.toggle()
+        assertFalse(state.bottomVisible)
+    }
+
+    /** 全屏标题收起不能意外显示原本已隐藏的底栏。 */
+    @Test
+    fun fullscreenEntryOnlyHidesTitleWithoutReopeningHiddenControls() {
+        val state = PlayerControllerState()
+        state.hideTitle()
+        assertFalse(state.topVisible)
+        assertTrue(state.bottomVisible)
+        state.hide()
+        state.hideTitle()
+        assertFalse(state.bottomVisible)
+        state.show()
+        assertTrue(state.topVisible)
+    }
+
     private class Target : PlayerGestureControlTarget {
         var brightness = 0.5f
         var volume = 0.5f

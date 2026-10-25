@@ -114,6 +114,9 @@ class PlayerState(
     var state by mutableStateOf(State.IDLE)
     var isLoading by mutableStateOf(false)
 
+    /** 跟随播放器而非界面实例保存，进入全屏时不恢复已隐藏的控制区。 */
+    internal val controllerState = PlayerControllerState()
+
     /** 当前播放倍速状态（只读，私有 set，仅通过 [updatePlaybackSpeed] 显式变更并持久化） */
     var currentPlaybackSpeed by mutableFloatStateOf(normalizePlaybackSpeed(initialPlaybackSpeed))
         private set
@@ -233,6 +236,7 @@ class PlayerState(
         player.prepare()
 
         currentMediaItem = item.mediaItem
+        controllerState.hide()
     }
 
     /**
@@ -256,6 +260,7 @@ class PlayerState(
             player.playbackParameters = player.playbackParameters.withSpeed(speed)
             currentPlaybackSpeed = speed
             savePlaybackSpeedPreference(speed)
+            controllerState.hide()
             true
         } catch (_: SecurityException) {
             false
