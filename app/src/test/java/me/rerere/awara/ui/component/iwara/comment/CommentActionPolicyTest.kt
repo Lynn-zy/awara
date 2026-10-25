@@ -264,4 +264,69 @@ class CommentActionPolicyTest {
             CommentActionPolicy.calculatePageAfterDeletion(currentPage = 2, currentCount = 0),
         )
     }
+
+    /** 验证评论发布者与视频作者 ID 精确匹配时，正确判定为视频作者。 */
+    @Test
+    fun isVideoAuthorReturnsTrueWhenCommentUserMatchesVideoAuthorId() {
+        val comment = createComment(authorId = "author_123")
+        val isAuthor = CommentActionPolicy.isVideoAuthor(comment, "author_123")
+        assertTrue("评论发布者与视频作者 ID 一致时应标为作者", isAuthor)
+    }
+
+    /** 验证普通非作者用户的评论不显示作者标，判定为 false。 */
+    @Test
+    fun isVideoAuthorReturnsFalseForNonAuthorComment() {
+        val comment = createComment(authorId = "user_normal")
+        val isAuthor = CommentActionPolicy.isVideoAuthor(comment, "author_123")
+        assertFalse("非视频作者发表的评论绝不应误标为作者", isAuthor)
+    }
+
+    /** 验证缺失或空视频作者 ID（null、空字符串、全空格）绝不误标。 */
+    @Test
+    fun isVideoAuthorReturnsFalseWhenVideoAuthorIdIsNullOrEmptyOrBlank() {
+        val comment = createComment(authorId = "author_123")
+        assertFalse("视频作者 ID 为 null 时绝不误标", CommentActionPolicy.isVideoAuthor(comment, null))
+        assertFalse("视频作者 ID 为空串时绝不误标", CommentActionPolicy.isVideoAuthor(comment, ""))
+        assertFalse("视频作者 ID 为全空格空白串时绝不误标", CommentActionPolicy.isVideoAuthor(comment, "   "))
+    }
+
+    /** 验证评论用户实体为 null 或用户 ID 缺失/空白时绝不误标。 */
+    @Test
+    fun isVideoAuthorReturnsFalseWhenCommentUserOrIdIsNullOrEmptyOrBlank() {
+        val noUserComment = createComment(authorId = null)
+        assertFalse("评论未带用户对象时绝不误标", CommentActionPolicy.isVideoAuthor(noUserComment, "author_123"))
+
+        val blankUserIdComment = createComment(authorId = "   ")
+        assertFalse(
+            "评论用户 ID 为空白时绝不误标",
+            CommentActionPolicy.isVideoAuthor(blankUserIdComment, "author_123"),
+        )
+    }
+
+    /** 验证本人也是视频作者时两者各自独立成立，互不排斥。 */
+    @Test
+    fun isVideoAuthorAndCurrentUserAreIndependent() {
+        val comment = createComment(authorId = "me_and_author")
+        val isAuthor = CommentActionPolicy.isVideoAuthor(comment, "me_and_author")
+        val isMe = comment.user?.id == "me_and_author"
+        assertTrue("本人是作者时作者判定应成立", isAuthor)
+        assertTrue("本人判定应成立", isMe)
+    }
+
+    /** 验证二级回复场景下（带有 parent 引用），只要评论发布者是视频作者，同样能正确判定。 */
+    @Test
+    fun isVideoAuthorWorksCorrectlyForSubReplyComments() {
+        val parentComment = createComment(id = "root", authorId = "normal_user")
+        val replyFromAuthor =
+            createComment(id = "reply_1", authorId = "author_123").copy(parent = parentComment)
+        val isAuthor = CommentActionPolicy.isVideoAuthor(replyFromAuthor, "author_123")
+        assertTrue("回复层中由作者发表的评论同样应正确标为作者", isAuthor)
+
+        val replyFromOther =
+            createComment(id = "reply_2", authorId = "other_user").copy(parent = parentComment)
+        assertFalse(
+            "回复层中非作者评论绝不误标",
+            CommentActionPolicy.isVideoAuthor(replyFromOther, "author_123"),
+        )
+    }
 }

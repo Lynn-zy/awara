@@ -205,4 +205,5 @@
     <string name="time_days_ago">%1$d天前</string>
     <string name="user_followed">已關注</string>
     <string name="user_follow">關注</string>
+    <string name="comment_tag_author">作者</string>
 </resources>

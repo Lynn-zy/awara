@@ -76,4 +76,23 @@ object CommentActionPolicy {
             currentPage
         }
     }
+
+    /**
+     * 判断指定评论是否由视频作者发表。
+     *
+     * 判定规则：
+     * 1. 视频作者 ID [videoAuthorId] 必须非空且非空白字符串；
+     * 2. 评论发布者 user 及其 id 必须非空且非空白字符串；
+     * 3. 评论作者 ID 与视频作者 ID 精确匹配（缺失/空 ID 绝不误标，普通非作者不显示）。
+     *
+     * @param comment 待检查的目标评论实体
+     * @param videoAuthorId 视频所属的真实发布者 ID（若非视频评论或未提供则为 null）
+     * @return 若是该视频作者发表的评论返回 true，否则返回 false
+     */
+    fun isVideoAuthor(comment: Comment, videoAuthorId: String?): Boolean {
+        if (videoAuthorId.isNullOrBlank()) return false
+        val authorId = comment.user?.id
+        if (authorId.isNullOrBlank()) return false
+        return authorId == videoAuthorId
+    }
 }

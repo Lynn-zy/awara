@@ -205,4 +205,5 @@
     <string name="time_days_ago">%1$d日前</string>
     <string name="user_followed">フォロー中</string>
     <string name="user_follow">フォロー</string>
+    <string name="comment_tag_author">投稿者</string>
 </resources>

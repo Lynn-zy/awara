@@ -26,6 +26,7 @@
     <string name="comment_delete_failed">删除评论失败，请重试</string>
     <string name="comment_post_failed">发送评论失败，请重试</string>
     <string name="comment_image_preview">图片预览</string>
+    <string name="comment_tag_author">作者</string>
     <string name="comment_image_load">加载图片</string>
     <string name="setting_comment_image">评论图片</string>
     <string name="setting_comment_image_auto_load_title">自动加载并显示</string>

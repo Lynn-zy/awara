@@ -80,6 +80,7 @@ fun CommentList(
     canPostReply: Boolean = true,
     isLocalFallback: Boolean = false,
     currentUserId: String? = LocalUserStore.current.collectAsState().user?.id,
+    videoAuthorId: String? = null,
     onRefresh: (suspend () -> RefreshResult)? = null,
 ) {
     val currentComment = state.stack.last()
@@ -346,6 +347,7 @@ fun CommentList(
                                     isLocalFallback = isLocalFallback,
                                     canReply = canReply,
                                     currentUserId = currentUserId,
+                                    videoAuthorId = videoAuthorId,
                                 )
                             }
                         }

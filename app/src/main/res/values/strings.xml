@@ -26,6 +26,7 @@
     <string name="comment_delete_failed">Could not delete comment. Try again.</string>
     <string name="comment_post_failed">Could not send comment. Try again.</string>
     <string name="comment_image_preview">Image preview</string>
+    <string name="comment_tag_author">Author</string>
     <string name="comment_image_load">加载图片</string>
     <string name="setting_comment_image">评论图片</string>
     <string name="setting_comment_image_auto_load_title">自动加载并显示</string>

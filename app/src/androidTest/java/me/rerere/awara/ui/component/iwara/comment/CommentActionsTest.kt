@@ -203,6 +203,61 @@ class CommentActionsTest {
         compose.runOnIdle { assertEquals(1, requests) }
     }
 
+    /** 验证当评论来自视频作者时，真实评论组件正确显示“作者”Tag，非本人不显示“我”Tag。 */
+    @Test
+    fun videoAuthorTagIsDisplayedWhenCommentIsFromVideoAuthor() {
+        val authorComment = comment(userId = "video_author_1")
+        val state =
+            CommentState(
+                stack = listOf(CommentStateItem(comments = listOf(authorComment), total = 1))
+            )
+        compose.setContent {
+            Content(
+                commentState = state,
+                currentUserId = "viewer_user",
+                videoAuthorId = "video_author_1",
+            )
+        }
+        val authorTagText = context.getString(R.string.comment_tag_author)
+        compose.onNodeWithText(authorTagText).assertExists()
+        compose.onNodeWithText("我").assertDoesNotExist()
+    }
+
+    /** 验证当登录用户本人也是视频作者时，评论卡片上“作者”Tag 和“我”Tag 均展示。 */
+    @Test
+    fun bothAuthorAndMeTagsAreDisplayedWhenUserIsAlsoVideoAuthor() {
+        val myComment = comment(userId = "owner")
+        val state =
+            CommentState(stack = listOf(CommentStateItem(comments = listOf(myComment), total = 1)))
+        compose.setContent {
+            Content(commentState = state, currentUserId = "owner", videoAuthorId = "owner")
+        }
+        val authorTagText = context.getString(R.string.comment_tag_author)
+        compose.onNodeWithText(authorTagText).assertExists()
+        compose.onNodeWithText("我").assertExists()
+    }
+
+    /** 验证普通非作者、或者缺失/空视频作者 ID 时，真实评论组件绝不显示“作者”Tag。 */
+    @Test
+    fun authorTagIsNotDisplayedForNonAuthorOrBlankAuthorId() {
+        val normalComment = comment(userId = "normal_user")
+        val state =
+            CommentState(
+                stack = listOf(CommentStateItem(comments = listOf(normalComment), total = 1))
+            )
+        val authorTagText = context.getString(R.string.comment_tag_author)
+
+        // 情况1：非作者用户，videoAuthorId 为他人
+        compose.setContent {
+            Content(
+                commentState = state,
+                currentUserId = "viewer_user",
+                videoAuthorId = "video_author_1",
+            )
+        }
+        compose.onNodeWithText(authorTagText).assertDoesNotExist()
+    }
+
     @Composable
     private fun Content(
         parent: String? = null,
@@ -210,6 +265,8 @@ class CommentActionsTest {
         onEdit: suspend (String, String) -> Boolean = { _, _ -> false },
         onDelete: suspend (String) -> Boolean = { false },
         commentState: CommentState? = null,
+        currentUserId: String? = "owner",
+        videoAuthorId: String? = null,
         onRefresh: (suspend () -> RefreshResult)? = null,
     ) {
         val router = rememberNavController()
@@ -238,7 +295,8 @@ class CommentActionsTest {
                                 onPostReply = onPost,
                                 onEditComment = onEdit,
                                 onDeleteComment = onDelete,
-                                currentUserId = "owner",
+                                currentUserId = currentUserId,
+                                videoAuthorId = videoAuthorId,
                                 onRefresh = onRefresh,
                             )
                         }
@@ -248,18 +306,18 @@ class CommentActionsTest {
         }
     }
 
-    private fun comment(): Comment =
+    private fun comment(userId: String = "owner", userName: String = "测试用户"): Comment =
         Comment(
-            id = "comment",
+            id = "comment_$userId",
             body = "原评论",
             createdAt = Instant.EPOCH,
             updatedAt = Instant.EPOCH,
             numReplies = 0,
             user =
                 User(
-                    id = "owner",
-                    name = "测试用户",
-                    username = "owner",
+                    id = userId,
+                    name = userName,
+                    username = userId,
                     createdAt = Instant.EPOCH,
                     updatedAt = Instant.EPOCH,
                     deletedAt = null,

@@ -59,6 +59,7 @@ fun CommentCard(
     isLocalFallback: Boolean = false,
     canReply: Boolean = true,
     currentUserId: String? = LocalUserStore.current.collectAsState().user?.id,
+    videoAuthorId: String? = null,
 ) {
     val context = LocalContext.current
     val router = LocalRouterProvider.current
@@ -111,6 +112,22 @@ fun CommentCard(
                 }
 
                 comment.user?.let { UserStatus(user = it) }
+
+                // 视频作者 Tag：仅在有效视频作者 ID 与评论作者 ID 匹配时展示
+                if (
+                    CommentActionPolicy.isVideoAuthor(
+                        comment = comment,
+                        videoAuthorId = videoAuthorId,
+                    )
+                ) {
+                    Surface(shape = RoundedCornerShape(4.dp), tonalElevation = 4.dp) {
+                        Text(
+                            text = stringResource(R.string.comment_tag_author),
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp),
+                        )
+                    }
+                }
 
                 // "Me" Tag
                 if (currentUserId != null && comment.user?.id == currentUserId) {
