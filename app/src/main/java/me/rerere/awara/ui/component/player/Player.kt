@@ -96,6 +96,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as MediaPlayer
 import androidx.media3.common.util.UnstableApi
+import java.net.URI
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import me.rerere.awara.R
@@ -114,6 +115,17 @@ private data class PlayerTimelineProgress(val positionMs: Long, val bufferedPosi
 internal fun playerProgressFraction(positionMs: Long, durationMs: Long): Float =
     if (durationMs <= 0L || positionMs <= 0L) 0f
     else (positionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
+
+/** 本地文件可随机读取完整时长，不能把解码器预读端点误当成下载缓存比例。 */
+internal fun playerBufferedProgressFraction(
+    bufferedPositionMs: Long,
+    durationMs: Long,
+    sourceUri: String?,
+): Float {
+    val scheme = runCatching { sourceUri?.let(::URI)?.scheme?.lowercase() }.getOrNull()
+    return if (scheme == "file" || scheme == "content") 1f
+    else playerProgressFraction(bufferedPositionMs, durationMs)
+}
 
 @Composable
 fun Player(
@@ -295,7 +307,11 @@ internal fun PlayerController(
     // 同一比例同时驱动滑块和预览位置，横滑与进度条拖动不会出现两套定位结果。
     val progressFraction = playerProgressFraction(displayPosition, state.duration)
     val bufferedFraction =
-        playerProgressFraction(timelineProgress.bufferedPositionMs, state.duration)
+        playerBufferedProgressFraction(
+            bufferedPositionMs = timelineProgress.bufferedPositionMs,
+            durationMs = state.duration,
+            sourceUri = sourceUri,
+        )
 
     val controller = state.controllerState
     var speedMenuExpanded by remember(state) { mutableStateOf(false) }

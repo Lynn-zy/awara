@@ -22,6 +22,23 @@ class SeekPreviewStateTest {
         assertEquals(1f, playerProgressFraction(Long.MAX_VALUE, Long.MAX_VALUE), 0f)
     }
 
+    /** 本地 file/content 视频完整可读，网络视频仍显示真实的 Media3 缓冲端点。 */
+    @Test
+    fun localSourceUsesFullBufferedTrackWhileNetworkSourceUsesBufferedPosition() {
+        assertEquals(1f, playerBufferedProgressFraction(15_000L, 60_000L, "file:///video.mp4"), 0f)
+        assertEquals(
+            1f,
+            playerBufferedProgressFraction(15_000L, 60_000L, "content://media/video/1"),
+            0f,
+        )
+        assertEquals(
+            0.25f,
+            playerBufferedProgressFraction(15_000L, 60_000L, "https://example.com/video.mp4"),
+            0.0001f,
+        )
+        assertEquals(0.25f, playerBufferedProgressFraction(15_000L, 60_000L, null), 0.0001f)
+    }
+
     /** 同排布局中的预览使用 Slider 的局部范围，而非把整屏误当作轨道。 */
     @Test
     fun thumbnailPreviewUsesMeasuredInlineSliderBounds() {
