@@ -211,4 +211,78 @@ class SettingPageLayoutTest {
         compose.onNodeWithTag(testTag).performClick()
         compose.runOnIdle { assertEquals(true, enabledState.value) }
     }
+
+    /**
+     * 测试下载传输配置组件 DownloadTransferPreferenceSettings：
+     * 1. 验证默认分块下载开启时，分块开关与连接数选择器（默认双路）均可见展示
+     * 2. 验证点击单选菜单可将连接数切换为单路
+     * 3. 验证关闭分块下载时，连接数选择器隐藏，但已选连接数状态（单路）保持不变，不被初次加载或关闭覆盖
+     * 4. 验证再次打开分块下载时，连接数选择器重新恢复显示，且保持此前选定的单路状态
+     * 5. 验证在 320dp 窄屏与 1.3 倍字体下，两项设置项边界均在容器范围内
+     */
+    @Test
+    fun downloadTransferSettingsRetainsConnectionsWhenSegmentedDisabled() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val segmentedEnabled = mutableStateOf(true)
+        val connections = mutableStateOf(2)
+        val containerTag = "download_transfer_settings"
+
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 1.3f)
+            ) {
+                MaterialTheme {
+                    Column(Modifier.width(320.dp).testTag(containerTag)) {
+                        DownloadTransferPreferenceSettings(
+                            segmentedEnabled = segmentedEnabled,
+                            connections = connections,
+                        )
+                    }
+                }
+            }
+        }
+
+        val segmentedTitle = context.getString(R.string.setting_download_segmented_title)
+        val connectionsTitle = context.getString(R.string.setting_download_connections_title)
+        val singleLabel = context.getString(R.string.setting_download_connections_single)
+        val dualLabel = context.getString(R.string.setting_download_connections_dual)
+
+        // 1. 验证初始状态：分块下载与连接数选择项可见，且显示双路
+        compose.onNodeWithText(segmentedTitle).assertIsDisplayed()
+        compose.onNodeWithText(connectionsTitle).assertIsDisplayed()
+        compose.onNodeWithText(dualLabel).assertIsDisplayed()
+        assertEquals(true, segmentedEnabled.value)
+        assertEquals(2, connections.value)
+
+        // 2. 点击连接数项展开下拉菜单，切换为单路
+        compose.onNodeWithText(connectionsTitle).performClick()
+        compose.onNodeWithText(singleLabel).performClick()
+        compose.runOnIdle { assertEquals(1, connections.value) }
+        compose.onNodeWithText(singleLabel).assertIsDisplayed()
+
+        // 3. 点击关闭分块下载：连接数选择项应被隐藏，但连接数偏好保持为 1
+        compose.onNodeWithText(segmentedTitle).performClick()
+        compose.onNodeWithText(connectionsTitle).assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(false, segmentedEnabled.value)
+            assertEquals(1, connections.value)
+        }
+
+        // 4. 再次点击开启分块下载：连接数选择项重新可见，且仍为单路 (1)
+        compose.onNodeWithText(segmentedTitle).performClick()
+        compose.onNodeWithText(connectionsTitle).assertIsDisplayed()
+        compose.onNodeWithText(singleLabel).assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(true, segmentedEnabled.value)
+            assertEquals(1, connections.value)
+        }
+
+        // 5. 验证窄屏容器边界约束未溢出
+        val containerBounds = compose.onNodeWithTag(containerTag).getUnclippedBoundsInRoot()
+        val labelBounds = compose.onNodeWithText(connectionsTitle).getUnclippedBoundsInRoot()
+        assertTrue(
+            labelBounds.left >= containerBounds.left && labelBounds.right <= containerBounds.right
+        )
+    }
 }

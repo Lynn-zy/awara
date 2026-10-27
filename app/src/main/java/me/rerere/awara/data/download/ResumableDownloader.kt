@@ -20,18 +20,45 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 
-class ResumableDownloader(private val okHttpClient: OkHttpClient) {
+/** 统一传输入口；任务配置固定到本次执行，普通模式与分块模式共用发布链路。 */
+class ResumableDownloader(
+    private val okHttpClient: OkHttpClient,
+    private val transferSettings: DownloadTransferSettings = DownloadTransferSettings(),
+) {
     suspend fun download(
         url: String,
         targetFile: File,
         validator: String?,
         expectedTotalBytes: Long = -1L,
         onBindCall: ((Call) -> Unit)? = null,
+        onUnbindCall: ((Call) -> Unit)? = null,
         onValidatorResolved: (suspend (String?) -> Unit)? = null,
         onBytesDownloaded: (Long) -> Unit = {},
         onProgress: suspend (downloadedBytes: Long, totalBytes: Long) -> Unit,
     ) =
         withContext(Dispatchers.IO) {
+            // 用户关闭设置后仍先安全处理已有区间，不能把稀疏文件交给连续追加逻辑。
+            if (transferSettings.segmentedEnabled || DownloadRangeStore.hasState(targetFile)) {
+                val completed =
+                    SegmentedDownloader(okHttpClient)
+                        .download(
+                            url = url,
+                            targetFile = targetFile,
+                            validator = validator,
+                            expectedTotalBytes = expectedTotalBytes,
+                            connections =
+                                DownloadTransferSettings.normalizeConnections(
+                                    transferSettings.connections
+                                ),
+                            segmented = transferSettings.segmentedEnabled,
+                            onBindCall = onBindCall,
+                            onUnbindCall = onUnbindCall,
+                            onValidatorResolved = onValidatorResolved,
+                            onBytesDownloaded = onBytesDownloaded,
+                            onProgress = onProgress,
+                        )
+                if (completed) return@withContext
+            }
             var currentOffset = if (targetFile.exists()) targetFile.length() else 0L
             var retriedFromZero = false
 
@@ -294,6 +321,7 @@ class ResumableDownloader(private val okHttpClient: OkHttpClient) {
                         throw exception
                     } finally {
                         watcher.cancel()
+                        onUnbindCall?.invoke(call)
                     }
                 }
 

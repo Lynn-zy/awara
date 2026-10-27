@@ -28,6 +28,7 @@ import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
+import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.data.download.ResumableDownloader
 import me.rerere.awara.data.download.decideDownloadRetry
 import me.rerere.awara.data.download.shouldBlockAutomaticDownloadStart
@@ -48,7 +49,6 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
     private val appDatabase by inject<AppDatabase>()
     private val downloadStorage by inject<DownloadStorage>()
     private val downloadManager by inject<DownloadManager>()
-    private val resumableDownloader = ResumableDownloader(okHttpClient)
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
@@ -116,6 +116,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
 
         return withContext(Dispatchers.IO) {
             transferMutex.withLock {
+                downloadManager.beginActiveCalls(taskId)
                 try {
                     val task =
                         appDatabase.downloadTaskDao().getTask(taskId)
@@ -235,6 +236,9 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     )
 
                     val partFile = downloadManager.parts.file(taskId)
+                    // 配置只在任务启动/恢复时读取，设置变化不会中断正在执行的传输。
+                    val resumableDownloader =
+                        ResumableDownloader(okHttpClient, DownloadTransferSettings.read())
 
                     transferInProgress = true
                     resumableDownloader.download(
@@ -244,6 +248,9 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         expectedTotalBytes = currentTask.totalBytes,
                         onBytesDownloaded = { receivedNewData = true },
                         onBindCall = { call -> downloadManager.registerActiveCall(taskId, call) },
+                        onUnbindCall = { call ->
+                            downloadManager.unregisterActiveCall(taskId, call)
+                        },
                         onValidatorResolved = { validator ->
                             appDatabase
                                 .downloadTaskDao()
@@ -569,14 +576,14 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     }
                     Result.failure()
                 } finally {
-                    downloadManager.unregisterActiveCall(taskId)
+                    downloadManager.finishActiveCalls(taskId)
                     withContext(NonCancellable) {
                         appDatabase
                             .downloadTaskDao()
                             .updateSettledBytes(
                                 taskId,
                                 id.toString(),
-                                downloadManager.parts.file(taskId).length(),
+                                downloadManager.parts.completedBytes(taskId),
                             )
                         val latestTask = appDatabase.downloadTaskDao().getTask(taskId)
                         // 过期 Worker 不得清除新一代任务的排队或进度通知。

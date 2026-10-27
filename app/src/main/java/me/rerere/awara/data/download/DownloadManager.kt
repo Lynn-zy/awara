@@ -81,7 +81,7 @@ class DownloadManager(
     private val enqueueMutex = Mutex()
     private val commandLocks = ConcurrentHashMap<String, Mutex>()
     private val transferLocks = ConcurrentHashMap<String, Mutex>()
-    private val activeCalls = ConcurrentHashMap<String, Call>()
+    private val activeCalls = ConcurrentHashMap<String, DownloadCallGroup>()
     val launchPolicy = DownloadLaunchPolicy()
 
     fun isAutoResumeEnabled(): Boolean {
@@ -116,16 +116,26 @@ class DownloadManager(
 
     fun getTransferMutex(taskId: String): Mutex = transferLocks.computeIfAbsent(taskId) { Mutex() }
 
-    fun registerActiveCall(taskId: String, call: Call) {
-        activeCalls[taskId] = call
+    /** 在传输锁内开始新一代请求组，旧 Worker 完全退出后才能替换。 */
+    fun beginActiveCalls(taskId: String) {
+        activeCalls.put(taskId, DownloadCallGroup())?.cancel()
     }
 
-    fun unregisterActiveCall(taskId: String) {
-        activeCalls.remove(taskId)
+    fun registerActiveCall(taskId: String, call: Call) {
+        activeCalls.computeIfAbsent(taskId) { DownloadCallGroup() }.register(call)
+    }
+
+    fun unregisterActiveCall(taskId: String, call: Call) {
+        activeCalls[taskId]?.unregister(call)
+    }
+
+    /** 所有子传输已经退出后才释放请求组，避免取消状态被迟到请求绕过。 */
+    fun finishActiveCalls(taskId: String) {
+        activeCalls.remove(taskId)?.cancel()
     }
 
     fun cancelActiveCall(taskId: String) {
-        activeCalls.remove(taskId)?.cancel()
+        activeCalls.computeIfAbsent(taskId) { DownloadCallGroup() }.cancel()
     }
 
     suspend fun enqueue(video: Video, source: VideoFile, directoryUri: String) =
@@ -267,7 +277,7 @@ class DownloadManager(
                     transMutex.withLock {
                         database
                             .downloadTaskDao()
-                            .updateSettledBytes(taskId, task.workId, parts.file(taskId).length())
+                            .updateSettledBytes(taskId, task.workId, parts.completedBytes(taskId))
                     }
                 }
             }
@@ -344,7 +354,7 @@ class DownloadManager(
                                     workId = req.id.toString(),
                                     previousWorkId = task.workId,
                                     expectedStatus = task.status,
-                                    downloadedBytes = parts.file(taskId).length(),
+                                    downloadedBytes = parts.completedBytes(taskId),
                                     totalBytes = if (resourceChanged) -1L else task.totalBytes,
                                     validator = if (resourceChanged) null else task.validator,
                                     retryCount =
@@ -664,7 +674,7 @@ class DownloadManager(
                                 .updateSettledBytes(
                                     latest.taskId,
                                     latest.workId,
-                                    parts.file(latest.taskId).length(),
+                                    parts.completedBytes(latest.taskId),
                                 )
                         }
                     } finally {

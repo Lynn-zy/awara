@@ -12,12 +12,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.math.abs
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.ui.LocalRouterProvider
@@ -40,6 +48,73 @@ class DownloadTaskCardTest {
     @Test
     fun darkThemeKeepsCompleteTrackVisibleAcrossDownloadStates() {
         assertCompleteTrackVisible(darkTheme = true)
+    }
+
+    /** 恢复刷新链接时显示加载状态，但删除按钮仍应可操作。 */
+    @Test
+    fun resumingShowsLoadingAndKeepsCancelActionEnabled() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        var cancelCount = 0
+        var resumeCount = 0
+        var pauseCount = 0
+        val task = mutableStateOf(sampleTask(DownloadTaskStatus.PAUSED, 25L))
+        val resuming = mutableStateOf(true)
+        val operating = mutableStateOf(false)
+        compose.setContent {
+            val router = rememberNavController()
+            CompositionLocalProvider(LocalRouterProvider provides router) {
+                MaterialTheme {
+                    Box(Modifier.width(320.dp)) {
+                        DownloadTaskCard(
+                            task = task.value,
+                            isOperating = operating.value,
+                            isResuming = resuming.value,
+                            onPause = { pauseCount++ },
+                            onResume = { resumeCount++ },
+                            onCancel = { cancelCount++ },
+                            onRetryCleanup = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        val loadingLabel = context.getString(R.string.download_task_resuming)
+        val resumeLabel = context.getString(R.string.download_task_resume)
+        val cancelLabel = context.getString(R.string.download_task_cancel)
+        val pauseLabel = context.getString(R.string.download_task_pause)
+        for (status in
+            listOf(
+                DownloadTaskStatus.PAUSED,
+                DownloadTaskStatus.FAILED,
+                DownloadTaskStatus.QUEUED,
+                DownloadTaskStatus.RUNNING,
+            )) {
+            compose.runOnIdle { task.value = sampleTask(status, 25L) }
+            compose.onNodeWithText(loadingLabel).assertIsDisplayed().assertIsNotEnabled()
+            compose.onNodeWithText(resumeLabel).assertDoesNotExist()
+            compose
+                .onAllNodes(
+                    SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo),
+                    useUnmergedTree = true,
+                )
+                .assertCountEquals(2)
+            compose.onNodeWithText(cancelLabel).assertIsEnabled().performClick()
+        }
+        compose.runOnIdle {
+            assertEquals(4, cancelCount)
+            assertEquals(0, resumeCount)
+            resuming.value = false
+            task.value = sampleTask(DownloadTaskStatus.RUNNING, 30L)
+        }
+        compose.onNodeWithText(loadingLabel).assertDoesNotExist()
+        compose.onNodeWithText(pauseLabel).assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(1, pauseCount)
+            operating.value = true
+        }
+        compose.onNodeWithText(cancelLabel).assertIsNotEnabled()
+        compose.onNodeWithText(pauseLabel).assertIsNotEnabled()
     }
 
     /** 同时检查空进度、部分进度与完成端点，状态切换不应影响底轨长度。 */

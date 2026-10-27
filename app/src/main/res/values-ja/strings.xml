@@ -118,6 +118,12 @@
     <string name="setting_download">ダウンロード設定</string>
     <string name="setting_download_auto_resume_title">未完了のダウンロードを自動再開</string>
     <string name="setting_download_auto_resume_text">アプリ起動時に未完了のダウンロードを自動再開します</string>
+    <string name="setting_download_segmented_title">分割ダウンロード</string>
+    <string name="setting_download_segmented_text">次回タスク開始または再開時に適用されます</string>
+    <string name="setting_download_connections_title">ダウンロード接続数</string>
+    <string name="setting_download_connections_text">次回タスク開始または再開時に適用されます</string>
+    <string name="setting_download_connections_single">単一接続</string>
+    <string name="setting_download_connections_dual">2 接続</string>
     <string name="download_unfinished_dialog_title">未完了のダウンロード</string>
     <string name="download_unfinished_dialog_message">未完了のダウンロードがあります。続行しますか？</string>
     <string name="download_unfinished_dialog_resume">続行</string>
@@ -152,6 +158,7 @@
     <string name="download_task_unknown_progress">%1$s ダウンロード済み</string>
     <string name="download_task_pause">一時停止</string>
     <string name="download_task_resume">再開</string>
+    <string name="download_task_resuming">接続中</string>
     <string name="download_task_cancel">キャンセル</string>
     <string name="download_task_cancel_title">ダウンロードをキャンセル</string>
     <string name="download_task_cancel_message">「%1$s」のダウンロードをキャンセルしますか？一時ファイルは削除されます。</string>

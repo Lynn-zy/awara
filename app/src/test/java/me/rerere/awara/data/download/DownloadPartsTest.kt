@@ -12,6 +12,34 @@ import org.junit.rules.TemporaryFolder
 class DownloadPartsTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    /** 损坏日志不能让满长度临时文件伪装成已完成，取消须一并清理日志。 */
+    @Test
+    fun sparseOrCorruptedStateNeverUsesLogicalLengthAndCleanupRemovesState() {
+        val root = temporary.newFolder("ranges")
+        val parts = DownloadParts(root)
+        val taskId = UUID.randomUUID().toString()
+        val target = parts.file(taskId).apply { writeBytes(ByteArray(64)) }
+        DownloadRangeStore.sidecarFile(target).writeText("broken")
+        DownloadRangeStore.tempSidecarFile(target).writeText("interrupted")
+
+        assertEquals(0L, parts.completedBytes(taskId))
+        assertEquals(listOf(taskId), parts.taskIds())
+        parts.delete(taskId)
+        assertEquals(emptyList<String>(), parts.taskIds())
+        assertFalse(DownloadRangeStore.hasState(target))
+    }
+
+    /** 主数据已删除但仍有日志时，孤儿扫描仍应找到任务并安全清理。 */
+    @Test
+    fun stateOnlyTaskIsDiscoveredForOrphanCleanup() {
+        val parts = DownloadParts(temporary.newFolder("orphan"))
+        val taskId = UUID.randomUUID().toString()
+        DownloadRangeStore.sidecarFile(parts.file(taskId)).writeText("orphan")
+        assertEquals(listOf(taskId), parts.taskIds())
+        parts.delete(taskId)
+        assertTrue(parts.taskIds().isEmpty())
+    }
+
     @Test
     fun discardingOneTaskDoesNotRemoveAnotherTasksPartialFile() {
         val parts = DownloadParts(temporary.newFolder("parts"))

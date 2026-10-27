@@ -37,7 +37,8 @@ class ResumableDownloaderTest {
         server = MockWebServer()
         server.start()
         okHttpClient = OkHttpClient.Builder().build()
-        downloader = ResumableDownloader(okHttpClient)
+        downloader =
+            ResumableDownloader(okHttpClient, DownloadTransferSettings(segmentedEnabled = false))
     }
 
     @After
@@ -572,7 +573,11 @@ class ResumableDownloaderTest {
                     )
             )
             val progress = mutableListOf<Pair<Long, Long>>()
-            val newDownloader = ResumableDownloader(OkHttpClient.Builder().build())
+            val newDownloader =
+                ResumableDownloader(
+                    OkHttpClient.Builder().build(),
+                    DownloadTransferSettings(segmentedEnabled = false),
+                )
             newDownloader.download(
                 url = server.url("/download?filename=fixture.mp4&expires=new").toString(),
                 targetFile = file,

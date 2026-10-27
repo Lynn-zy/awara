@@ -260,6 +260,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                                 enabled =
                                     !vm.state.isBatchOperating &&
                                         vm.state.operatingIds.isEmpty() &&
+                                        vm.state.resumingIds.isEmpty() &&
                                         (pausableCount > 0 || resumableCount > 0),
                             )
                             DropdownMenuItem(
@@ -323,6 +324,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                         task = task,
                         isOperating =
                             vm.state.isBatchOperating || task.taskId in vm.state.operatingIds,
+                        isResuming = task.taskId in vm.state.resumingIds,
                         onPause = { vm.pause(task.taskId) },
                         onResume = { checkAndResume(task) },
                         onCancel = { taskToCancel = task },
@@ -338,6 +340,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
 internal fun DownloadTaskCard(
     task: DownloadTask,
     isOperating: Boolean,
+    isResuming: Boolean = false,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit,
@@ -532,10 +535,25 @@ internal fun DownloadTaskCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
-                    when (task.status) {
-                        DownloadTaskStatus.RUNNING,
-                        DownloadTaskStatus.RETRYING,
-                        DownloadTaskStatus.QUEUED -> {
+                    when {
+                        (isResuming || task.status == DownloadTaskStatus.QUEUED) &&
+                            task.status != DownloadTaskStatus.SAVING &&
+                            task.status != DownloadTaskStatus.CANCELLING -> {
+                            TextButton(
+                                onClick = {},
+                                enabled = false,
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.download_task_resuming))
+                            }
+                        }
+                        task.status == DownloadTaskStatus.RUNNING ||
+                            task.status == DownloadTaskStatus.RETRYING -> {
                             TextButton(
                                 onClick = onPause,
                                 enabled = !isOperating,
@@ -544,8 +562,8 @@ internal fun DownloadTaskCard(
                                 Text(stringResource(R.string.download_task_pause))
                             }
                         }
-                        DownloadTaskStatus.PAUSED,
-                        DownloadTaskStatus.FAILED -> {
+                        task.status == DownloadTaskStatus.PAUSED ||
+                            task.status == DownloadTaskStatus.FAILED -> {
                             TextButton(
                                 onClick = onResume,
                                 enabled = !isOperating,
@@ -554,7 +572,7 @@ internal fun DownloadTaskCard(
                                 Text(stringResource(R.string.download_task_resume))
                             }
                         }
-                        DownloadTaskStatus.SAVING -> {
+                        task.status == DownloadTaskStatus.SAVING -> {
                             TextButton(
                                 onClick = {},
                                 enabled = false,
@@ -568,7 +586,7 @@ internal fun DownloadTaskCard(
                                 Text(stringResource(R.string.download_task_saving))
                             }
                         }
-                        DownloadTaskStatus.CANCELLING -> {
+                        task.status == DownloadTaskStatus.CANCELLING -> {
                             if (!task.error.isNullOrBlank()) {
                                 TextButton(
                                     onClick = onRetryCleanup,

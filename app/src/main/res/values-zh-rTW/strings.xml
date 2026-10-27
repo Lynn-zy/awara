@@ -118,6 +118,12 @@
     <string name="setting_download">下載設定</string>
     <string name="setting_download_auto_resume_title">自動開始未完成的下載任務</string>
     <string name="setting_download_auto_resume_text">應用程式啟動時自動繼續未完成的下載任務</string>
+    <string name="setting_download_segmented_title">分塊下載</string>
+    <string name="setting_download_segmented_text">在任務下次啟動或恢復時生效</string>
+    <string name="setting_download_connections_title">下載連線數</string>
+    <string name="setting_download_connections_text">在任務下次啟動或恢復時生效</string>
+    <string name="setting_download_connections_single">單路</string>
+    <string name="setting_download_connections_dual">雙路</string>
     <string name="download_unfinished_dialog_title">未完成的下載任務</string>
     <string name="download_unfinished_dialog_message">偵測到存在未完成的下載任務，是否繼續下載？</string>
     <string name="download_unfinished_dialog_resume">繼續下載</string>
@@ -152,6 +158,7 @@
     <string name="download_task_unknown_progress">已下載 %1$s</string>
     <string name="download_task_pause">暫停</string>
     <string name="download_task_resume">繼續</string>
+    <string name="download_task_resuming">連線中</string>
     <string name="download_task_cancel">取消</string>
     <string name="download_task_cancel_title">取消下載</string>
     <string name="download_task_cancel_message">確定要取消下載「%1$s」嗎？已下載的暫存檔案將被刪除。</string>
