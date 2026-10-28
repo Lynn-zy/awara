@@ -28,7 +28,6 @@ import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.LinearScale
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -132,48 +131,25 @@ internal fun PlayerMinimalProgressSetting(
 }
 
 /**
- * 分块下载与并发连接数设置项组合。
+ * 多 CDN 下载设置项。
  *
- * 遵循原生现有字体密度、图标尺寸与单选菜单布局。 关闭分块下载时走普通顺序下载并隐藏连接数选择，但保留现有偏好，不因初次加载或关闭覆盖已选值； 配置在任务下次启动或恢复时生效。
+ * 遵循原生现有字体密度、图标尺寸与设置项规范。 配置在任务下次启动或恢复时生效。
  *
- * @param segmentedEnabled 分块下载开关状态
- * @param connections 下载并发连接数状态（单路 1 / 双路 2）
+ * @param enabled 多 CDN 实验性下载开关状态
  * @param modifier 外部修饰符
  */
 @Composable
 internal fun DownloadTransferPreferenceSettings(
-    segmentedEnabled: MutableState<Boolean>,
-    connections: MutableState<Int>,
+    enabled: MutableState<Boolean>,
     modifier: Modifier = Modifier,
 ) {
-    // 分块下载开关设置项
     SettingBooleanItem(
         modifier = modifier,
-        state = segmentedEnabled,
-        title = { Text(stringResource(R.string.setting_download_segmented_title)) },
-        text = { Text(stringResource(R.string.setting_download_segmented_text)) },
-        icon = { Icon(Icons.Outlined.Layers, null) },
+        state = enabled,
+        title = { Text(stringResource(R.string.setting_download_multi_cdn_title)) },
+        text = { Text(stringResource(R.string.setting_download_multi_cdn_text)) },
+        icon = { Icon(Icons.Outlined.AltRoute, null) },
     )
-
-    // 仅当分块下载开启时，展示下载连接数单选下拉菜单（单路 / 双路）；关闭时隐藏但保留偏好
-    if (segmentedEnabled.value) {
-        SettingPickerItem(
-            state = connections,
-            items = DownloadTransferSettings.SUPPORTED_CONNECTIONS,
-            itemLabel = { count ->
-                Text(
-                    when (count) {
-                        1 -> stringResource(R.string.setting_download_connections_single)
-                        2 -> stringResource(R.string.setting_download_connections_dual)
-                        else -> count.toString()
-                    }
-                )
-            },
-            title = { Text(stringResource(R.string.setting_download_connections_title)) },
-            text = { Text(stringResource(R.string.setting_download_connections_text)) },
-            icon = { Icon(Icons.Outlined.AltRoute, null) },
-        )
-    }
 }
 
 @Composable
@@ -609,21 +585,13 @@ fun SettingPage() {
                         icon = { Icon(Icons.Outlined.Replay, null) },
                     )
 
-                    // 分块下载与连接数设置：关闭时走普通顺序下载，修改在下次启动或恢复时生效
-                    val segmentedEnabled =
+                    // 多 CDN 下载设置：下次启动或恢复时生效，默认关闭
+                    val multiCdnEnabled =
                         rememberBooleanPreference(
-                            key = DownloadTransferSettings.KEY_SEGMENTED_ENABLED,
-                            default = DownloadTransferSettings.DEFAULT_SEGMENTED_ENABLED,
+                            key = DownloadTransferSettings.KEY_MULTI_CDN_ENABLED,
+                            default = DownloadTransferSettings.DEFAULT_MULTI_CDN_ENABLED,
                         )
-                    val connections =
-                        rememberIntPreference(
-                            key = DownloadTransferSettings.KEY_CONNECTIONS,
-                            default = DownloadTransferSettings.DEFAULT_CONNECTIONS,
-                        )
-                    DownloadTransferPreferenceSettings(
-                        segmentedEnabled = segmentedEnabled,
-                        connections = connections,
-                    )
+                    DownloadTransferPreferenceSettings(enabled = multiCdnEnabled)
 
                     SettingLinkItem(
                         title = { Text(stringResource(R.string.download_directory_title)) },

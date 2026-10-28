@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import me.rerere.awara.R
+import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.ui.component.player.SeekPreviewPosition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -214,17 +215,16 @@ class SettingPageLayoutTest {
 
     /**
      * 测试下载传输配置组件 DownloadTransferPreferenceSettings：
-     * 1. 验证默认分块下载开启时，分块开关与连接数选择器（默认双路）均可见展示
-     * 2. 验证点击单选菜单可将连接数切换为单路
-     * 3. 验证关闭分块下载时，连接数选择器隐藏，但已选连接数状态（单路）保持不变，不被初次加载或关闭覆盖
-     * 4. 验证再次打开分块下载时，连接数选择器重新恢复显示，且保持此前选定的单路状态
-     * 5. 验证在 320dp 窄屏与 1.3 倍字体下，两项设置项边界均在容器范围内
+     * 1. 验证默认多 CDN 开关状态为关闭 (false)
+     * 2. 验证多 CDN 开关标题与说明正常展示
+     * 3. 验证旧的两个设置（分块下载与下载连接数）标签不再显示
+     * 4. 验证点击整行可操作切换状态（false -> true -> false），开关状态保持与响应
+     * 5. 验证在 320dp 窄屏与 1.3 倍字体下，多 CDN 设置项边界在容器范围内（无溢出）
      */
     @Test
-    fun downloadTransferSettingsRetainsConnectionsWhenSegmentedDisabled() {
+    fun downloadTransferSettingsMultiCdnToggleAndRetainState() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val segmentedEnabled = mutableStateOf(true)
-        val connections = mutableStateOf(2)
+        val multiCdnEnabled = mutableStateOf(DownloadTransferSettings.DEFAULT_MULTI_CDN_ENABLED)
         val containerTag = "download_transfer_settings"
 
         compose.setContent {
@@ -234,53 +234,37 @@ class SettingPageLayoutTest {
             ) {
                 MaterialTheme {
                     Column(Modifier.width(320.dp).testTag(containerTag)) {
-                        DownloadTransferPreferenceSettings(
-                            segmentedEnabled = segmentedEnabled,
-                            connections = connections,
-                        )
+                        DownloadTransferPreferenceSettings(enabled = multiCdnEnabled)
                     }
                 }
             }
         }
 
-        val segmentedTitle = context.getString(R.string.setting_download_segmented_title)
-        val connectionsTitle = context.getString(R.string.setting_download_connections_title)
-        val singleLabel = context.getString(R.string.setting_download_connections_single)
-        val dualLabel = context.getString(R.string.setting_download_connections_dual)
+        val multiCdnTitle = context.getString(R.string.setting_download_multi_cdn_title)
+        val multiCdnText = context.getString(R.string.setting_download_multi_cdn_text)
 
-        // 1. 验证初始状态：分块下载与连接数选择项可见，且显示双路
-        compose.onNodeWithText(segmentedTitle).assertIsDisplayed()
-        compose.onNodeWithText(connectionsTitle).assertIsDisplayed()
-        compose.onNodeWithText(dualLabel).assertIsDisplayed()
-        assertEquals(true, segmentedEnabled.value)
-        assertEquals(2, connections.value)
+        // 1. 验证初始状态：默认关闭 (false)，多 CDN 开关与说明文本可见展示
+        assertEquals(false, multiCdnEnabled.value)
+        compose.onNodeWithText(multiCdnTitle).assertIsDisplayed()
+        compose.onNodeWithText(multiCdnText).assertIsDisplayed()
 
-        // 2. 点击连接数项展开下拉菜单，切换为单路
-        compose.onNodeWithText(connectionsTitle).performClick()
-        compose.onNodeWithText(singleLabel).performClick()
-        compose.runOnIdle { assertEquals(1, connections.value) }
-        compose.onNodeWithText(singleLabel).assertIsDisplayed()
+        // 2. 验证旧的两个设置（分块下载与下载连接数相关标签）不再显示
+        compose.onNodeWithText("分块下载").assertDoesNotExist()
+        compose.onNodeWithText("下载连接数").assertDoesNotExist()
+        compose.onNodeWithText("Segmented download").assertDoesNotExist()
+        compose.onNodeWithText("Download connections").assertDoesNotExist()
 
-        // 3. 点击关闭分块下载：连接数选择项应被隐藏，但连接数偏好保持为 1
-        compose.onNodeWithText(segmentedTitle).performClick()
-        compose.onNodeWithText(connectionsTitle).assertDoesNotExist()
-        compose.runOnIdle {
-            assertEquals(false, segmentedEnabled.value)
-            assertEquals(1, connections.value)
-        }
+        // 3. 首次点击整行切换：状态从 false 切换为 true，验证状态响应与保持
+        compose.onNodeWithText(multiCdnTitle).performClick()
+        compose.runOnIdle { assertEquals(true, multiCdnEnabled.value) }
 
-        // 4. 再次点击开启分块下载：连接数选择项重新可见，且仍为单路 (1)
-        compose.onNodeWithText(segmentedTitle).performClick()
-        compose.onNodeWithText(connectionsTitle).assertIsDisplayed()
-        compose.onNodeWithText(singleLabel).assertIsDisplayed()
-        compose.runOnIdle {
-            assertEquals(true, segmentedEnabled.value)
-            assertEquals(1, connections.value)
-        }
+        // 4. 再次点击整行切换：状态从 true 恢复为 false
+        compose.onNodeWithText(multiCdnTitle).performClick()
+        compose.runOnIdle { assertEquals(false, multiCdnEnabled.value) }
 
-        // 5. 验证窄屏容器边界约束未溢出
+        // 5. 验证在 320dp 窄屏与 1.3 倍字体下，设置项边界约束未溢出
         val containerBounds = compose.onNodeWithTag(containerTag).getUnclippedBoundsInRoot()
-        val labelBounds = compose.onNodeWithText(connectionsTitle).getUnclippedBoundsInRoot()
+        val labelBounds = compose.onNodeWithText(multiCdnTitle).getUnclippedBoundsInRoot()
         assertTrue(
             labelBounds.left >= containerBounds.left && labelBounds.right <= containerBounds.right
         )

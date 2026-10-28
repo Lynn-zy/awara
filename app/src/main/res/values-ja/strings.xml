@@ -118,12 +118,8 @@
     <string name="setting_download">ダウンロード設定</string>
     <string name="setting_download_auto_resume_title">未完了のダウンロードを自動再開</string>
     <string name="setting_download_auto_resume_text">アプリ起動時に未完了のダウンロードを自動再開します</string>
-    <string name="setting_download_segmented_title">分割ダウンロード</string>
-    <string name="setting_download_segmented_text">次回タスク開始または再開時に適用されます</string>
-    <string name="setting_download_connections_title">ダウンロード接続数</string>
-    <string name="setting_download_connections_text">次回タスク開始または再開時に適用されます</string>
-    <string name="setting_download_connections_single">単一接続</string>
-    <string name="setting_download_connections_dual">2 接続</string>
+    <string name="setting_download_multi_cdn_title">マルチ CDN ダウンロード（実験的）</string>
+    <string name="setting_download_multi_cdn_text">利用可能なノードを検証して並行ダウンロードします。無効時は他のノードを探索しません。次回タスク開始または再開時に適用されます</string>
     <string name="download_unfinished_dialog_title">未完了のダウンロード</string>
     <string name="download_unfinished_dialog_message">未完了のダウンロードがあります。続行しますか？</string>
     <string name="download_unfinished_dialog_resume">続行</string>

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -25,6 +26,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
+import me.rerere.awara.data.download.DownloadCdnDirectory
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
@@ -49,6 +51,9 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
     private val appDatabase by inject<AppDatabase>()
     private val downloadStorage by inject<DownloadStorage>()
     private val downloadManager by inject<DownloadManager>()
+    private val cdnDirectory by lazy {
+        DownloadCdnDirectory(okHttpClient, File(appContext.cacheDir, "download_cdn_directory.json"))
+    }
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
@@ -237,8 +242,27 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
 
                     val partFile = downloadManager.parts.file(taskId)
                     // 配置只在任务启动/恢复时读取，设置变化不会中断正在执行的传输。
+                    val transferSettings = DownloadTransferSettings.read()
                     val resumableDownloader =
-                        ResumableDownloader(okHttpClient, DownloadTransferSettings.read())
+                        ResumableDownloader(
+                            okHttpClient,
+                            transferSettings,
+                            cdnDirectory =
+                                if (transferSettings.multiCdnEnabled) cdnDirectory else null,
+                            refreshLink = {
+                                downloadManager.refreshActiveSource(taskId, id.toString())
+                            },
+                            networkIdentity = {
+                                runCatching {
+                                        (appContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+                                                as ConnectivityManager)
+                                            .activeNetwork
+                                            ?.toString()
+                                            .orEmpty()
+                                    }
+                                    .getOrDefault("")
+                            },
+                        )
 
                     transferInProgress = true
                     resumableDownloader.download(

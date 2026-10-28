@@ -15,10 +15,23 @@ import kotlinx.serialization.json.Json
 
 /** 已刷盘并提交的闭区间；哈希用于重建任务时识别截短或被改写的临时文件。 */
 @Serializable
-data class RangeEntry(val start: Long, val end: Long, val sha256: String) {
+data class RangeEntry(
+    val start: Long,
+    val end: Long,
+    val sha256: String,
+    val sourceHost: String? = null,
+) {
     val length: Long
         get() = end - start + 1L
 }
+
+/** 可信镜像的实验性身份记录：抽样摘要不是完整文件摘要，校验器始终按节点分别保存。 */
+@Serializable
+data class DownloadSourceIdentity(
+    val primaryHost: String,
+    val sampleFingerprint: String,
+    val validators: Map<String, String>,
+)
 
 /** 每个任务只有一份区间日志，不保存签名 URL，只保存不含临时凭据的资源键。 */
 @Serializable
@@ -27,6 +40,7 @@ data class DownloadRangeState(
     val total: Long,
     val strongETag: String,
     val ranges: List<RangeEntry>,
+    val sourceIdentity: DownloadSourceIdentity? = null,
 ) {
     val completedBytes: Long
         get() = ranges.sumOf { it.length }

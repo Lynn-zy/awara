@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.util.await
 import okhttp3.Call
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -43,9 +44,11 @@ import okhttp3.Request
  * @param okHttpClient 共享的 OkHttpClient 实例
  * @param blockSizeBytes 每个分块的标准字节大小（默认 16MiB，测试时可注入较小尺寸）
  */
-class SegmentedDownloader(
+class SegmentedDownloader
+internal constructor(
     private val okHttpClient: OkHttpClient,
     private val blockSizeBytes: Long = 16L * 1024 * 1024,
+    private val sourcePool: DownloadSourcePool? = null,
 ) {
     // 专用 OkHttpClient，确保协议限定为 HTTP/1.1 并共享底层连接池
     private val dedicatedClient: OkHttpClient by lazy {
@@ -120,12 +123,12 @@ class SegmentedDownloader(
                     ?: validator?.trim()?.takeIf { DownloadRangeStore.isStrongETag(it) }
 
             val probeResult =
-                probeRange(
-                    client = dedicatedClient,
-                    url = url,
-                    probeValidator = probeValidator,
-                    onBindCall = onBindCall,
-                    onUnbindCall = onUnbindCall,
+                probeWithRecovery(
+                    url,
+                    probeValidator,
+                    onBindCall,
+                    onUnbindCall,
+                    existingState?.sourceIdentity?.primaryHost ?: url.toHttpUrl().host,
                 )
 
             when (probeResult) {
@@ -149,6 +152,42 @@ class SegmentedDownloader(
                 is ProbeResult.Success -> {
                     val total = probeResult.total
                     val resolvedStrongETag = probeResult.strongETag
+                    val activeUrl = sourcePool?.primaryUrl?.toString() ?: url
+                    sourcePool?.bind(total, resolvedStrongETag)
+
+                    // 跨主机恢复不能把旧 ETag 当全局摘要；有旧抽样身份时只核对当前主机，
+                    // 即使实验开关已关闭，也不会探测其他 CDN 或刷新目录。
+                    val previousIdentity = existingState?.sourceIdentity
+                    if (
+                        previousIdentity != null &&
+                            previousIdentity.primaryHost != activeUrl.toHttpUrl().host
+                    ) {
+                        val verifier =
+                            sourcePool
+                                ?: DownloadSourcePool(
+                                        activeUrl,
+                                        dedicatedClient,
+                                        DownloadCdnDirectory(dedicatedClient),
+                                        onBind = onBindCall,
+                                        onUnbind = onUnbindCall,
+                                    )
+                                    .also { it.bind(total, resolvedStrongETag) }
+                        if (
+                            existingState?.total == total &&
+                                verifier.matchesFingerprint(previousIdentity.sampleFingerprint)
+                        ) {
+                            existingState =
+                                existingState?.copy(
+                                    strongETag = resolvedStrongETag,
+                                    sourceIdentity = verifier.snapshot(),
+                                )
+                            existingState?.let { DownloadRangeStore.writeState(targetFile, it) }
+                        } else {
+                            resetTargetFile(targetFile)
+                            DownloadRangeStore.delete(targetFile)
+                            existingState = null
+                        }
+                    }
 
                     // 校验校验器变更：若已有侧车与服务端返回的强 ETag 不匹配，绝不能混合旧块
                     if (existingState != null) {
@@ -254,66 +293,159 @@ class SegmentedDownloader(
                         )
                         .use { channel ->
                             coroutineScope {
-                                val workers =
-                                    (0 until workerCount).map {
-                                        launch {
-                                            while (isActive) {
-                                                val task = queue.poll() ?: break
-                                                val (chunkStart, chunkEnd) = task
-                                                downloadChunk(
-                                                    client = dedicatedClient,
-                                                    url = url,
-                                                    targetFile = targetFile,
-                                                    channel = channel,
-                                                    strongETag = resolvedStrongETag,
-                                                    total = total,
-                                                    chunkStart = chunkStart,
-                                                    chunkEnd = chunkEnd,
-                                                    onBindCall = onBindCall,
-                                                    onUnbindCall = onUnbindCall,
-                                                    onBytesDownloaded = onBytesDownloaded,
-                                                    onProgressUpdate = { newlyWritten ->
-                                                        progressMutex.withLock {
-                                                            val current =
-                                                                downloadedAtomic.addAndGet(
-                                                                    newlyWritten
-                                                                )
-                                                            val now = System.currentTimeMillis()
-                                                            if (now - lastProgressTime >= 500L) {
-                                                                onProgress(current, total)
-                                                                lastProgressTime = now
-                                                            }
-                                                        }
-                                                    },
-                                                    onChunkCompleted = { completedEnd, sha256Hex ->
-                                                        stateMutex.withLock {
-                                                            val curState =
-                                                                state
-                                                                    ?: throw IOException("分块状态未初始化")
-                                                            val updatedRanges =
-                                                                (curState.ranges +
-                                                                        RangeEntry(
-                                                                            chunkStart,
-                                                                            completedEnd,
-                                                                            sha256Hex,
-                                                                        ))
-                                                                    .sortedBy { it.start }
-                                                            val newState =
-                                                                curState.copy(
-                                                                    ranges = updatedRanges
-                                                                )
-                                                            DownloadRangeStore.writeState(
-                                                                targetFile,
-                                                                newState,
+                                val discovery = sourcePool?.startDiscovery(this)
+                                try {
+                                    val workers =
+                                        (0 until workerCount).map {
+                                            launch {
+                                                while (isActive) {
+                                                    val task = queue.poll() ?: break
+                                                    val (chunkStart, chunkEnd) = task
+                                                    var attempts = 0
+                                                    var completed = false
+                                                    while (!completed) {
+                                                        val selected = sourcePool?.acquire()
+                                                        val started = System.nanoTime()
+                                                        var reported = 0L
+                                                        try {
+                                                            downloadChunk(
+                                                                client = dedicatedClient,
+                                                                url =
+                                                                    selected?.url?.toString()
+                                                                        ?: activeUrl,
+                                                                targetFile = targetFile,
+                                                                channel = channel,
+                                                                strongETag =
+                                                                    selected?.validator
+                                                                        ?: resolvedStrongETag,
+                                                                total = total,
+                                                                chunkStart = chunkStart,
+                                                                chunkEnd = chunkEnd,
+                                                                onBindCall = onBindCall,
+                                                                onUnbindCall = onUnbindCall,
+                                                                onBytesDownloaded =
+                                                                    onBytesDownloaded,
+                                                                onProgressUpdate = { newlyWritten ->
+                                                                    progressMutex.withLock {
+                                                                        reported += newlyWritten
+                                                                        val current =
+                                                                            downloadedAtomic
+                                                                                .addAndGet(
+                                                                                    newlyWritten
+                                                                                )
+                                                                        val now =
+                                                                            System
+                                                                                .currentTimeMillis()
+                                                                        if (
+                                                                            now -
+                                                                                lastProgressTime >=
+                                                                                500L
+                                                                        ) {
+                                                                            onProgress(
+                                                                                current,
+                                                                                total,
+                                                                            )
+                                                                            lastProgressTime = now
+                                                                        }
+                                                                    }
+                                                                },
+                                                                onChunkCompleted = {
+                                                                    completedEnd,
+                                                                    sha256Hex ->
+                                                                    stateMutex.withLock {
+                                                                        val curState =
+                                                                            state
+                                                                                ?: throw IOException(
+                                                                                    "分块状态未初始化"
+                                                                                )
+                                                                        val updatedRanges =
+                                                                            (curState.ranges +
+                                                                                    RangeEntry(
+                                                                                        chunkStart,
+                                                                                        completedEnd,
+                                                                                        sha256Hex,
+                                                                                        selected
+                                                                                            ?.host
+                                                                                            ?: activeUrl
+                                                                                                .toHttpUrl()
+                                                                                                .host,
+                                                                                    ))
+                                                                                .sortedBy {
+                                                                                    it.start
+                                                                                }
+                                                                        val newState =
+                                                                            curState.copy(
+                                                                                ranges =
+                                                                                    updatedRanges,
+                                                                                sourceIdentity =
+                                                                                    sourcePool
+                                                                                        ?.snapshot()
+                                                                                        ?: curState
+                                                                                            .sourceIdentity,
+                                                                            )
+                                                                        DownloadRangeStore
+                                                                            .writeState(
+                                                                                targetFile,
+                                                                                newState,
+                                                                            )
+                                                                        state = newState
+                                                                    }
+                                                                },
                                                             )
-                                                            state = newState
+                                                            sourcePool?.release(
+                                                                selected!!,
+                                                                chunkEnd - chunkStart + 1,
+                                                                System.nanoTime() - started,
+                                                            )
+                                                            completed = true
+                                                        } catch (exception: IOException) {
+                                                            currentCoroutineContext().ensureActive()
+                                                            if (selected == null) throw exception
+                                                            sourcePool.release(
+                                                                selected,
+                                                                0,
+                                                                System.nanoTime() - started,
+                                                            )
+                                                            if (
+                                                                exception !is
+                                                                    DownloadCdnHttpException &&
+                                                                    exception !is
+                                                                        DownloadCdnIntegrityException &&
+                                                                    exception !is
+                                                                        DownloadCdnTransportException
+                                                            )
+                                                                throw exception
+                                                            attempts++
+                                                            if (
+                                                                attempts >=
+                                                                    DownloadCdnPolicy
+                                                                        .MAX_BLOCK_ATTEMPTS
+                                                            )
+                                                                throw exception
+                                                            // 失败区块未提交的数据不能重复计数，更不能把磁盘写入失败误认为节点故障。
+                                                            progressMutex.withLock {
+                                                                val actual =
+                                                                    downloadedAtomic.addAndGet(
+                                                                        -reported
+                                                                    )
+                                                                onProgress(actual, total)
+                                                            }
+                                                            if (
+                                                                !sourcePool.recover(
+                                                                    selected,
+                                                                    exception,
+                                                                )
+                                                            )
+                                                                throw exception
                                                         }
-                                                    },
-                                                )
+                                                    }
+                                                }
                                             }
                                         }
-                                    }
-                                workers.forEach { it.join() }
+                                    workers.forEach { it.join() }
+                                } finally {
+                                    discovery?.cancel()
+                                }
                             }
                         }
 
@@ -340,6 +472,31 @@ class SegmentedDownloader(
             }
         }
 
+    /** 主地址过期或不可用时只作有界换链/换源，不在所有节点重复同一故障。 */
+    private suspend fun probeWithRecovery(
+        originalUrl: String,
+        validator: String?,
+        bind: ((Call) -> Unit)?,
+        unbind: ((Call) -> Unit)?,
+        validatorHost: String,
+    ): ProbeResult {
+        while (true) {
+            try {
+                val currentUrl = sourcePool?.primaryUrl?.toString() ?: originalUrl
+                return probeRange(
+                    dedicatedClient,
+                    currentUrl,
+                    validator.takeIf { currentUrl.toHttpUrl().host == validatorHost },
+                    bind,
+                    unbind,
+                )
+            } catch (exception: IOException) {
+                currentCoroutineContext().ensureActive()
+                if (sourcePool == null || !sourcePool.recoverPrimary(exception)) throw exception
+            }
+        }
+    }
+
     /** 发起 Range bytes=0-0 探测 */
     private suspend fun probeRange(
         client: OkHttpClient,
@@ -347,86 +504,93 @@ class SegmentedDownloader(
         probeValidator: String?,
         onBindCall: ((Call) -> Unit)?,
         onUnbindCall: ((Call) -> Unit)?,
-    ): ProbeResult = coroutineScope {
-        val reqBuilder =
-            Request.Builder()
-                .url(url)
-                .header("Accept-Encoding", "identity")
-                .header("Referer", "https://www.iwara.tv/")
-                .header("Accept", "*/*")
-                .header("Range", "bytes=0-0")
+    ): ProbeResult =
+        DownloadCdnBudget.withPermit {
+            coroutineScope {
+                val reqBuilder =
+                    Request.Builder()
+                        .url(url)
+                        .header("Accept-Encoding", "identity")
+                        .header("Referer", "https://www.iwara.tv/")
+                        .header("Accept", "*/*")
+                        .header("Range", "bytes=0-0")
 
-        probeValidator?.let { reqBuilder.header("If-Range", it) }
+                probeValidator?.let { reqBuilder.header("If-Range", it) }
 
-        val call = client.newCall(reqBuilder.build())
-        onBindCall?.invoke(call)
+                val call = client.newCall(reqBuilder.build())
+                onBindCall?.invoke(call)
 
-        val watcher =
-            launch(start = CoroutineStart.UNDISPATCHED) {
+                val watcher =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            awaitCancellation()
+                        } finally {
+                            call.cancel()
+                        }
+                    }
+
                 try {
-                    awaitCancellation()
+                    call.await().use { response ->
+                        val code = response.code
+                        if (code != 200 && code != 206) {
+                            throw DownloadCdnHttpException(code)
+                        }
+
+                        val encoding =
+                            response.header("Content-Encoding").orEmpty().trim().lowercase()
+                        if (encoding.isNotEmpty() && encoding != "identity") {
+                            throw IOException("探测收到不支持的内容编码: $encoding")
+                        }
+
+                        val contentType = response.header("Content-Type").orEmpty().lowercase()
+                        if (
+                            contentType.contains("text/html") ||
+                                contentType.contains("application/json")
+                        ) {
+                            throw IOException("探测收到非预期的内容类型拦截页: $contentType")
+                        }
+
+                        if (code == 200) {
+                            return@use ProbeResult.NotSupported
+                        }
+
+                        val contentRange = response.header("Content-Range").orEmpty()
+                        val parsed =
+                            parseContentRange(contentRange)
+                                ?: throw IOException("探测收到无效的 Content-Range: $contentRange")
+                        val (start, end, total) = parsed
+                        if (start != 0L || end != 0L || (total != null && total <= 0L)) {
+                            throw IOException("探测响应范围不匹配")
+                        }
+                        val body = response.body ?: throw IOException("探测响应体为空")
+                        if (body.contentLength() != -1L && body.contentLength() != 1L) {
+                            throw IOException("探测响应长度不匹配")
+                        }
+                        // 完整消费探测响应才能复用 HTTP/1.1 连接，并防止空体被当作有效资源。
+                        val input = body.byteStream()
+                        if (input.read() == -1 || input.read() != -1) {
+                            throw IOException("探测响应正文长度不匹配")
+                        }
+                        if (total == null) {
+                            return@use ProbeResult.UnsupportedRange(total)
+                        }
+
+                        val etag = response.header("ETag")?.trim()
+                        if (!DownloadRangeStore.isStrongETag(etag)) {
+                            return@use ProbeResult.NoStrongETag(total)
+                        }
+
+                        ProbeResult.Success(total = total, strongETag = etag!!)
+                    }
+                } catch (exception: IOException) {
+                    currentCoroutineContext().ensureActive()
+                    throw exception
                 } finally {
-                    call.cancel()
+                    watcher.cancel()
+                    onUnbindCall?.invoke(call)
                 }
             }
-
-        try {
-            call.await().use { response ->
-                val code = response.code
-                if (code != 200 && code != 206) {
-                    throw IOException("探测 Range 失败，HTTP 响应码异常: $code")
-                }
-
-                val encoding = response.header("Content-Encoding").orEmpty().trim().lowercase()
-                if (encoding.isNotEmpty() && encoding != "identity") {
-                    throw IOException("探测收到不支持的内容编码: $encoding")
-                }
-
-                val contentType = response.header("Content-Type").orEmpty().lowercase()
-                if (contentType.contains("text/html") || contentType.contains("application/json")) {
-                    throw IOException("探测收到非预期的内容类型拦截页: $contentType")
-                }
-
-                if (code == 200) {
-                    return@use ProbeResult.NotSupported
-                }
-
-                val contentRange = response.header("Content-Range").orEmpty()
-                val parsed =
-                    parseContentRange(contentRange)
-                        ?: throw IOException("探测收到无效的 Content-Range: $contentRange")
-                val (start, end, total) = parsed
-                if (start != 0L || end != 0L || (total != null && total <= 0L)) {
-                    throw IOException("探测响应范围不匹配")
-                }
-                val body = response.body ?: throw IOException("探测响应体为空")
-                if (body.contentLength() != -1L && body.contentLength() != 1L) {
-                    throw IOException("探测响应长度不匹配")
-                }
-                // 完整消费探测响应才能复用 HTTP/1.1 连接，并防止空体被当作有效资源。
-                val input = body.byteStream()
-                if (input.read() == -1 || input.read() != -1) {
-                    throw IOException("探测响应正文长度不匹配")
-                }
-                if (total == null) {
-                    return@use ProbeResult.UnsupportedRange(total)
-                }
-
-                val etag = response.header("ETag")?.trim()
-                if (!DownloadRangeStore.isStrongETag(etag)) {
-                    return@use ProbeResult.NoStrongETag(total)
-                }
-
-                ProbeResult.Success(total = total, strongETag = etag!!)
-            }
-        } catch (exception: IOException) {
-            currentCoroutineContext().ensureActive()
-            throw exception
-        } finally {
-            watcher.cancel()
-            onUnbindCall?.invoke(call)
         }
-    }
 
     /** 下载单个具体区间分块并写入目标文件 */
     private suspend fun downloadChunk(
@@ -443,159 +607,190 @@ class SegmentedDownloader(
         onBytesDownloaded: (Long) -> Unit,
         onProgressUpdate: suspend (Long) -> Unit,
         onChunkCompleted: suspend (Long, String) -> Unit,
-    ) = coroutineScope {
-        val req =
-            Request.Builder()
-                .url(url)
-                .header("Accept-Encoding", "identity")
-                .header("Referer", "https://www.iwara.tv/")
-                .header("Accept", "*/*")
-                .header("Range", "bytes=$chunkStart-$chunkEnd")
-                .header("If-Range", strongETag)
-                .build()
+    ) =
+        DownloadCdnBudget.withPermit {
+            coroutineScope {
+                val req =
+                    Request.Builder()
+                        .url(url)
+                        .header("Accept-Encoding", "identity")
+                        .header("Referer", "https://www.iwara.tv/")
+                        .header("Accept", "*/*")
+                        .header("Range", "bytes=$chunkStart-$chunkEnd")
+                        .header("If-Range", strongETag)
+                        .build()
 
-        val call = client.newCall(req)
-        onBindCall?.invoke(call)
+                val call = client.newCall(req)
+                onBindCall?.invoke(call)
 
-        val expectedBytes = chunkEnd - chunkStart + 1L
-        var chunkWritten = 0L
-        var streamVerified = false
-        var committed = false
+                val expectedBytes = chunkEnd - chunkStart + 1L
+                var chunkWritten = 0L
+                var streamVerified = false
+                var committed = false
+                var readingNetwork = false
 
-        val watcher =
-            launch(start = CoroutineStart.UNDISPATCHED) {
+                val watcher =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            awaitCancellation()
+                        } finally {
+                            call.cancel()
+                        }
+                    }
+
                 try {
-                    awaitCancellation()
-                } finally {
-                    call.cancel()
-                }
-            }
+                    readingNetwork = true
+                    val response = call.await()
+                    readingNetwork = false
+                    response.use { response ->
+                        val code = response.code
+                        if (code != 206) {
+                            throw DownloadCdnHttpException(
+                                code,
+                                response
+                                    .header("Retry-After")
+                                    ?.toLongOrNull()
+                                    ?.coerceIn(0, 60)
+                                    ?.times(1000) ?: 0L,
+                            )
+                        }
 
-        try {
-            call.await().use { response ->
-                val code = response.code
-                if (code != 206) {
-                    throw IOException(
-                        "分块请求 HTTP 状态码异常: 期望 206, 实际 $code (偏移 $chunkStart-$chunkEnd)"
-                    )
-                }
+                        val encoding =
+                            response.header("Content-Encoding").orEmpty().trim().lowercase()
+                        if (encoding.isNotEmpty() && encoding != "identity") {
+                            throw DownloadCdnIntegrityException()
+                        }
 
-                val encoding = response.header("Content-Encoding").orEmpty().trim().lowercase()
-                if (encoding.isNotEmpty() && encoding != "identity") {
-                    throw IOException("分块收到不支持的内容编码: $encoding")
-                }
+                        val contentType = response.header("Content-Type").orEmpty().lowercase()
+                        if (
+                            contentType.contains("text/html") ||
+                                contentType.contains("application/json")
+                        ) {
+                            throw DownloadCdnIntegrityException()
+                        }
 
-                val contentType = response.header("Content-Type").orEmpty().lowercase()
-                if (contentType.contains("text/html") || contentType.contains("application/json")) {
-                    throw IOException("分块收到非预期的内容类型拦截页: $contentType")
-                }
+                        val respETag = response.header("ETag")?.trim()
+                        if (respETag.isNullOrBlank() || respETag != strongETag) {
+                            throw DownloadCdnIntegrityException()
+                        }
 
-                val respETag = response.header("ETag")?.trim()
-                if (respETag.isNullOrBlank() || respETag != strongETag) {
-                    throw IOException("分块 ETag 不匹配: expected $strongETag, got $respETag")
-                }
+                        val contentRange = response.header("Content-Range").orEmpty()
+                        val parsed =
+                            parseContentRange(contentRange) ?: throw DownloadCdnIntegrityException()
+                        val (start, end, respTotal) = parsed
+                        if (start != chunkStart || end != chunkEnd || respTotal != total) {
+                            throw DownloadCdnIntegrityException()
+                        }
 
-                val contentRange = response.header("Content-Range").orEmpty()
-                val parsed =
-                    parseContentRange(contentRange)
-                        ?: throw IOException("分块收到无效的 Content-Range: $contentRange")
-                val (start, end, respTotal) = parsed
-                if (start != chunkStart || end != chunkEnd || respTotal != total) {
-                    throw IOException(
-                        "分块范围与预期不符: $contentRange, expected: bytes $chunkStart-$chunkEnd/$total"
-                    )
-                }
+                        val body = response.body ?: throw DownloadCdnIntegrityException()
+                        val bodyContentLength = body.contentLength()
+                        if (bodyContentLength != -1L && bodyContentLength != expectedBytes) {
+                            throw DownloadCdnIntegrityException()
+                        }
 
-                val body = response.body ?: throw IOException("分块响应体为空")
-                val bodyContentLength = body.contentLength()
-                if (bodyContentLength != -1L && bodyContentLength != expectedBytes) {
-                    throw IOException(
-                        "分块声明长度与范围不一致: expected $expectedBytes, got $bodyContentLength"
-                    )
-                }
+                        val input = body.byteStream()
+                        val buffer = ByteArray(8192)
+                        val md = MessageDigest.getInstance("SHA-256")
+                        var len: Int
+                        var finalReadBytes = 0L
 
-                val input = body.byteStream()
-                val buffer = ByteArray(8192)
-                val md = MessageDigest.getInstance("SHA-256")
-                var len: Int
-                var finalReadBytes = 0L
+                        readingNetwork = true
+                        while (input.read(buffer).also { len = it } != -1) {
+                            readingNetwork = false
+                            currentCoroutineContext().ensureActive()
+                            if (chunkWritten + len > expectedBytes) {
+                                throw IOException("分块接收字节超出预期范围 ($chunkStart-$chunkEnd)")
+                            }
+                            val byteBuffer = ByteBuffer.wrap(buffer, 0, len)
+                            var writtenThisTime = 0
+                            while (byteBuffer.hasRemaining()) {
+                                val w =
+                                    channel.write(
+                                        byteBuffer,
+                                        chunkStart + chunkWritten + writtenThisTime,
+                                    )
+                                writtenThisTime += w
+                            }
+                            md.update(buffer, 0, len)
+                            chunkWritten += len
 
-                while (input.read(buffer).also { len = it } != -1) {
+                            if (chunkWritten < expectedBytes) {
+                                onProgressUpdate(len.toLong())
+                            } else {
+                                // 块末尾尚需 EOF 与落盘校验，不提前把这批字节显示为完成。
+                                finalReadBytes = len.toLong()
+                            }
+                            readingNetwork = true
+                        }
+                        readingNetwork = false
+
+                        currentCoroutineContext().ensureActive()
+
+                        if (chunkWritten != expectedBytes) {
+                            throw EOFException(
+                                "分块数据读取未达预期长度: expected $expectedBytes, actual $chunkWritten"
+                            )
+                        }
+
+                        val extra = input.read()
+                        if (extra != -1) {
+                            throw IOException("分块流中存在意外的多余未声明字节")
+                        }
+
+                        streamVerified = true
+                        val sha256Hex = md.digest().joinToString("") { "%02x".format(it) }
+                        // 数据与区间日志一起提交；暂停不能打断刷盘与日志提交之间的短临界区。
+                        withContext(NonCancellable) {
+                            channel.force(true)
+                            onChunkCompleted(chunkEnd, sha256Hex)
+                            committed = true
+                        }
+                        onBytesDownloaded(expectedBytes)
+                        onProgressUpdate(finalReadBytes)
+                    }
+                } catch (e: Exception) {
+                    if (
+                        !committed &&
+                            chunkWritten > 0L &&
+                            (call.isCanceled() || !currentCoroutineContext().isActive)
+                    ) {
+                        // 暂停只保存已写入且已验证响应身份的前缀。尚未确认流结束时不提交最后一个字节，
+                        // 防止一个声明完整长度但仍未通过 EOF 校验的区块被提前标记为完整。
+                        val retained =
+                            if (chunkWritten == expectedBytes && !streamVerified) {
+                                chunkWritten - 1L
+                            } else chunkWritten
+                        if (retained > 0L) {
+                            withContext(NonCancellable) {
+                                channel.force(true)
+                                val prefixHash =
+                                    DownloadRangeStore.computeFileHash(
+                                        targetFile,
+                                        chunkStart,
+                                        retained,
+                                    )
+                                onChunkCompleted(chunkStart + retained - 1L, prefixHash)
+                                onBytesDownloaded(retained)
+                            }
+                        }
+                    }
                     currentCoroutineContext().ensureActive()
-                    if (chunkWritten + len > expectedBytes) {
-                        throw IOException("分块接收字节超出预期范围 ($chunkStart-$chunkEnd)")
+                    if (
+                        sourcePool != null &&
+                            e is IOException &&
+                            readingNetwork &&
+                            e !is DownloadCdnHttpException &&
+                            e !is DownloadCdnIntegrityException
+                    ) {
+                        throw DownloadCdnTransportException()
                     }
-                    val byteBuffer = ByteBuffer.wrap(buffer, 0, len)
-                    var writtenThisTime = 0
-                    while (byteBuffer.hasRemaining()) {
-                        val w =
-                            channel.write(byteBuffer, chunkStart + chunkWritten + writtenThisTime)
-                        writtenThisTime += w
-                    }
-                    md.update(buffer, 0, len)
-                    chunkWritten += len
-
-                    if (chunkWritten < expectedBytes) {
-                        onProgressUpdate(len.toLong())
-                    } else {
-                        // 块末尾尚需 EOF 与落盘校验，不提前把这批字节显示为完成。
-                        finalReadBytes = len.toLong()
-                    }
-                }
-
-                currentCoroutineContext().ensureActive()
-
-                if (chunkWritten != expectedBytes) {
-                    throw EOFException(
-                        "分块数据读取未达预期长度: expected $expectedBytes, actual $chunkWritten"
-                    )
-                }
-
-                val extra = input.read()
-                if (extra != -1) {
-                    throw IOException("分块流中存在意外的多余未声明字节")
-                }
-
-                streamVerified = true
-                val sha256Hex = md.digest().joinToString("") { "%02x".format(it) }
-                // 数据与区间日志一起提交；暂停不能打断刷盘与日志提交之间的短临界区。
-                withContext(NonCancellable) {
-                    channel.force(true)
-                    onChunkCompleted(chunkEnd, sha256Hex)
-                    committed = true
-                }
-                onBytesDownloaded(expectedBytes)
-                onProgressUpdate(finalReadBytes)
-            }
-        } catch (e: Exception) {
-            if (
-                !committed &&
-                    chunkWritten > 0L &&
-                    (call.isCanceled() || !currentCoroutineContext().isActive)
-            ) {
-                // 暂停只保存已写入且已验证响应身份的前缀。尚未确认流结束时不提交最后一个字节，
-                // 防止一个声明完整长度但仍未通过 EOF 校验的区块被提前标记为完整。
-                val retained =
-                    if (chunkWritten == expectedBytes && !streamVerified) {
-                        chunkWritten - 1L
-                    } else chunkWritten
-                if (retained > 0L) {
-                    withContext(NonCancellable) {
-                        channel.force(true)
-                        val prefixHash =
-                            DownloadRangeStore.computeFileHash(targetFile, chunkStart, retained)
-                        onChunkCompleted(chunkStart + retained - 1L, prefixHash)
-                        onBytesDownloaded(retained)
-                    }
+                    throw e
+                } finally {
+                    watcher.cancel()
+                    onUnbindCall?.invoke(call)
                 }
             }
-            currentCoroutineContext().ensureActive()
-            throw e
-        } finally {
-            watcher.cancel()
-            onUnbindCall?.invoke(call)
         }
-    }
 
     /** 重置临时文件内容为 0 字节 */
     private fun resetTargetFile(file: File) {

@@ -205,12 +205,8 @@
     <string name="setting_download_auto_resume_text">Automatically resume pending download tasks when app launches</string>
     <string name="setting_download_auto_retry_title">Retry failed downloads silently</string>
     <string name="setting_download_auto_retry_text">后台自动静默重试 3 次</string>
-    <string name="setting_download_segmented_title">Segmented download</string>
-    <string name="setting_download_segmented_text">Takes effect when tasks start or resume</string>
-    <string name="setting_download_connections_title">Download connections</string>
-    <string name="setting_download_connections_text">Takes effect when tasks start or resume</string>
-    <string name="setting_download_connections_single">Single connection</string>
-    <string name="setting_download_connections_dual">Dual connections</string>
+    <string name="setting_download_multi_cdn_title">Multi-CDN download (Experimental)</string>
+    <string name="setting_download_multi_cdn_text">Download in parallel after verifying available nodes; no probing when disabled. Takes effect when tasks start or resume</string>
     <string name="download_unfinished_dialog_title">Unfinished Downloads</string>
     <string name="download_unfinished_dialog_message">Unfinished download tasks detected. Do you want to continue downloading?</string>
     <string name="download_unfinished_dialog_resume">Resume</string>

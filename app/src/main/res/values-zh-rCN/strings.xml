@@ -161,12 +161,8 @@
     <string name="setting_download">下载设置</string>
     <string name="setting_download_auto_resume_title">自动开始未完成的下载任务</string>
     <string name="setting_download_auto_resume_text">应用启动时自动继续未完成的下载任务</string>
-    <string name="setting_download_segmented_title">分块下载</string>
-    <string name="setting_download_segmented_text">在任务下次启动或恢复时生效</string>
-    <string name="setting_download_connections_title">下载连接数</string>
-    <string name="setting_download_connections_text">在任务下次启动或恢复时生效</string>
-    <string name="setting_download_connections_single">单路</string>
-    <string name="setting_download_connections_dual">双路</string>
+    <string name="setting_download_multi_cdn_title">多 CDN 下载（实验）</string>
+    <string name="setting_download_multi_cdn_text">验证可用节点后并行下载，关闭时不探测其他节点；下次启动或恢复时生效</string>
     <string name="download_unfinished_dialog_title">未完成的下载任务</string>
     <string name="download_unfinished_dialog_message">检测到存在未完成的下载任务，是否继续下载？</string>
     <string name="download_unfinished_dialog_resume">继续下载</string>

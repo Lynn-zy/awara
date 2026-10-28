@@ -92,6 +92,12 @@ interface DownloadTaskDao {
     )
     suspend fun updateValidator(taskId: String, workId: String, validator: String?): Int
 
+    /** 签名刷新只更新正在执行的当前代任务，绝不复活已暂停、取消或删除的任务。 */
+    @Query(
+        "UPDATE download_tasks SET url = :url WHERE taskId = :taskId AND workId = :workId AND status = 'RUNNING'"
+    )
+    suspend fun updateActiveSource(taskId: String, workId: String, url: String): Int
+
     // 仅当前代且处于运行中或保存中时更新终态（用于系统中断或网络失败，防止覆盖用户暂停/取消或覆盖更新代）
     @Query(
         "UPDATE download_tasks SET status = :newStatus, destinationUri = :destinationUri, error = :error WHERE taskId = :taskId AND workId = :workId AND (status = 'RUNNING' OR status = 'SAVING')"

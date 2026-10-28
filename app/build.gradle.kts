@@ -14,8 +14,8 @@ android {
         applicationId = "me.rerere.awara"
         minSdk = 26
         targetSdk = 33
-        versionCode = 24
-        versionName = "1.2.4"
+        versionCode = 25
+        versionName = "1.2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -38,6 +38,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
@@ -49,6 +50,9 @@ android {
 }
 
 dependencies {
+    // 官方脱糖库 (Java 11+ NIO 支持)
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.0.1")
+
     // Android KTX
     implementation("androidx.core:core-ktx:1.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.1")
@@ -128,6 +132,9 @@ dependencies {
 
     // Markdown
     implementation("org.jetbrains:markdown:0.4.1")
+
+    // HTML 解析
+    implementation("org.jsoup:jsoup:1.20.1")
 
     // Coil
     implementation("io.coil-kt:coil-compose:2.3.0")

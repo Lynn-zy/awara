@@ -180,13 +180,11 @@ class SegmentedDownloaderTest {
         }
 
     @Test
-    fun disablingSegmentationSafelyCompletesAnExistingSparseStateInOneGap() =
+    fun defaultEntrySafelyCompletesAnExistingSparseState() =
         runBlocking<Unit> {
             val file = temporary.newFile()
             seed(file, listOf(0L to 15L, 48L to 63L))
-            val settings = DownloadTransferSettings(segmentedEnabled = false)
-            ResumableDownloader(client, settings)
-                .download(url, file, etag, 64, onProgress = { _, _ -> })
+            ResumableDownloader(client).download(url, file, etag, 64, onProgress = { _, _ -> })
             assertArrayEquals(payload, file.readBytes())
             assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
             assertEquals("bytes=16-47", server.takeRequest().getHeader("Range"))

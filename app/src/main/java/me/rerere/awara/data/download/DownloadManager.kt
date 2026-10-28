@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -398,6 +400,37 @@ class DownloadManager(
                     }
                 }
             }
+        }
+
+    /** 活动任务统一换链，沿用精确清晰度和文件定位；网络阶段不占命令锁。 */
+    suspend fun refreshActiveSource(taskId: String, workId: String): String =
+        withContext(Dispatchers.IO) {
+            val task =
+                database.downloadTaskDao().getTask(taskId) ?: throw CancellationException("下载任务已删除")
+            if (task.workId != workId || task.status != DownloadTaskStatus.RUNNING) {
+                throw CancellationException("下载任务已停止或换代")
+            }
+            val refreshed =
+                DownloadCdnBudget.withPermit {
+                    val video = mediaRepo.getVideo(task.resourceId)
+                    mediaRepo
+                        .parseVideoUrl(video)
+                        .requireDownloadQuality(task.quality)
+                        .src
+                        .download
+                        .fixUrl()
+                }
+            currentCoroutineContext().ensureActive()
+            if (task.url.videoDownloadResourceKey() != refreshed.videoDownloadResourceKey()) {
+                throw java.io.IOException("下载资源已变化，需要重新确认任务")
+            }
+            getCommandMutex(taskId).withLock {
+                currentCoroutineContext().ensureActive()
+                if (database.downloadTaskDao().updateActiveSource(taskId, workId, refreshed) == 0) {
+                    throw CancellationException("下载任务已停止或换代")
+                }
+            }
+            refreshed
         }
 
     suspend fun safeResume(taskId: String) =
