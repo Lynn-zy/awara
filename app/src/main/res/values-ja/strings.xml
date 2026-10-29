@@ -95,7 +95,7 @@
     <string name="setting_player_expanded_buffer_title">バッファを拡張</string>
     <string name="setting_player_expanded_buffer_text">先読み量を増やしてカクつきを抑えます。メモリと通信量が増加します。次回動画を開いた際に有効になります</string>
     <string name="setting_player_multi_cdn_title">マルチ CDN 再生（実験的）</string>
-    <string name="setting_player_multi_cdn_text">利用可能なノードを検証後、バッファ不足時に自動で接続先を切り替えます（高速化を保証するものではありません）。次回動画を開いた際に有効になります</string>
+    <string name="setting_player_multi_cdn_text">利用可能なノードを検証し、動画のバッファリング中に CDN をヒューリスティックに選択します。次回動画を開いた際に有効になります</string>
     <string name="setting_about">アプリについて</string>
     <string name="setting_about_source_title">ソースコード</string>
     <string name="setting_about_source_text">GitHub</string>
@@ -213,4 +213,9 @@
     <string name="user_followed">フォロー中</string>
     <string name="user_follow">フォロー</string>
     <string name="comment_tag_author">投稿者</string>
+    <string name="setting_cdn_connection_debug_title">CDN 接続デバッグ（一時的）</string>
+    <string name="setting_cdn_connection_debug_text">ダウンロードとオンライン再生で検証済みの利用可能な CDN 数と現在接続中のノード名を表示します。</string>
+    <string name="cdn_connection_debug_available">利用可能なCDN数：%1$d</string>
+    <string name="cdn_connection_debug_connected">接続中：%1$s</string>
+    <string name="cdn_connection_debug_idle">なし</string>
 </resources>

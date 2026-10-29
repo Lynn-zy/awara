@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.util.await
 import okhttp3.Call
@@ -49,6 +50,7 @@ internal constructor(
     private val okHttpClient: OkHttpClient,
     private val blockSizeBytes: Long = 16L * 1024 * 1024,
     private val sourcePool: DownloadSourcePool? = null,
+    private val connectionTracker: CdnConnectionTracker? = null,
 ) {
     // 专用 OkHttpClient，确保协议限定为 HTTP/1.1 并共享底层连接池
     private val dedicatedClient: OkHttpClient by lazy {
@@ -628,6 +630,7 @@ internal constructor(
                 var streamVerified = false
                 var committed = false
                 var readingNetwork = false
+                val connectionToken = Any()
 
                 val watcher =
                     launch(start = CoroutineStart.UNDISPATCHED) {
@@ -687,6 +690,9 @@ internal constructor(
                         if (bodyContentLength != -1L && bodyContentLength != expectedBytes) {
                             throw DownloadCdnIntegrityException()
                         }
+
+                        // 严格通过 range、ETag、长度等全套校验后，在正式读取正文数据流前登记活跃 CDN 连接
+                        connectionTracker?.register(connectionToken, req.url.host)
 
                         val input = body.byteStream()
                         val buffer = ByteArray(8192)
@@ -786,6 +792,7 @@ internal constructor(
                     }
                     throw e
                 } finally {
+                    connectionTracker?.unregister(connectionToken)
                     watcher.cancel()
                     onUnbindCall?.invoke(call)
                 }

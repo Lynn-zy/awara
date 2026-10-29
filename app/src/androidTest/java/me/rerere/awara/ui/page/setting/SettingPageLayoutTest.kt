@@ -10,6 +10,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -27,8 +28,11 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.ui.component.player.SeekPreviewPosition
+import me.rerere.compose_setting.preference.mmkvPreference
+import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -38,6 +42,57 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SettingPageLayoutTest {
     @get:Rule val compose = createComposeRule()
+
+    /** 临时诊断开关默认关闭，整行切换后持久化，重新创建设置组件仍保留选择。 */
+    @Test
+    fun cdnDebugPreferenceDefaultsOffAndPersists() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val existed = mmkvPreference.contains(PREFERENCE_KEY_CDN_CONNECTION_DEBUG)
+        val previous = mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
+        val generation = mutableStateOf(0)
+        try {
+            mmkvPreference.remove(PREFERENCE_KEY_CDN_CONNECTION_DEBUG)
+            compose.setContent {
+                MaterialTheme {
+                    Column(Modifier.width(320.dp)) {
+                        key(generation.value) {
+                            CdnConnectionDebugSetting(
+                                rememberBooleanPreference(
+                                    PREFERENCE_KEY_CDN_CONNECTION_DEBUG,
+                                    false,
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            val title = context.getString(R.string.setting_cdn_connection_debug_title)
+            compose.runOnIdle {
+                assertEquals(
+                    false,
+                    mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false),
+                )
+            }
+            compose.onNodeWithText(title).performClick()
+            compose.runOnIdle {
+                assertEquals(
+                    true,
+                    mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false),
+                )
+                generation.value++
+            }
+            compose.onNodeWithText(title).assertIsDisplayed().performClick()
+            compose.runOnIdle {
+                assertEquals(
+                    false,
+                    mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, true),
+                )
+            }
+        } finally {
+            if (existed) mmkvPreference.putBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, previous)
+            else mmkvPreference.remove(PREFERENCE_KEY_CDN_CONNECTION_DEBUG)
+        }
+    }
 
     @Test
     fun thumbnailSettingRetainsChosenPositionWhenDisabled() {

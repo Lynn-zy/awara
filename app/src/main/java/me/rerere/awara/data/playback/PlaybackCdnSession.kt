@@ -56,6 +56,9 @@ internal class PlaybackCdnSession(
     /** 已完成抽样验证的备选 CDN 主机名列表（上限受 [PlaybackCdnPolicy.MAX_BACKUP_NODES] 约束为 2 个） */
     val backupNodes = CopyOnWriteArrayList<String>()
 
+    /** 主媒体合法响应或本代主源抽样已经确认的主机，不包含未验证目录候选。 */
+    private val verifiedHosts = ConcurrentHashMap.newKeySet<String>()
+
     /** 当前文件维度退役的主机名集合（遭遇 404/410 或内容抽样不匹配，永久移出本文件候选） */
     val retiredHosts = ConcurrentHashMap.newKeySet<String>()
 
@@ -94,11 +97,27 @@ internal class PlaybackCdnSession(
             networkGeneration.incrementAndGet()
             cancelProbes()
             backupNodes.clear()
+            verifiedHosts.clear()
             sampleFingerprints.clear()
             isFingerprintReady.set(false)
             hostThroughputEwma.clear()
             cooldownUntil.clear()
             retiredHosts.clear()
+        }
+
+    /** 验证结果只属于发起请求时的网络代次，旧响应不能恢复已失效的可用数量。 */
+    fun markVerifiedHost(host: String, generation: Int) =
+        synchronized(this) { if (generation == networkGeneration.get()) verifiedHosts.add(host) }
+
+    /** 与调度器共用退役与冷却判断，只返回当前资源实际可选择的已验证主机。 */
+    fun availableHosts(now: Long): List<String> =
+        synchronized(this) {
+            val candidates =
+                verifiedHosts +
+                    if (allowsCrossCdn && isFingerprintReady.get()) backupNodes else emptyList()
+            candidates
+                .filter { (it == initialHost || allowsCrossCdn) && isHostAvailable(it, now) }
+                .sorted()
         }
 
     /**
@@ -122,6 +141,7 @@ internal class PlaybackCdnSession(
     fun retireHost(host: String) {
         retiredHosts.add(host)
         backupNodes.remove(host)
+        verifiedHosts.remove(host)
     }
 
     /**

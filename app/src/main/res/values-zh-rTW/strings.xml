@@ -95,7 +95,7 @@
     <string name="setting_player_expanded_buffer_title">擴大緩衝區</string>
     <string name="setting_player_expanded_buffer_text">增加預讀數據量以減少卡頓，會消耗更多記憶體與流量；下次打開影片生效</string>
     <string name="setting_player_multi_cdn_title">多 CDN 播放（實驗）</string>
-    <string name="setting_player_multi_cdn_text">驗證可用節點後在緩衝不足時自動切換節點，非保證提速；下次打開影片生效</string>
+    <string name="setting_player_multi_cdn_text">驗證可用節點後在緩衝影片時進行 CDN 啟發式調度；下次打開影片生效</string>
     <string name="setting_about">關於</string>
     <string name="setting_about_source_title">源代碼</string>
     <string name="setting_about_source_text">Github</string>
@@ -213,4 +213,9 @@
     <string name="user_followed">已關注</string>
     <string name="user_follow">關注</string>
     <string name="comment_tag_author">作者</string>
+    <string name="setting_cdn_connection_debug_title">CDN 連線偵錯（暫時）</string>
+    <string name="setting_cdn_connection_debug_text">顯示下載與線上播放中已驗證的可用 CDN 數量和目前連線的節點名稱。</string>
+    <string name="cdn_connection_debug_available">可用CDN數量：%1$d</string>
+    <string name="cdn_connection_debug_connected">已連線：%1$s</string>
+    <string name="cdn_connection_debug_idle">無</string>
 </resources>

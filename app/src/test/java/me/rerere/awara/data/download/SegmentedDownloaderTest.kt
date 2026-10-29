@@ -12,6 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -160,6 +162,60 @@ class SegmentedDownloaderTest {
                 assertEquals(0L, arrived.count)
                 assertArrayEquals(payload, file.readBytes())
                 assertTrue(progress.zipWithNext().all { (previous, next) -> next >= previous })
+            }
+        }
+
+    @Test
+    fun dualConnectionsRecordActiveSnapshotAndZeroAtEnd() =
+        runBlocking<Unit> {
+            withTimeout(7000) {
+                val maxConnectionCount = AtomicInteger(0)
+                var snapshotAtPeak: CdnConnectionSnapshot? = null
+                val tracker = CdnConnectionTracker { snapshot ->
+                    if (snapshot.connectionCount > maxConnectionCount.get()) {
+                        maxConnectionCount.set(snapshot.connectionCount)
+                        snapshotAtPeak = snapshot
+                    }
+                }
+
+                val arrived = CountDownLatch(2)
+                val activeRequests = AtomicInteger()
+                dispatch { request ->
+                    val isChunk = request.getHeader("Range") != "bytes=0-0"
+                    if (isChunk && activeRequests.incrementAndGet() <= 2) {
+                        arrived.countDown()
+                        if (!arrived.await(2, TimeUnit.SECONDS))
+                            return@dispatch MockResponse().setResponseCode(503)
+                    }
+                    responseFor(request).apply {
+                        if (isChunk && request.getHeader("Range") == "bytes=0-15") {
+                            setBodyDelay(100, TimeUnit.MILLISECONDS)
+                        }
+                    }
+                }
+                val file = temporary.newFile()
+                assertTrue(
+                    SegmentedDownloader(client, 16, connectionTracker = tracker)
+                        .download(url, file, null, connections = 2, onProgress = { _, _ -> })
+                )
+                assertArrayEquals(payload, file.readBytes())
+
+                // 验证并发双路峰值：1 host，2 真实正文连接
+                assertNotNull(snapshotAtPeak)
+                assertEquals(2, snapshotAtPeak!!.connectionCount)
+                assertEquals(1, snapshotAtPeak!!.nodeCount)
+                val expectedHost = server.hostName.lowercase()
+                assertEquals(listOf(expectedHost, expectedHost), snapshotAtPeak!!.hosts)
+
+                // 验证下载结束后完全归零
+                val finalSnapshot = tracker.snapshot.value
+                assertEquals(0, finalSnapshot.connectionCount)
+                assertEquals(0, finalSnapshot.nodeCount)
+                assertTrue(finalSnapshot.hosts.isEmpty())
+
+                // 验证关闭后拒绝迟到登记
+                tracker.close()
+                assertFalse(tracker.register(Any(), expectedHost))
             }
         }
 

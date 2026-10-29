@@ -28,6 +28,8 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
+import me.rerere.awara.data.diagnostics.CdnTrackingDataSourceFactory
 import me.rerere.awara.data.download.DownloadCdnDirectory
 import me.rerere.awara.data.playback.PlaybackBufferSample
 import me.rerere.awara.data.playback.PlaybackCdnController
@@ -60,6 +62,10 @@ fun rememberPlayerState(
     val context = LocalContext.current
     val settings = remember { PlaybackSettings.read() }
     val refreshSource by rememberUpdatedState(refreshPlaybackSource)
+    val connectionTracker = remember { CdnConnectionTracker() }
+    val httpFactory = remember {
+        CdnTrackingDataSourceFactory(DefaultHttpDataSource.Factory(), connectionTracker)
+    }
     val cdnController = remember {
         if (builder == null && settings.multiCdnEnabled) {
             val client = OkHttpClient()
@@ -71,6 +77,8 @@ fun rememberPlayerState(
                         File(context.cacheDir, "playback-cdn-directory.json"),
                     ),
                 refreshSource = { refreshSource(it) },
+                fallbackFactory = httpFactory,
+                connectionTracker = connectionTracker,
             )
         } else null
     }
@@ -84,10 +92,7 @@ fun rememberPlayerState(
                 ?: ExoPlayer.Builder(
                         context,
                         DefaultMediaSourceFactory(
-                            PlayerCache.get(
-                                context,
-                                cdnController ?: DefaultHttpDataSource.Factory(),
-                            )
+                            PlayerCache.get(context, cdnController ?: httpFactory)
                         ),
                     )
                     .setLoadControl(PlayerBufferPolicy.create(settings))
@@ -107,6 +112,7 @@ fun rememberPlayerState(
                 player = player,
                 initialPlaybackSpeed = initialSpeed,
                 onBufferDiscontinuity = { cdnController?.resetBufferDetection() },
+                connectionTracker = connectionTracker,
             )
         )
     }
@@ -152,6 +158,7 @@ fun rememberPlayerState(
         state.duration = state.player.duration
         Log.i(TAG, "rememberPlayerState: Init")
         onDispose {
+            connectionTracker.close()
             cdnController?.close()
             state.player.run {
                 removeListener(state.playbackListener)
@@ -177,7 +184,11 @@ class PlayerState(
         mmkvPreference.putString(PREFERENCE_KEY_PLAYER_SPEED, speed.toString())
     },
     private val onBufferDiscontinuity: () -> Unit = {},
+    private val connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
 ) {
+    /** 只含当前媒体正文的主机与计数，不包含签名、候选探测或预览请求。 */
+    val cdnConnections = connectionTracker.snapshot
+
     var playing by mutableStateOf(false)
     var state by mutableStateOf(State.IDLE)
     var isLoading by mutableStateOf(false)
@@ -198,6 +209,10 @@ class PlayerState(
 
     val playbackListener: Player.Listener =
         object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                connectionTracker.updateAvailableHosts(emptyList())
+            }
+
             override fun onRenderedFirstFrame() {
                 renderedFirstFrame = true
             }

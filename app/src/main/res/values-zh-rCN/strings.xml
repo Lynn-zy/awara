@@ -138,7 +138,7 @@
     <string name="setting_player_expanded_buffer_title">扩大缓冲区</string>
     <string name="setting_player_expanded_buffer_text">增加预读数据量以减少卡顿，会消耗更多内存与流量；下次打开视频生效</string>
     <string name="setting_player_multi_cdn_title">多 CDN 播放（实验）</string>
-    <string name="setting_player_multi_cdn_text">验证可用节点后在缓冲不足时自动换源，非保证提速；下次打开视频生效</string>
+    <string name="setting_player_multi_cdn_text">验证可用节点后在缓冲视频时进行 CDN 启发式调度；下次打开视频生效</string>
     <string name="setting_about">关于</string>
     <string name="setting_about_source_title">源代码</string>
     <string name="setting_about_source_text">Github</string>
@@ -256,4 +256,9 @@
     <string name="time_days_ago">%1$d天前</string>
     <string name="user_followed">已关注</string>
     <string name="user_follow">关注</string>
+    <string name="setting_cdn_connection_debug_title">CDN 连接调试（临时）</string>
+    <string name="setting_cdn_connection_debug_text">显示下载与在线播放中已验证的可用 CDN 数量和当前连接的节点名称。</string>
+    <string name="cdn_connection_debug_available">可用CDN数量：%1$d</string>
+    <string name="cdn_connection_debug_connected">已连接：%1$s</string>
+    <string name="cdn_connection_debug_idle">无</string>
 </resources>

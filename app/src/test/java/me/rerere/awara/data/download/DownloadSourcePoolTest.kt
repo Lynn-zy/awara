@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -170,16 +171,20 @@ class DownloadSourcePoolTest {
                         .url("/download?filename=$randomFilename&path=2026/10/28")
                         .toString()
 
+                val tracker = CdnConnectionTracker()
                 val pool =
                     DownloadSourcePool(
                         originalUrl = initialUrl,
                         client = okHttpClient,
                         directory = cdnDirectory,
                         resolve = candidateResolver,
+                        connectionTracker = tracker,
                     )
 
                 // 1. 绑定主节点锚点信息
                 pool.bind(fixturePayload.size.toLong(), "\"primary\"")
+                assertEquals("主节点绑定后可用数应为 1", 1, tracker.snapshot.value.availableCdnCount)
+                assertEquals("尚未发生正文传输，连接数应为 0", 0, tracker.snapshot.value.connectionCount)
 
                 // 2. 启动并发发现流程并等待完成
                 val discoveryJob = pool.startDiscovery(this)
@@ -189,6 +194,7 @@ class DownloadSourcePoolTest {
                 val snapshot = pool.snapshot()
                 assertNotNull("发现完成后源池快照不应为空", snapshot)
                 assertEquals("快照中应同时包含主源节点与镜像节点", 2, snapshot!!.validators.size)
+                assertEquals("抽样通过后可用数应为 2", 2, tracker.snapshot.value.availableCdnCount)
                 val validatorSet = snapshot.validators.values.toSet()
                 assertEquals("两节点应具有不同强 ETag", setOf("\"primary\"", "\"mirror\""), validatorSet)
 
@@ -196,6 +202,7 @@ class DownloadSourcePoolTest {
                 val firstLease = pool.acquire()
                 val secondLease = pool.acquire()
                 assertNotEquals("两个并发租借应分别指向不同主机节点", firstLease.host, secondLease.host)
+                assertEquals("可用数不因 acquire 租借减少", 2, tracker.snapshot.value.availableCdnCount)
 
                 // 5. 释放租借节点，验证状态正常流转
                 pool.release(firstLease, 1024L, 1_000_000L)
@@ -223,16 +230,19 @@ class DownloadSourcePoolTest {
                         .url("/download?filename=$randomFilename&path=2026/10/28")
                         .toString()
 
+                val tracker = CdnConnectionTracker()
                 val pool =
                     DownloadSourcePool(
                         originalUrl = initialUrl,
                         client = okHttpClient,
                         directory = cdnDirectory,
                         resolve = candidateResolver,
+                        connectionTracker = tracker,
                     )
 
                 // 绑定主节点
                 pool.bind(fixturePayload.size.toLong(), "\"primary\"")
+                assertEquals("主节点绑定后可用数为 1", 1, tracker.snapshot.value.availableCdnCount)
 
                 // 启动发现并等待结束
                 val discoveryJob = pool.startDiscovery(this)
@@ -242,6 +252,7 @@ class DownloadSourcePoolTest {
                 val snapshot = pool.snapshot()
                 assertNotNull("快照不应为空", snapshot)
                 assertEquals("篡改镜像应被拒绝加入，快照中仅应包含 1 个主节点", 1, snapshot!!.validators.size)
+                assertEquals("篡改镜像抽样未过不能计数，可用数仍为 1", 1, tracker.snapshot.value.availableCdnCount)
                 assertTrue("快照中应仅包含主节点主机", snapshot.validators.containsKey(pool.primaryUrl.host))
                 assertEquals(
                     "主节点强 ETag 保持不变",
@@ -265,12 +276,14 @@ class DownloadSourcePoolTest {
                         .url("/download?filename=$randomFilename&path=2026/10/28")
                         .toString()
 
+                val tracker = CdnConnectionTracker()
                 val pool =
                     DownloadSourcePool(
                         originalUrl = initialUrl,
                         client = okHttpClient,
                         directory = cdnDirectory,
                         resolve = candidateResolver,
+                        connectionTracker = tracker,
                     )
 
                 // 绑定并完成发现，使主节点与镜像节点均处于就绪状态
@@ -279,6 +292,7 @@ class DownloadSourcePoolTest {
 
                 // 确认双节点已就绪
                 assertEquals(2, pool.snapshot()?.validators?.size)
+                assertEquals("双节点就绪时可用数为 2", 2, tracker.snapshot.value.availableCdnCount)
 
                 // 获取第一个节点并释放
                 val initialLease = pool.acquire()
@@ -287,6 +301,7 @@ class DownloadSourcePoolTest {
                 // 模拟 initialLease 遭遇 404 故障，触发恢复
                 val recovered = pool.recover(initialLease, DownloadCdnHttpException(404))
                 assertTrue("单节点 404 故障后仍有备选节点，recover 应返回 true", recovered)
+                assertEquals("404 退役后可用 CDN 数量减少至 1", 1, tracker.snapshot.value.availableCdnCount)
 
                 // 下一次 lease 必须自动避开该失效节点，选取另一有效节点
                 val nextLease = pool.acquire()
@@ -384,6 +399,182 @@ class DownloadSourcePoolTest {
                     "\"primary\"",
                     snapshot!!.validators[updatedPrimaryUrl.host],
                 )
+            }
+        }
+
+    /**
+     * 测试 5：可用性生命周期契约。
+     * - 主 + 2 镜像验证后可用 3，且不要求 3 连接（连接数仍为 0）；
+     * - 探测失败的镜像不计入可用；
+     * - recover 429 冷却与退役减少可用计数；
+     * - cooldown 到期在下一次 acquire 重新发布恢复；
+     * - network 变化剔除旧备选回主源；
+     * - 关闭 tracker 后快照归 0 并拒绝后续迟到更新。
+     */
+    @Test
+    fun testAvailabilityLifecycleWithTracker() =
+        runBlocking<Unit> {
+            withTimeout(10000) {
+                val mirrorServer2 = MockWebServer()
+                val badMirrorServer = MockWebServer()
+                mirrorServer2.start()
+                badMirrorServer.start()
+
+                val multiMirrorDirectoryServer = MockWebServer()
+                multiMirrorDirectoryServer.start()
+
+                try {
+                    // 配置 mirrorServer2 正常响应
+                    mirrorServer2.dispatcher =
+                        createRangeDispatcher(
+                            etag = "\"mirror-2\"",
+                            payloadSupplier = { fixturePayload },
+                        )
+                    // 配置 badMirrorServer 返回 500 导致抽样失败
+                    badMirrorServer.dispatcher =
+                        object : Dispatcher() {
+                            override fun dispatch(request: RecordedRequest): MockResponse =
+                                MockResponse().setResponseCode(500)
+                        }
+
+                    multiMirrorDirectoryServer.dispatcher =
+                        object : Dispatcher() {
+                            override fun dispatch(request: RecordedRequest): MockResponse {
+                                val html =
+                                    """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <body>
+                                        <table>
+                                            <tr><td>mirror.iwara.tv</td><td>recent=1700GB</td></tr>
+                                            <tr><td>mirror2.iwara.tv</td><td>recent=1700GB</td></tr>
+                                            <tr><td>badmirror.iwara.tv</td><td>recent=1700GB</td></tr>
+                                        </table>
+                                    </body>
+                                    </html>
+                                    """
+                                        .trimIndent()
+                                return MockResponse()
+                                    .setResponseCode(200)
+                                    .setHeader("Content-Type", "text/html; charset=utf-8")
+                                    .setBody(html)
+                            }
+                        }
+
+                    val multiCandidateResolver: (HttpUrl, String) -> HttpUrl = { currentUrl, host ->
+                        val targetServer =
+                            when (host) {
+                                "mirror.iwara.tv" -> mirrorServer
+                                "mirror2.iwara.tv" -> mirrorServer2
+                                "badmirror.iwara.tv" -> badMirrorServer
+                                else -> primaryServer
+                            }
+                        targetServer
+                            .url("")
+                            .newBuilder()
+                            .encodedPath(currentUrl.encodedPath)
+                            .encodedQuery(currentUrl.encodedQuery)
+                            .build()
+                    }
+
+                    val customDirectory =
+                        DownloadCdnDirectory(
+                            client = okHttpClient,
+                            cacheFile = null,
+                            directoryUrl = multiMirrorDirectoryServer.url("/?page=distribution"),
+                        )
+
+                    var currentNetwork = "WIFI"
+                    val tracker = CdnConnectionTracker()
+                    var currentTime = 100_000L
+                    val randomFilename = "${UUID.randomUUID()}.mp4"
+                    val initialUrl =
+                        primaryServer
+                            .url("/download?filename=$randomFilename&path=2026/10/28")
+                            .toString()
+
+                    val pool =
+                        DownloadSourcePool(
+                            originalUrl = initialUrl,
+                            client = okHttpClient,
+                            directory = customDirectory,
+                            networkIdentity = { currentNetwork },
+                            resolve = multiCandidateResolver,
+                            now = { currentTime },
+                            connectionTracker = tracker,
+                        )
+
+                    // 1. bind 主源验证后可用 1
+                    pool.bind(fixturePayload.size.toLong(), "\"primary\"")
+                    assertEquals("主源 bind 验证后可用数为 1", 1, tracker.snapshot.value.availableCdnCount)
+                    assertEquals("不要求连接，连接数应为 0", 0, tracker.snapshot.value.connectionCount)
+
+                    // 2. 发现并抽样，两个有效镜像验证通过，失败镜像 badmirror 不计入
+                    pool.startDiscovery(this).join()
+                    assertEquals("主+2镜像验证通过后可用数为 3", 3, tracker.snapshot.value.availableCdnCount)
+                    assertEquals("可用数为 3 时不要求 3 连接", 0, tracker.snapshot.value.connectionCount)
+
+                    // 3. recover 429 冷却减少可用数
+                    val lease1 = pool.acquire()
+                    val lease2 = pool.acquire()
+                    val lease3 = pool.acquire()
+                    pool.release(lease1, 0, 0)
+                    pool.release(lease2, 0, 0)
+                    pool.release(lease3, 0, 0)
+
+                    // 对其中一个镜像节点报告 429 冷却 15 秒（100_000 + 15_000 = 115_000）
+                    pool.recover(lease2, DownloadCdnHttpException(429, retryAfterMillis = 15000L))
+                    assertEquals(
+                        "节点进入 429 冷却后，可用数立即减少至 2",
+                        2,
+                        tracker.snapshot.value.availableCdnCount,
+                    )
+
+                    // 4. 模拟时间流逝（cooldown 到期）在下一次 acquire 重新发布
+                    currentTime = 120_000L // 超过 115_000L
+                    val leaseAfterCooldown = pool.acquire()
+                    pool.release(leaseAfterCooldown, 0, 0)
+                    assertEquals(
+                        "冷却期过后 acquire 重新发布，可用数恢复至 3",
+                        3,
+                        tracker.snapshot.value.availableCdnCount,
+                    )
+
+                    // 5. recover 退役减少可用数
+                    pool.recover(lease2, DownloadCdnIntegrityException())
+                    assertEquals("节点退役后，可用数减少至 2", 2, tracker.snapshot.value.availableCdnCount)
+
+                    // 6. 网络变化剔除旧备选回主源
+                    currentNetwork = "CELLULAR"
+                    val leaseAfterNetworkChange = pool.acquire()
+                    pool.release(leaseAfterNetworkChange, 0, 0)
+                    assertEquals(
+                        "网络切换剔除旧备选，可用数回退至主源 1",
+                        1,
+                        tracker.snapshot.value.availableCdnCount,
+                    )
+
+                    // 7. 关闭 tracker 归零并拒迟到
+                    tracker.close()
+                    assertEquals(
+                        "tracker close 后快照归 0",
+                        0,
+                        tracker.snapshot.value.availableCdnCount,
+                    )
+                    assertEquals(0, tracker.snapshot.value.connectionCount)
+
+                    // 后续尝试再次发布，关闭状态下 tracker 拒绝更新
+                    pool.bind(fixturePayload.size.toLong(), "\"primary\"")
+                    assertEquals(
+                        "关闭状态下 tracker 严格拒绝迟到更新",
+                        0,
+                        tracker.snapshot.value.availableCdnCount,
+                    )
+                } finally {
+                    multiMirrorDirectoryServer.shutdown()
+                    mirrorServer2.shutdown()
+                    badMirrorServer.shutdown()
+                }
             }
         }
 

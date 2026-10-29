@@ -141,7 +141,7 @@
     <string name="setting_player_expanded_buffer_title">Expand playback buffer</string>
     <string name="setting_player_expanded_buffer_text">Increases pre-buffered data to reduce stuttering, using more memory and network traffic; takes effect next time a video is opened</string>
     <string name="setting_player_multi_cdn_title">Multi-CDN playback (Experimental)</string>
-    <string name="setting_player_multi_cdn_text">Switches source when buffering is insufficient after verifying available nodes, without speed guarantee; takes effect next time a video is opened</string>
+    <string name="setting_player_multi_cdn_text">Verifies available nodes, then uses heuristic CDN scheduling while buffering video; takes effect the next time a video is opened</string>
     <string name="setting_about">About</string>
     <string name="setting_about_source_title">Source Code</string>
     <string name="setting_about_source_text">Github</string>
@@ -305,4 +305,9 @@
     <string name="user_unknown">未知用户</string>
     <string name="refresh_failed">刷新失败，请重试</string>
     <string name="refresh_succeeded">刷新成功</string>
+    <string name="setting_cdn_connection_debug_title">CDN connection debug (temporary)</string>
+    <string name="setting_cdn_connection_debug_text">Show the verified available CDN count and currently connected nodes for downloads and online playback.</string>
+    <string name="cdn_connection_debug_available">Available CDNs: %1$d</string>
+    <string name="cdn_connection_debug_connected">Connected: %1$s</string>
+    <string name="cdn_connection_debug_idle">None</string>
 </resources>

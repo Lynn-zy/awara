@@ -39,6 +39,7 @@ internal class PlaybackCdnController(
     private val fallbackFactory: DataSource.Factory = DefaultHttpDataSource.Factory(),
     private val now: () -> Long = { System.nanoTime() / 1_000_000 },
     private val urlResolver: (HttpUrl) -> HttpUrl = { it },
+    private val connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
 ) : DataSource.Factory, AutoCloseable {
 
     /** 控制器持有的并发与异步探测作用域 */
@@ -89,6 +90,7 @@ internal class PlaybackCdnController(
                 now = now,
                 coroutineScope = scope,
                 onDataSourceClosed = { ds -> activeDataSources.remove(ds) },
+                connectionTracker = connectionTracker,
                 urlResolver = urlResolver,
                 onOpening = { source, dataSpec ->
                     synchronized(lifecycleLock) {
@@ -138,6 +140,8 @@ internal class PlaybackCdnController(
         val activeRead = matchingDataSources.any { it.isActiveRead.get() }
 
         val currentTime = now()
+        // 复用既有 500ms 采样发布可用集合，不新增探测或改变换源决策。
+        connectionTracker?.updateAvailableHosts(session.availableHosts(currentTime))
         if (monitor.shouldSwitch(sample, activeRead, currentTime)) {
             val hasAvailableBackup =
                 session.backupNodes.any { session.isHostAvailable(it, currentTime) }

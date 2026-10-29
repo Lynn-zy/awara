@@ -72,6 +72,32 @@ class ResumableDownloaderTest {
         }
     }
 
+    /** 普通顺序降级只统计实际正文，读取完成后归零，不把原始 URL 留在调试快照中。 */
+    @Test
+    fun sequentialTransferPublishesActiveHostAndClearsAfterCompletion() =
+        runBlocking<Unit> {
+            val tracker = me.rerere.awara.data.diagnostics.CdnConnectionTracker()
+            val content = ByteArray(32 * 1024) { 3 }
+            val redirected = server.url("/actual.mp4").newBuilder().host("127.0.0.1").build()
+            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", redirected))
+            server.enqueue(MockResponse().setBody(Buffer().write(content)))
+            var observedActiveConnection = false
+            ResumableDownloader(okHttpClient, connectionTracker = tracker)
+                .downloadSequential(
+                    url = server.url("/video.mp4?signature=not-for-display").toString(),
+                    targetFile = tempFolder.newFile("diagnostic.part"),
+                    validator = null,
+                    onBytesDownloaded = {
+                        assertEquals(1, tracker.snapshot.value.connectionCount)
+                        assertEquals(listOf(redirected.host), tracker.snapshot.value.hosts)
+                        observedActiveConnection = true
+                    },
+                    onProgress = { _, _ -> },
+                )
+            assertTrue(observedActiveConnection)
+            assertEquals(0, tracker.snapshot.value.connectionCount)
+        }
+
     @Test
     fun countsNewBytesWhenServerResetsALargerPartialFile() =
         runBlocking<Unit> {

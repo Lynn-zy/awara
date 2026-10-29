@@ -66,6 +66,7 @@ internal class PlaybackCdnDataSource(
     private val onDataSourceClosed: (PlaybackCdnDataSource) -> Unit,
     private val urlResolver: (HttpUrl) -> HttpUrl = { it },
     private val onOpening: (PlaybackCdnDataSource, DataSpec) -> Unit = { _, _ -> },
+    private val connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
 ) : BaseDataSource(/* isNetwork= */ true) {
 
     /** 定制的媒体流长连接 OkHttpClient，清除拦截器与 CookieJar 防凭据泄露，读超时设置为 15 秒 */
@@ -245,7 +246,10 @@ internal class PlaybackCdnDataSource(
         }
 
         if (length == 0) return 0
-        if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
+        if (bytesRemaining == 0L) {
+            connectionTracker?.unregister(this)
+            return C.RESULT_END_OF_INPUT
+        }
 
         val session = currentSession ?: throw IOException("未关联有效播放会话")
 
@@ -277,6 +281,7 @@ internal class PlaybackCdnDataSource(
                     if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
                         bytesRemaining -= bytesRead
                     }
+                    if (bytesRemaining == 0L) connectionTracker?.unregister(this)
                     currentHost?.let { host ->
                         session.recordThroughput(host, bytesRead.toLong(), durationMs)
                     }
@@ -287,6 +292,7 @@ internal class PlaybackCdnDataSource(
                     if (bytesRemaining > 0L) {
                         throw IOException("非预期的媒体流过早 EOF（尚欠缺 $bytesRemaining 字节）")
                     }
+                    connectionTracker?.unregister(this)
                     return C.RESULT_END_OF_INPUT
                 }
             } catch (e: Exception) {
@@ -299,6 +305,7 @@ internal class PlaybackCdnDataSource(
                 val recovered =
                     trySwitchOrRecover(session = session, cause = e, isProactiveSwitch = false)
                 if (!recovered) {
+                    connectionTracker?.unregister(this)
                     throw (e as? IOException ?: IOException("媒体流故障且重试预算耗尽", e))
                 }
             }
@@ -314,6 +321,7 @@ internal class PlaybackCdnDataSource(
 
     override fun close() {
         if (isClosed.compareAndSet(false, true)) {
+            synchronized(this) { connectionTracker?.unregister(this) }
             onDataSourceClosed(this)
 
             // 取消当前会话正在运行的后台探测
@@ -370,6 +378,7 @@ internal class PlaybackCdnDataSource(
         isInitialOpen: Boolean,
     ): Long {
         val isCrossHost = targetHost != session.initialHost
+        val connectionGeneration = session.networkGeneration.get()
         // 跨主机镜像节点准入检查：必须指纹全部就绪且已被列入已验证备选节点列表，严禁未经采样验证跨源连接
         if (isCrossHost) {
             if (!session.isFingerprintReady.get() || !session.backupNodes.contains(targetHost)) {
@@ -529,6 +538,11 @@ internal class PlaybackCdnDataSource(
                 val contentLength = response.body?.contentLength() ?: -1L
                 bytesRemaining = if (length != C.LENGTH_UNSET.toLong()) length else contentLength
                 streamAcquired = true
+                session.markVerifiedHost(targetHost, connectionGeneration)
+                synchronized(this) {
+                    if (!isClosed.get() && bytesRemaining != 0L)
+                        connectionTracker?.register(this, targetHost)
+                }
                 return bytesRemaining
             }
 
@@ -629,6 +643,11 @@ internal class PlaybackCdnDataSource(
                 bytesRemaining =
                     if (length != C.LENGTH_UNSET.toLong()) minOf(length, rangeLen) else rangeLen
                 streamAcquired = true
+                session.markVerifiedHost(targetHost, connectionGeneration)
+                synchronized(this) {
+                    if (!isClosed.get() && bytesRemaining != 0L)
+                        connectionTracker?.register(this, targetHost)
+                }
                 return bytesRemaining
             }
 
@@ -821,6 +840,7 @@ internal class PlaybackCdnDataSource(
 
     /** 安全关闭并清理当前连接流。 */
     private fun closeCurrentStream() {
+        synchronized(this) { connectionTracker?.unregister(this) }
         try {
             activeCall?.cancel()
         } catch (_: Exception) {}
@@ -929,6 +949,7 @@ internal class PlaybackCdnDataSource(
                                     session.sampleFingerprints[index] = hash
                                 }
                                 session.isFingerprintReady.set(true)
+                                session.markVerifiedHost(session.initialHost, generation)
                             }
                         }
 

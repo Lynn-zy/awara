@@ -304,6 +304,37 @@ class PlaybackCdnDataSourceTest {
         }
     }
 
+    /** 可用数量基于验证结果，排除冷却和退役；换网络后旧代次响应不得恢复旧集合。 */
+    @Test
+    fun availableHostsExcludeUnverifiedCoolingRetiredAndOldNetworkResults() {
+        val url = TEST_URL.toHttpUrl()
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        assertTrue(session.availableHosts(0).isEmpty())
+        session.markVerifiedHost(url.host, 0)
+        assertEquals(listOf(url.host), session.availableHosts(0))
+        session.backupNodes.addAll(listOf("hime.iwara.tv", "silverwolf.iwara.tv"))
+        assertEquals(1, session.availableHosts(0).size)
+        session.allowsCrossCdn = true
+        session.isFingerprintReady.set(true)
+        assertEquals(3, session.availableHosts(0).size)
+        session.setCooldown("hime.iwara.tv", 1000, 0)
+        assertEquals(2, session.availableHosts(500).size)
+        assertEquals(3, session.availableHosts(1000).size)
+        session.retireHost("silverwolf.iwara.tv")
+        assertEquals(2, session.availableHosts(1000).size)
+        session.invalidateNetwork()
+        session.markVerifiedHost(url.host, 0)
+        assertTrue(session.availableHosts(1000).isEmpty())
+        session.markVerifiedHost(url.host, session.networkGeneration.get())
+        assertEquals(listOf(url.host), session.availableHosts(1000))
+    }
+
     /** 主源流式传输中完成备选镜像探测后主动切源，严格从已交付偏移续传且携带独立 ETag。 */
     @Test(timeout = 30_000)
     fun activeStreamSwitchToVerifiedMirrorResumesAtExactDeliveredOffset() {
@@ -377,9 +408,13 @@ class PlaybackCdnDataSourceTest {
         val directory =
             DownloadCdnDirectory(client = client, directoryUrl = server.url("/directory"))
 
+        val snapshots =
+            CopyOnWriteArrayList<me.rerere.awara.data.diagnostics.CdnConnectionSnapshot>()
+        val tracker = me.rerere.awara.data.diagnostics.CdnConnectionTracker { snapshots.add(it) }
         val source =
             createSource(
                 session = session,
+                connectionTracker = tracker,
                 scope = testScope,
                 directory = directory,
                 urlResolver = { url ->
@@ -394,6 +429,8 @@ class PlaybackCdnDataSourceTest {
             // 1. open 以未知长度打开主源
             val openLength = source.open(spec(position = 0, length = -1L))
             assertEquals(totalBytes.toLong(), openLength)
+            assertEquals(listOf("acheron.iwara.tv"), tracker.snapshot.value.hosts)
+            assertEquals(1, session.availableHosts(System.currentTimeMillis()).size)
 
             // 2. 先读一段数据，记录已实际交付的 offset（可能小于请求长度）
             val initialBuffer = ByteArray(16 * 1024)
@@ -405,6 +442,9 @@ class PlaybackCdnDataSourceTest {
             // 3. 等待后台探测完成（保证主源 3 点 + mirror 3 点抽样指纹完全核验）
             runBlocking { withTimeout(5_000) { session.probeJob!!.join() } }
 
+            assertEquals(1, tracker.snapshot.value.connectionCount)
+            assertEquals(1, tracker.snapshot.value.nodeCount)
+
             // 4. 断言 backupNodes 包含 mirror 且独立维护各自强 ETag
             assertTrue(
                 "backupNodes 必须包含已验证的 silverwolf 镜像节点",
@@ -412,15 +452,18 @@ class PlaybackCdnDataSourceTest {
             )
             assertEquals("\"primary\"", session.etagByHost["acheron.iwara.tv"])
             assertEquals("\"mirror\"", session.etagByHost["silverwolf.iwara.tv"])
+            assertEquals(2, session.availableHosts(System.currentTimeMillis()).size)
 
             // 换网络后丢弃旧候选并重新验证，不重置会话失败预算，也不动已交付偏移。
             session.failureCount.set(1)
             session.invalidateNetwork()
             assertTrue(session.backupNodes.isEmpty())
+            assertTrue(session.availableHosts(System.currentTimeMillis()).isEmpty())
             assertEquals(1, session.networkGeneration.get())
             source.revalidateSources()
             runBlocking { withTimeout(5_000) { session.probeJob!!.join() } }
             assertTrue(session.backupNodes.contains("silverwolf.iwara.tv"))
+            assertEquals(2, session.availableHosts(System.currentTimeMillis()).size)
             assertEquals(1, session.failureCount.get())
             assertEquals(deliveredOffset, source.currentPosition)
 
@@ -437,6 +480,12 @@ class PlaybackCdnDataSourceTest {
 
             val completeData = initialBytes + remainingStream.toByteArray()
             assertArrayEquals(videoData, completeData)
+            assertTrue(
+                snapshots.any {
+                    it.hosts == listOf("silverwolf.iwara.tv") && it.connectionCount == 1
+                }
+            )
+            assertEquals(0, tracker.snapshot.value.connectionCount)
 
             // 6. 核查 server 请求记录：确认 mirror 非 sample 媒体 Range 正好从已交付 offset 起到 totalend，且 If-Range 为
             // "mirror"，绝不为 "primary"
@@ -478,6 +527,7 @@ class PlaybackCdnDataSourceTest {
         scope: CoroutineScope = CoroutineScope(Dispatchers.IO + Job().apply { cancel() }),
         directory: DownloadCdnDirectory = DownloadCdnDirectory(client = client),
         urlResolver: (HttpUrl) -> HttpUrl = { server.url(it.encodedPath + "?" + it.encodedQuery) },
+        connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
         refresh: suspend (String) -> String? = { null },
     ): PlaybackCdnDataSource {
         val url = TEST_URL.toHttpUrl()
@@ -500,6 +550,7 @@ class PlaybackCdnDataSourceTest {
             coroutineScope = scope,
             onDataSourceClosed = {},
             urlResolver = urlResolver,
+            connectionTracker = connectionTracker,
         )
     }
 

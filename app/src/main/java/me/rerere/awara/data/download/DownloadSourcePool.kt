@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.util.await
 import okhttp3.Call
@@ -58,6 +59,7 @@ internal class DownloadSourcePool(
     private val networkIdentity: () -> String = { "" },
     private val resolve: (HttpUrl, String) -> HttpUrl = DownloadCdnPolicy::candidateUrl,
     private val now: () -> Long = System::currentTimeMillis,
+    private val connectionTracker: CdnConnectionTracker? = null,
 ) {
     private class Node(
         var source: DownloadCdnSource,
@@ -96,6 +98,31 @@ internal class DownloadSourcePool(
     var primaryUrl: HttpUrl = originalUrl.toHttpUrl()
         private set
 
+    /**
+     * 发布当前已验证且未处于冷却/退役状态的可用 CDN 节点主机名集合。
+     *
+     * 关键设计与死锁避免：
+     * 1. 锁内仅快照提取当前可选 nodes 主机名（unavailableUntil <= now()），若 identityFailed 则为空；
+     * 2. 在锁外调用 connectionTracker.updateAvailableHosts，避免在持有源池监视器锁期间调用外部组件或触发 registry 回调；
+     * 3. 仅发布已完成抽样验证（或已被 bind 验证）的节点，不将未验证的目录候选提前计入可用。
+     */
+    private fun publishAvailableHosts() {
+        val tracker = connectionTracker ?: return
+        val availableHosts =
+            synchronized(this) {
+                if (identityFailed) {
+                    emptyList()
+                } else {
+                    val currentTime = now()
+                    nodes.values
+                        .filter { it.unavailableUntil <= currentTime }
+                        .map { it.source.host }
+                        .distinct()
+                }
+            }
+        tracker.updateAvailableHosts(availableHosts)
+    }
+
     /** 原始节点尚未成功时，只从可信目录尝试有限替代，不拼接未经验证的旧数据。 */
     suspend fun recoverPrimary(error: IOException): Boolean {
         if (failures.incrementAndGet() > DownloadCdnPolicy.MAX_FAILURES) return false
@@ -121,20 +148,28 @@ internal class DownloadSourcePool(
     }
 
     /** 已有的主节点探测结果直接作为任务锚点，不等待目录或额外样本才开始下载。 */
-    @Synchronized
     fun bind(totalBytes: Long, validator: String) {
-        total = totalBytes
-        anchorValidator = validator
-        nodes.clear()
-        nodes[primaryUrl.host] =
-            Node(DownloadCdnSource(primaryUrl, validator, primaryUrl.host, generation))
+        synchronized(this) {
+            total = totalBytes
+            anchorValidator = validator
+            nodes.clear()
+            nodes[primaryUrl.host] =
+                Node(DownloadCdnSource(primaryUrl, validator, primaryUrl.host, generation))
+        }
+        // 主源经外部探测验证后绑定，初始可用节点为 1
+        publishAvailableHosts()
     }
 
     /** 正在恢复的文件若更换了主节点，应先比对上次保存的内容抽样而不是全局比较 ETag。 */
     suspend fun matchesFingerprint(expected: String): Boolean {
         val sampled = samples(primaryUrl, anchorValidator)
         fingerprint = sampled.second
-        return sampled.second == expected
+        val matches = sampled.second == expected
+        if (!matches) {
+            synchronized(this) { identityFailed = true }
+            publishAvailableHosts()
+        }
+        return matches
     }
 
     fun startDiscovery(owner: CoroutineScope): Job {
@@ -165,18 +200,26 @@ internal class DownloadSourcePool(
                             val sampled = samples(candidate, null)
                             if (sampled.second != primarySamples.second)
                                 throw DownloadCdnIntegrityException()
-                            synchronized(this@DownloadSourcePool) {
-                                if (networkAtStart == network) {
-                                    nodes[host] =
-                                        Node(
-                                            DownloadCdnSource(
-                                                candidate,
-                                                sampled.first,
-                                                host,
-                                                generation,
+                            val added =
+                                synchronized(this@DownloadSourcePool) {
+                                    if (networkAtStart == network) {
+                                        nodes[host] =
+                                            Node(
+                                                DownloadCdnSource(
+                                                    candidate,
+                                                    sampled.first,
+                                                    host,
+                                                    generation,
+                                                )
                                             )
-                                        )
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 }
+                            if (added) {
+                                // 抽样验证通过加入节点池后，增加可用节点数量
+                                publishAvailableHosts()
                             }
                             // 两个已验证备选足以提供双路及一次换源，不遍历全部目录。
                             if (synchronized(this@DownloadSourcePool) { nodes.size >= 3 }) break
@@ -189,7 +232,10 @@ internal class DownloadSourcePool(
                 } catch (exception: CancellationException) {
                     throw exception
                 } catch (exception: IOException) {
-                    if (exception is DownloadCdnIntegrityException) identityFailed = true
+                    if (exception is DownloadCdnIntegrityException) {
+                        synchronized(this@DownloadSourcePool) { identityFailed = true }
+                        publishAvailableHosts()
+                    }
                     // 目录或样本无法取得时仍保留主节点双路，不影响已有成功传输。
                 }
             }
@@ -211,6 +257,8 @@ internal class DownloadSourcePool(
                 scope?.let { launchDiscovery(it) }
             }
         }
+        // 网络变化剔除旧备选，或者冷却期到期后重新发布最新可用节点
+        publishAvailableHosts()
         select()?.let {
             return it
         }
@@ -263,6 +311,8 @@ internal class DownloadSourcePool(
                     )
         synchronized(this) { nodes[source.host]?.unavailableUntil = cooldown }
         if (action == CdnFailureAction.RETIRE_FILE_NODE) rememberUnavailable(source.host)
+        // 节点进入冷却或退役后立即发布减少后的可用主机列表
+        publishAvailableHosts()
         discovery?.join()
         return synchronized(this) { nodes.values.any { it.unavailableUntil <= now() } }
     }
@@ -274,17 +324,32 @@ internal class DownloadSourcePool(
             if (refreshed || refreshLink == null) return@withLock false
             refreshed = true
             val updated = refreshLink.invoke().toHttpUrl()
-            if (updated.toString().videoDownloadResourceKey() != resourceKey)
+            if (updated.toString().videoDownloadResourceKey() != resourceKey) {
+                synchronized(this) { identityFailed = true }
+                publishAvailableHosts()
                 throw DownloadCdnIntegrityException()
+            }
             if (total == 0L) {
                 primaryUrl = updated
                 generation++
                 return@withLock true
             }
             val anchorUrl = resolve(updated, primaryUrl.host)
-            val sampled = samples(anchorUrl, anchorValidator)
-            if (fingerprint != null && fingerprint != sampled.second)
+            val sampled =
+                try {
+                    samples(anchorUrl, anchorValidator)
+                } catch (e: Exception) {
+                    if (e is DownloadCdnIntegrityException) {
+                        synchronized(this) { identityFailed = true }
+                        publishAvailableHosts()
+                    }
+                    throw e
+                }
+            if (fingerprint != null && fingerprint != sampled.second) {
+                synchronized(this) { identityFailed = true }
+                publishAvailableHosts()
                 throw DownloadCdnIntegrityException()
+            }
             synchronized(this) {
                 generation++
                 primaryUrl = anchorUrl
@@ -299,6 +364,7 @@ internal class DownloadSourcePool(
                         )
                 }
             }
+            publishAvailableHosts()
             true
         }
 

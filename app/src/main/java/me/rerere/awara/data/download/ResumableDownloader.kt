@@ -14,6 +14,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.util.await
 import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -29,6 +30,7 @@ internal constructor(
     private val cdnDirectory: DownloadCdnDirectory? = null,
     private val refreshLink: (suspend () -> String)? = null,
     private val networkIdentity: () -> String = { "" },
+    private val connectionTracker: CdnConnectionTracker? = null,
 ) {
     suspend fun download(
         url: String,
@@ -58,11 +60,16 @@ internal constructor(
                         onBindCall,
                         onUnbindCall,
                         networkIdentity,
+                        connectionTracker = connectionTracker,
                     )
                 } else null
             // 分块与双路固定启用；只有远端不具备安全分块条件时才降级为普通传输。
             val completed =
-                SegmentedDownloader(okHttpClient, sourcePool = pool)
+                SegmentedDownloader(
+                        okHttpClient,
+                        sourcePool = pool,
+                        connectionTracker = connectionTracker,
+                    )
                     .download(
                         url = url,
                         targetFile = targetFile,
@@ -170,6 +177,7 @@ internal constructor(
                     onBindCall?.invoke(call)
 
                     val retryNeeded = coroutineScope {
+                        val connectionToken = Any()
                         // 协程取消时立即中止底层 OkHttp Call 以解除阻塞读
                         val watcher =
                             launch(start = CoroutineStart.UNDISPATCHED) {
@@ -234,6 +242,11 @@ internal constructor(
                                     val bodyStream =
                                         response.body?.byteStream()
                                             ?: throw IOException("Empty response body")
+                                    // 校验通过，读取 200 正文前登记活跃 CDN 连接
+                                    connectionTracker?.register(
+                                        connectionToken,
+                                        response.request.url.host,
+                                    )
                                     readResponseBody(
                                         input = bodyStream,
                                         targetFile = targetFile,
@@ -338,7 +351,7 @@ internal constructor(
                                 val expectedNewBytes = expectedRangeBodyLen - overlapLength
 
                                 if (expectedNewBytes == 0L) {
-                                    // 全量文件探测验证完成，确认流结束并安全返回
+                                    // 全量文件探测验证完成，确认流结束并安全返回（纯探测不计入正文连接）
                                     val extra = bodyStream.read()
                                     if (extra != -1) {
                                         throw IOException(
@@ -347,7 +360,11 @@ internal constructor(
                                     }
                                     onProgress(targetFile.length(), totalBytes)
                                 } else {
-                                    // 仅写入 offset 后新字节
+                                    // 仅写入 offset 后新字节：正式读取正文前登记活跃 CDN 连接
+                                    connectionTracker?.register(
+                                        connectionToken,
+                                        response.request.url.host,
+                                    )
                                     val append = currentOffset > 0L
                                     readResponseBody(
                                         input = bodyStream,
@@ -367,6 +384,7 @@ internal constructor(
                             currentCoroutineContext().ensureActive()
                             throw exception
                         } finally {
+                            connectionTracker?.unregister(connectionToken)
                             watcher.cancel()
                             onUnbindCall?.invoke(call)
                         }

@@ -26,6 +26,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlin.math.abs
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.ui.LocalRouterProvider
@@ -39,6 +40,51 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class DownloadTaskCardTest {
     @get:Rule val compose = createComposeRule()
+
+    /** 未开启时不渲染诊断行；同节点双路只显示一个主机，结束归零，关闭立即移除。 */
+    @Test
+    fun cdnDebugLineUpdatesAndCanBeHidden() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val snapshot = mutableStateOf<CdnConnectionSnapshot?>(null)
+        compose.setContent {
+            val router = rememberNavController()
+            CompositionLocalProvider(LocalRouterProvider provides router) {
+                MaterialTheme {
+                    Box(Modifier.width(320.dp)) {
+                        DownloadTaskCard(
+                            task = sampleTask(DownloadTaskStatus.RUNNING, 25L),
+                            isOperating = false,
+                            onPause = {},
+                            onResume = {},
+                            onCancel = {},
+                            onRetryCleanup = {},
+                            cdnSnapshot = snapshot.value,
+                        )
+                    }
+                }
+            }
+        }
+        val availableText = context.getString(R.string.cdn_connection_debug_available, 3)
+        val activeText =
+            "$availableText · ${context.getString(R.string.cdn_connection_debug_connected, "acheron, hime")}"
+        compose.onNodeWithText(activeText).assertDoesNotExist()
+        compose.runOnIdle {
+            snapshot.value =
+                CdnConnectionSnapshot(
+                    listOf("acheron.iwara.tv", "acheron.iwara.tv", "hime.iwara.tv"),
+                    2,
+                    3,
+                    3,
+                )
+        }
+        compose.onNodeWithText(activeText).assertIsDisplayed()
+        compose.runOnIdle { snapshot.value = CdnConnectionSnapshot() }
+        val idleText =
+            "${context.getString(R.string.cdn_connection_debug_available, 0)} · ${context.getString(R.string.cdn_connection_debug_connected, context.getString(R.string.cdn_connection_debug_idle))}"
+        compose.onNodeWithText(idleText).assertIsDisplayed()
+        compose.runOnIdle { snapshot.value = null }
+        compose.onNodeWithText(idleText).assertDoesNotExist()
+    }
 
     @Test
     fun lightThemeKeepsCompleteTrackVisibleAcrossDownloadStates() {

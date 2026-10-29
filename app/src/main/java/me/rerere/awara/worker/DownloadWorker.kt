@@ -122,6 +122,8 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         return withContext(Dispatchers.IO) {
             transferMutex.withLock {
                 downloadManager.beginActiveCalls(taskId)
+                val connectionTracker =
+                    downloadManager.connectionRegistry.registerWorker(taskId, id.toString())
                 try {
                     val task =
                         appDatabase.downloadTaskDao().getTask(taskId)
@@ -262,6 +264,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     }
                                     .getOrDefault("")
                             },
+                            connectionTracker = connectionTracker,
                         )
 
                     transferInProgress = true
@@ -601,6 +604,8 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     Result.failure()
                 } finally {
                     downloadManager.finishActiveCalls(taskId)
+                    // 释放本代次连接跟踪器（代次守卫：过期旧 Worker 不得清理或覆盖新代次）
+                    downloadManager.connectionRegistry.unregisterWorker(taskId, id.toString())
                     withContext(NonCancellable) {
                         appDatabase
                             .downloadTaskDao()

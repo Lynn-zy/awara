@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -108,7 +109,7 @@ class MultiCdnDownloadTest {
             }
         }
 
-    private fun pool(): DownloadSourcePool =
+    private fun pool(tracker: CdnConnectionTracker? = null): DownloadSourcePool =
         DownloadSourcePool(
             url,
             client,
@@ -123,6 +124,7 @@ class MultiCdnDownloadTest {
                     .encodedQuery(original.encodedQuery)
                     .build()
             },
+            connectionTracker = tracker,
         )
 
     private fun bound(call: Call) {
@@ -140,8 +142,10 @@ class MultiCdnDownloadTest {
         runBlocking<Unit> {
             withTimeout(15000) {
                 val file = temporary.newFile()
+                val tracker = CdnConnectionTracker()
+                val sourcePool = pool(tracker)
                 assertTrue(
-                    SegmentedDownloader(client, block, pool())
+                    SegmentedDownloader(client, block, sourcePool, connectionTracker = tracker)
                         .download(
                             url,
                             file,
@@ -161,6 +165,11 @@ class MultiCdnDownloadTest {
                 )
                 assertTrue(maximum.get() <= 2)
                 assertEquals(0, active.get())
+                // 验证在多节点传输完成后，可用节点数达到 2（主+镜像），且活动连接已全部释放为 0
+                assertEquals(2, tracker.snapshot.value.availableCdnCount)
+                assertEquals(0, tracker.snapshot.value.connectionCount)
+                tracker.close()
+                assertEquals(0, tracker.snapshot.value.availableCdnCount)
             }
         }
 
@@ -212,8 +221,10 @@ class MultiCdnDownloadTest {
             withTimeout(15000) {
                 mirrorFailure = true
                 val file = temporary.newFile()
+                val tracker = CdnConnectionTracker()
+                val sourcePool = pool(tracker)
                 assertTrue(
-                    SegmentedDownloader(client, block, pool())
+                    SegmentedDownloader(client, block, sourcePool, connectionTracker = tracker)
                         .download(
                             url,
                             file,
@@ -229,6 +240,8 @@ class MultiCdnDownloadTest {
                 assertTrue(DownloadRangeStore.verifiedState(file)!!.isComplete)
                 assertTrue(maximum.get() <= 2)
                 assertEquals(0, active.get())
+                // 镜像 503 失败后被退役/冷却，可用节点自动剔除镜像，仅保留主节点可用
+                assertEquals(1, tracker.snapshot.value.availableCdnCount)
             }
         }
 

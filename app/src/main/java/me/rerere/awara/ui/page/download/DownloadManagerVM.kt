@@ -19,6 +19,9 @@ import me.rerere.awara.ui.component.common.UiState
 import org.koin.core.component.KoinComponent
 
 class DownloadManagerVM(private val downloadManager: DownloadManager) : ViewModel(), KoinComponent {
+    /** 直接观察内存中的实际传输状态，不持久化调试数据或重建下载任务。 */
+    val connectionSnapshots = downloadManager.connectionSnapshots
+
     var state by mutableStateOf(DownloadManagerState())
         private set
 

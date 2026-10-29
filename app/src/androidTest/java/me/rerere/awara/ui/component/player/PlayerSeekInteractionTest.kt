@@ -59,6 +59,7 @@ import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.runBlocking
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -190,6 +191,8 @@ class PlayerSeekInteractionTest {
         fullscreen: Boolean = false,
         fontScale: Float = 1f,
         fullscreenState: MutableState<Boolean> = mutableStateOf(fullscreen),
+        cdnDebugEnabled: MutableState<Boolean> = mutableStateOf(false),
+        connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
     ): Fixture {
         val handler = RecordingPlayer()
         handler.mediaItem = sourceUri?.let { MediaItem.fromUri(it) }
@@ -206,6 +209,7 @@ class PlayerSeekInteractionTest {
                 "Source",
                 {},
                 savePlaybackSpeedPreference = { savedSpeed.value = it },
+                connectionTracker = connectionTracker,
             )
         state.duration = 60_000L
         state.playing = true
@@ -237,6 +241,7 @@ class PlayerSeekInteractionTest {
                                 previewPosition = position,
                                 controls = controls,
                                 minimalProgressEnabled = minimalProgressEnabled.value,
+                                cdnDebugEnabled = cdnDebugEnabled.value,
                                 controllerTrail = {
                                     IconButton(
                                         onClick = {
@@ -275,6 +280,70 @@ class PlayerSeekInteractionTest {
             mounted,
             savedSpeed,
         )
+    }
+
+    /** 播放、Slider、时间与全屏按钮必须在同一行，细轨道仍有完整触摸高度。 */
+    @Test
+    fun cdnDebugIsOnlineOnlyAndDoesNotOverlapControls() {
+        val enabled = mutableStateOf(false)
+        val tracker = CdnConnectionTracker()
+        tracker.register(Any(), "acheron.iwara.tv")
+        tracker.updateAvailableHosts(
+            listOf("acheron.iwara.tv", "hime.iwara.tv", "silverwolf.iwara.tv")
+        )
+        val fixture =
+            renderController(
+                sourceUri = "https://acheron.iwara.tv/view",
+                thumbnailEnabled = mutableStateOf(false),
+                cdnDebugEnabled = enabled,
+                connectionTracker = tracker,
+                fontScale = 1.3f,
+            )
+        compose.onNodeWithTag("player_cdn_debug").assertDoesNotExist()
+        compose.runOnIdle { enabled.value = true }
+        val label =
+            compose
+                .onNodeWithTag("player_cdn_debug")
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+                .boundsInRoot
+        val top = compose.onNodeWithTag("player_top_controls").fetchSemanticsNode().boundsInRoot
+        val bottom =
+            compose.onNodeWithTag("player_bottom_controls").fetchSemanticsNode().boundsInRoot
+        assertTrue(label.top >= top.bottom)
+        assertTrue(label.bottom <= bottom.top)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val availableLine =
+            compose
+                .onNodeWithText(context.getString(R.string.cdn_connection_debug_available, 3))
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+                .boundsInRoot
+        val connectedLine =
+            compose
+                .onNodeWithText(
+                    context.getString(R.string.cdn_connection_debug_connected, "acheron")
+                )
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+                .boundsInRoot
+        assertTrue(availableLine.bottom <= connectedLine.top)
+        assertEquals(availableLine.left, connectedLine.left, 1f)
+        compose.runOnIdle { fixture.state.controllerState.hide() }
+        compose.onNodeWithTag("player_cdn_debug").assertIsDisplayed()
+        for (uri in listOf("file:///video.mp4", "content://media/video/1")) {
+            compose.runOnIdle {
+                fixture.player.mediaItem = MediaItem.fromUri(uri)
+                fixture.player.listeners.toList().forEach {
+                    it.onMediaItemTransition(
+                        fixture.player.mediaItem,
+                        Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED,
+                    )
+                }
+            }
+            compose.onNodeWithTag("player_cdn_debug").assertDoesNotExist()
+        }
+        tracker.close()
     }
 
     /** 播放、Slider、时间与全屏按钮必须在同一行，细轨道仍有完整触摸高度。 */

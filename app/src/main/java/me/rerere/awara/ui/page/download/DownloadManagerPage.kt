@@ -39,6 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,17 +61,24 @@ import com.airbnb.lottie.compose.LottieConstants
 import com.airbnb.lottie.compose.animateLottieCompositionAsState
 import com.airbnb.lottie.compose.rememberLottieComposition
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
+import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.CdnConnectionDebugText
 import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.util.prettyFileSize
+import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
+    val cdnDebugEnabled by rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
+    val connections =
+        if (cdnDebugEnabled) vm.connectionSnapshots.collectAsState().value else emptyMap()
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     var taskToCancel by remember { mutableStateOf<DownloadTask?>(null) }
@@ -329,6 +337,9 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                         onResume = { checkAndResume(task) },
                         onCancel = { taskToCancel = task },
                         onRetryCleanup = { vm.cancel(task.taskId) },
+                        cdnSnapshot =
+                            if (cdnDebugEnabled) connections[task.taskId] ?: CdnConnectionSnapshot()
+                            else null,
                     )
                 }
             }
@@ -345,6 +356,7 @@ internal fun DownloadTaskCard(
     onResume: () -> Unit,
     onCancel: () -> Unit,
     onRetryCleanup: () -> Unit,
+    cdnSnapshot: CdnConnectionSnapshot? = null,
 ) {
     val router = LocalRouterProvider.current
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -467,6 +479,10 @@ internal fun DownloadTaskCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+
+                cdnSnapshot?.let { snapshot ->
+                    CdnConnectionDebugText(snapshot, Modifier.fillMaxWidth())
                 }
 
                 if (!task.error.isNullOrBlank() && task.status != DownloadTaskStatus.RETRYING) {

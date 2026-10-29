@@ -21,10 +21,12 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.data.entity.Video
@@ -86,6 +88,13 @@ class DownloadManager(
     private val activeCalls = ConcurrentHashMap<String, DownloadCallGroup>()
     val launchPolicy = DownloadLaunchPolicy()
 
+    /** 内存管理的下载活动连接注册中心（按任务及代次隔离） */
+    val connectionRegistry = DownloadConnectionRegistry()
+
+    /** 公开 StateFlow<Map<String, CdnConnectionSnapshot>> 供父 UI / 外部模块实时观察 */
+    val connectionSnapshots: StateFlow<Map<String, CdnConnectionSnapshot>>
+        get() = connectionRegistry.connections
+
     fun isAutoResumeEnabled(): Boolean {
         return runCatching {
                 mmkvPreference.getBoolean(
@@ -137,6 +146,7 @@ class DownloadManager(
     }
 
     fun cancelActiveCall(taskId: String) {
+        connectionRegistry.resetTask(taskId)
         activeCalls.computeIfAbsent(taskId) { DownloadCallGroup() }.cancel()
     }
 
@@ -480,6 +490,7 @@ class DownloadManager(
                     database.downloadTaskDao().updateStatus(taskId, DownloadTaskStatus.CANCELLING)
                     launchPolicy.revokeAuthorization(taskId)
                     cancelActiveCall(taskId)
+                    connectionRegistry.resetTask(taskId)
                     DownloadNotifications.cancelTaskNotification(context, taskId)
 
                     WorkManager.getInstance(context)

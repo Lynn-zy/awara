@@ -56,6 +56,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -100,6 +101,8 @@ import java.net.URI
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
+import me.rerere.awara.ui.component.common.CdnConnectionDebugText
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
 
@@ -142,6 +145,7 @@ fun Player(
         rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
     val minimalProgressEnabled by
         rememberBooleanPreference(key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS, default = true)
+    val cdnDebugEnabled by rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
     val previewPosition by
         rememberStringPreference(
             key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
@@ -160,6 +164,7 @@ fun Player(
                 thumbnailEnabled = thumbnailEnabled,
                 minimalProgressEnabled = minimalProgressEnabled,
                 previewPosition = SeekPreviewPosition.fromKey(previewPosition),
+                cdnDebugEnabled = cdnDebugEnabled,
             )
         }
     }
@@ -183,6 +188,7 @@ internal fun PlayerController(
     previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
     controls: PlayerGestureControlState = rememberPlayerGestureControls(state),
     minimalProgressEnabled: Boolean = true,
+    cdnDebugEnabled: Boolean = false,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val windowInfo = LocalWindowInfo.current
@@ -203,6 +209,12 @@ internal fun PlayerController(
     val renderedGeneration = mediaGeneration
     // 下载页直接设源，读取播放内核实际 URI，而不是仅依赖详情页维护的媒体摘要。
     val sourceUri = state.player.currentMediaItem?.localConfiguration?.uri?.toString()
+    val showCdnDebug =
+        cdnDebugEnabled &&
+            sourceUri?.let {
+                android.net.Uri.parse(it).scheme?.lowercase() in listOf("http", "https")
+            } == true
+    val connections = if (showCdnDebug) state.cdnConnections.collectAsState().value else null
     // 关闭时移出组合并释放调度器，避免只隐藏图片却继续网络请求或本地解码。
     val thumbnail =
         if (thumbnailEnabled) {
@@ -499,7 +511,29 @@ internal fun PlayerController(
                     }
                 } else {
                     // 保留预览与提示的布局基准，不让隐藏标题改变手势中画面位置。
-                    Spacer(Modifier.height(48.dp))
+                    Box(Modifier.height(48.dp).fillMaxWidth()) {
+                        connections?.let {
+                            CdnConnectionDebugText(
+                                it,
+                                Modifier.align(Alignment.TopStart)
+                                    .background(Color.Black.copy(alpha = 0.7f))
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    .testTag("player_cdn_debug"),
+                                stacked = true,
+                            )
+                        }
+                    }
+                }
+
+                // 标题可见时独占两行，避免覆盖返回键、标题或位于剩余空间内的手势提示。
+                if (controller.topVisible && connections != null) {
+                    CdnConnectionDebugText(
+                        connections,
+                        Modifier.background(Color.Black.copy(alpha = 0.7f))
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("player_cdn_debug"),
+                        stacked = true,
+                    )
                 }
 
                 // 两种位置都只使用现有剩余空间，不挤压 Slider 或底部按钮。

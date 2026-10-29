@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
+import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.data.download.DownloadLaunchPolicy
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
@@ -170,6 +171,17 @@ internal fun PlayerMultiCdnSetting(enabled: MutableState<Boolean>, modifier: Mod
         title = { Text(stringResource(R.string.setting_player_multi_cdn_title)) },
         text = { Text(stringResource(R.string.setting_player_multi_cdn_text)) },
         icon = { Icon(Icons.Outlined.AltRoute, null) },
+    )
+}
+
+/** 临时调试入口集中保留，后续移除时不影响下载和播放的业务设置。 */
+@Composable
+internal fun CdnConnectionDebugSetting(enabled: MutableState<Boolean>) {
+    SettingBooleanItem(
+        state = enabled,
+        title = { Text(stringResource(R.string.setting_cdn_connection_debug_title)) },
+        text = { Text(stringResource(R.string.setting_cdn_connection_debug_text)) },
+        icon = { Icon(Icons.Outlined.Source, null) },
     )
 }
 
@@ -562,6 +574,11 @@ fun SettingPage() {
                             default = false,
                         )
                     PlayerMultiCdnSetting(enabled = multiCdnPlay)
+
+                    CdnConnectionDebugSetting(
+                        enabled =
+                            rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
+                    )
 
                     // 下载视频播放器选择：内置（internal）/ 第三方（external）
                     SettingPickerItem(
