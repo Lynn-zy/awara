@@ -14,6 +14,8 @@ import me.rerere.awara.di.repoModule
 import me.rerere.awara.di.tagI18NModule
 import me.rerere.awara.di.userCaseModule
 import me.rerere.awara.di.viewModelModule
+import me.rerere.awara.ui.component.player.PlayerCache
+import me.rerere.awara.ui.component.player.PlayerCacheLifecycleCallbacks
 import me.rerere.awara.ui.registerErrorHandler
 import me.rerere.compose_setting.preference.initComposeSetting
 import okhttp3.OkHttpClient
@@ -26,6 +28,8 @@ import org.koin.core.context.startKoin
 class App : Application(), ImageLoaderFactory, KoinComponent {
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(PlayerCacheLifecycleCallbacks())
+        PlayerCache.purgeOnStartup(this)
         registerErrorHandler()
         initComposeSetting()
         registerNotificationChannel()
@@ -38,7 +42,7 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
                 repoModule,
                 tagI18NModule,
                 viewModelModule,
-                userCaseModule
+                userCaseModule,
             )
         }
     }
@@ -46,7 +50,10 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
     private fun registerNotificationChannel() {
         val notificationManagerCompat = NotificationManagerCompat.from(this)
         notificationManagerCompat.createNotificationChannel(
-            NotificationChannelCompat.Builder("download", NotificationManagerCompat.IMPORTANCE_DEFAULT)
+            NotificationChannelCompat.Builder(
+                    "download",
+                    NotificationManagerCompat.IMPORTANCE_DEFAULT,
+                )
                 .setName("Download")
                 .build()
         )
@@ -55,14 +62,8 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .okHttpClient(get<OkHttpClient>())
-            .components {
-                add(SvgDecoder.Factory())
-            }
-            .memoryCache {
-                MemoryCache.Builder(this)
-                    .maxSizePercent(0.25)
-                    .build()
-            }
+            .components { add(SvgDecoder.Factory()) }
+            .memoryCache { MemoryCache.Builder(this).maxSizePercent(0.25).build() }
             .diskCache {
                 DiskCache.Builder()
                     .directory(this.cacheDir.resolve("image_cache"))

@@ -8,7 +8,6 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
-import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.effect.Presentation
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -89,14 +88,10 @@ internal suspend fun loadNetworkSeekThumbnail(
             .setConnectTimeoutMs(1500)
             .setReadTimeoutMs(1500)
             .setTransferListener(listener)
-    val playbackCache = PlayerCache.get(context)
-    val previewFactory =
-        CacheDataSource.Factory()
-            .setCache(requireNotNull(playbackCache.cache))
-            .setCacheKeyFactory(playbackCache.cacheKeyFactory)
-            .setUpstreamDataSourceFactory(upstream)
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-    return extractSeekThumbnailFrame(context, request, previewFactory)
+    val previewFactory = PlayerCache.get(context, upstream)
+    return PlayerCache.acquireLease().use {
+        extractSeekThumbnailFrame(context, request, previewFactory)
+    }
 }
 
 /** 使用真实播放时间轴异步取附近关键帧；工厂由调用者提供，支持缓存源与可控的测试源。 官方默认优先软件解码，避免主动争抢主播放器的硬件解码器；关闭时释放独立解码资源。 */
