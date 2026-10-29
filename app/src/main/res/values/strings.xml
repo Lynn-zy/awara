@@ -135,9 +135,13 @@
     <string name="setting_look_work_mode_text">The video cover will be blurred</string>
     <string name="setting_player">Player Setting</string>
     <string name="setting_player_auto_play_title">Autoplay</string>
-    <string name="setting_player_auto_play_text">Automatically start buffering and playing the video</string>
+    <string name="setting_player_auto_play_text">Play automatically on the details page; when off, still prebuffer and display the first video frame</string>
     <string name="setting_player_loop_title">Loop Playback</string>
     <string name="setting_player_loop_text">Automatically restart playback after playback ends</string>
+    <string name="setting_player_expanded_buffer_title">Expand playback buffer</string>
+    <string name="setting_player_expanded_buffer_text">Increases pre-buffered data to reduce stuttering, using more memory and network traffic; takes effect next time a video is opened</string>
+    <string name="setting_player_multi_cdn_title">Multi-CDN playback (Experimental)</string>
+    <string name="setting_player_multi_cdn_text">Switches source when buffering is insufficient after verifying available nodes, without speed guarantee; takes effect next time a video is opened</string>
     <string name="setting_about">About</string>
     <string name="setting_about_source_title">Source Code</string>
     <string name="setting_about_source_text">Github</string>

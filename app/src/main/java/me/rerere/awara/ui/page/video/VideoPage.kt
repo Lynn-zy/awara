@@ -58,7 +58,6 @@ import me.rerere.awara.ui.page.video.layout.VideoPagePhoneLayout
 import me.rerere.awara.ui.page.video.layout.VideoPageTabletLayout
 import me.rerere.awara.ui.theme.DynamicColorTheme
 import me.rerere.awara.ui.theme.rememberDynamicColorSchemeState
-import me.rerere.compose_setting.preference.mmkvPreference
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -67,7 +66,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
 
     var requestOrientation by rememberRequestedScreenOrientation()
     val windowSize = rememberWindowSizeClass()
-    val state = rememberPlayerState()
+    val state = rememberPlayerState(refreshPlaybackSource = vm::refreshPlaybackSource)
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
 
@@ -161,9 +160,6 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                         state.currentMediaItem?.localConfiguration?.uri == localUri
                 if (!isSameLocalItem) {
                     state.updatePlayerItems(listOf(playerItem))
-                    if (mmkvPreference.getBoolean("setting.auto_play", true)) {
-                        state.prepare()
-                    }
                 }
             }
         } else if (!vm.state.isLocalPlayback && vm.state.urls.isNotEmpty()) {
@@ -191,9 +187,6 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     }
             if (!isSameOnlineItems) {
                 state.updatePlayerItems(onlineItems)
-                if (mmkvPreference.getBoolean("setting.auto_play", true)) {
-                    state.prepare()
-                }
             }
         } else if (!vm.state.loading && vm.state.localDownload == null && vm.state.urls.isEmpty()) {
             state.updatePlayerItems(emptyList())

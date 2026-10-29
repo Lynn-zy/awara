@@ -89,9 +89,13 @@
     <string name="setting_look_work_mode_text">サムネイルがぼやけます</string>
     <string name="setting_player">プレーヤーの設定</string>
     <string name="setting_player_auto_play_title">自動再生</string>
-    <string name="setting_player_auto_play_text">動画の読み込みと自動再生を開始する</string>
+    <string name="setting_player_auto_play_text">詳細画面で自動再生します。オフでも先読みし、動画の最初のフレームを表示します</string>
     <string name="setting_player_loop_title">ループ</string>
     <string name="setting_player_loop_text">再生終了後、自動再生する</string>
+    <string name="setting_player_expanded_buffer_title">バッファを拡張</string>
+    <string name="setting_player_expanded_buffer_text">先読み量を増やしてカクつきを抑えます。メモリと通信量が増加します。次回動画を開いた際に有効になります</string>
+    <string name="setting_player_multi_cdn_title">マルチ CDN 再生（実験的）</string>
+    <string name="setting_player_multi_cdn_text">利用可能なノードを検証後、バッファ不足時に自動で接続先を切り替えます（高速化を保証するものではありません）。次回動画を開いた際に有効になります</string>
     <string name="setting_about">アプリについて</string>
     <string name="setting_about_source_title">ソースコード</string>
     <string name="setting_about_source_text">GitHub</string>

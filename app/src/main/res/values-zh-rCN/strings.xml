@@ -132,9 +132,13 @@
     <string name="setting_look_work_mode_text">视频封面会模糊</string>
     <string name="setting_player">播放器设置</string>
     <string name="setting_player_auto_play_title">自动播放</string>
-    <string name="setting_player_auto_play_text">自动开始缓冲和播放视频</string>
+    <string name="setting_player_auto_play_text">进入详情页后自动播放；关闭后仍会预缓冲并显示视频首帧</string>
     <string name="setting_player_loop_title">循环播放</string>
     <string name="setting_player_loop_text">播放结束后自动重新开始播放</string>
+    <string name="setting_player_expanded_buffer_title">扩大缓冲区</string>
+    <string name="setting_player_expanded_buffer_text">增加预读数据量以减少卡顿，会消耗更多内存与流量；下次打开视频生效</string>
+    <string name="setting_player_multi_cdn_title">多 CDN 播放（实验）</string>
+    <string name="setting_player_multi_cdn_text">验证可用节点后在缓冲不足时自动换源，非保证提速；下次打开视频生效</string>
     <string name="setting_about">关于</string>
     <string name="setting_about_source_title">源代码</string>
     <string name="setting_about_source_text">Github</string>

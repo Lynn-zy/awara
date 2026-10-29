@@ -89,9 +89,13 @@
     <string name="setting_look_work_mode_text">視頻封面會模糊</string>
     <string name="setting_player">播放器設置</string>
     <string name="setting_player_auto_play_title">自動播放</string>
-    <string name="setting_player_auto_play_text">自動開始緩沖和播放視頻</string>
+    <string name="setting_player_auto_play_text">進入詳情頁後自動播放；關閉後仍會預先緩衝並顯示影片首幀</string>
     <string name="setting_player_loop_title">循環播放</string>
     <string name="setting_player_loop_text">播放結束後自動重新開始播放</string>
+    <string name="setting_player_expanded_buffer_title">擴大緩衝區</string>
+    <string name="setting_player_expanded_buffer_text">增加預讀數據量以減少卡頓，會消耗更多記憶體與流量；下次打開影片生效</string>
+    <string name="setting_player_multi_cdn_title">多 CDN 播放（實驗）</string>
+    <string name="setting_player_multi_cdn_text">驗證可用節點後在緩衝不足時自動切換節點，非保證提速；下次打開影片生效</string>
     <string name="setting_about">關於</string>
     <string name="setting_about_source_title">源代碼</string>
     <string name="setting_about_source_text">Github</string>

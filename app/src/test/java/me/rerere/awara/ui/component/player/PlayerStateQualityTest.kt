@@ -30,6 +30,8 @@ class PlayerStateQualityTest {
         var lastSetMediaItem: MediaItem? = null
         var lastSetPositionMs: Long? = null
         var prepareCount: Int = 0
+        var playCount: Int = 0
+        var playbackStateValue: Int = Player.STATE_IDLE
         val listeners = mutableListOf<Player.Listener>()
         var isPlayingValue: Boolean = false
         var isLoadingValue: Boolean = false
@@ -54,6 +56,12 @@ class PlayerStateQualityTest {
                 name == "isLoading" && argCount == 0 -> return isLoadingValue
                 name == "getCurrentPosition" && argCount == 0 -> return currentPositionValue
                 name == "getPlayWhenReady" && argCount == 0 -> return playWhenReadyValue
+                name == "getPlaybackState" && argCount == 0 -> return playbackStateValue
+                name == "play" && argCount == 0 -> {
+                    playCount++
+                    playWhenReadyValue = true
+                    return null
+                }
                 name == "setPlayWhenReady" && argCount == 1 -> {
                     playWhenReadyValue = args!![0] as Boolean
                     return null
@@ -194,6 +202,61 @@ class PlayerStateQualityTest {
         assertEquals(item720.mediaItem, handler.lastSetMediaItem)
         // 自动降级播放不应覆盖用户全局偏好
         assertNull(persistedPreference)
+    }
+
+    /** 进入详情页时准备媒体，但不得把用户的暂停意图改成自动播放。 */
+    @Test
+    fun sourceReadyPreparesWhilePaused() {
+        val (player, handler) = createMockPlayer()
+        val state = PlayerState(player, "Source", {})
+        state.updatePlayerItems(
+            listOf(
+                PlayerState.PlayerItem("Source", MediaItem.Builder().setMediaId("video").build())
+            )
+        )
+        assertEquals(1, handler.prepareCount)
+        assertFalse(handler.playWhenReadyValue)
+    }
+
+    /** 点击已预缓冲的暂停视频只改变播放意图，不重新准备或替换媒体。 */
+    @Test
+    fun readyPlayUsesPreparedMediaWithoutAnotherPrepare() {
+        val (player, handler) = createMockPlayer()
+        val state = PlayerState(player, "Source", {})
+        val mediaItem = MediaItem.Builder().setMediaId("video").build()
+        state.updatePlayerItems(listOf(PlayerState.PlayerItem("Source", mediaItem)))
+        handler.playbackStateValue = Player.STATE_READY
+        state.play()
+        assertEquals(1, handler.prepareCount)
+        assertEquals(1, handler.playCount)
+        assertEquals(mediaItem, handler.lastSetMediaItem)
+        assertTrue(handler.playWhenReadyValue)
+    }
+
+    /** READY 不冒充视频帧，只有 renderer 的真实首帧回调才能置位。 */
+    @Test
+    fun renderedFirstFrameRequiresRendererCallbackAndResetsForNewMedia() {
+        val (player, _) = createMockPlayer()
+        val state = PlayerState(player, "Source", {})
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_READY)
+        assertFalse(state.renderedFirstFrame)
+        state.playbackListener.onRenderedFirstFrame()
+        assertTrue(state.renderedFirstFrame)
+        state.updatePlayerItems(
+            listOf(PlayerState.PlayerItem("Source", MediaItem.Builder().setMediaId("next").build()))
+        )
+        assertFalse(state.renderedFirstFrame)
+    }
+
+    /** 已就绪的静止首帧可以继续预读，后台加载不能遮住可播放画面。 */
+    @Test
+    fun pausedReadyPrebufferDoesNotShowCentralSpinner() {
+        val (player, _) = createMockPlayer()
+        val state = PlayerState(player, "Source", {})
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_READY)
+        state.playbackListener.onIsLoadingChanged(true)
+        assertTrue(state.isLoading)
+        assertFalse(state.showLoading)
     }
 
     @Test

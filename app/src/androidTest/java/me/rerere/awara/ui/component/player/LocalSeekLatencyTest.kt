@@ -23,10 +23,13 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.ceil
+import me.rerere.compose_setting.preference.mmkvPreference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -178,6 +181,170 @@ class LocalSeekLatencyTest {
             }
             compose.waitForIdle()
             fixture?.delete()
+        }
+    }
+
+    /**
+     * 验证暂停状态下装载视频源能够正常完成准备并渲染真实首帧，且在主动调用 play() 之前绝不触发实际播放。
+     *
+     * 测试流程：
+     * 1. 临时保存 setting.auto_play 原始配置并置为 false，确保播放器初始化意图为暂停；在 finally 中还原。
+     * 2. 将测试视频素材 resume-fixture.mp4 复制到目标应用缓存目录，并在 finally 中删除。
+     * 3. setContent 挂载真实 Surface（PlayerBase 320x180）与 rememberPlayerState，并使用 SideEffect 记录 state。
+     * 4. 在 compose.runOnIdle 中添加真实 Player.Listener 监听器，记录 onRenderedFirstFrame 出帧回调与
+     *    onIsPlayingChanged 播放状态（记录 everPlayed），并将音量置为 0 防止测试环境噪声（严禁调用 play 获取首帧）。
+     * 5. 通过 updatePlayerItems 正常装入本地 MediaItem，不手工调用 prepare 或提前 play，不使用抽帧器伪造。
+     * 6. 等待最多 15 秒接收真实首帧渲染回调，并断言：
+     *     - state.renderedFirstFrame == true
+     *     - player.playWhenReady == false
+     *     - !playerState.playing && !player.isPlaying
+     *     - everPlayed == false
+     *     - player.currentPosition ≈ 0
+     *     - state == STATE_READY 且 showLoading == false
+     * 7. 主动调用 state.play()，并在 5 秒内等待 onIsPlayingChanged(true) 回调，确认同 MediaItem 且开始播放。
+     * 8. 在 finally 中将 mounted 置为 false 卸载组件，释放播放器资源，完成善后清理。
+     */
+    @Test
+    fun pausedSourcePreparesAndRendersRealFirstFrameBeforePlay() {
+        // 保存原自动播放偏好，临时设置为 false，确保初始化状态不主动播放
+        val previousAutoPlay = mmkvPreference.getBoolean("setting.auto_play", true)
+        mmkvPreference.putBoolean("setting.auto_play", false)
+
+        var fixture: File? = null
+        val mounted = mutableStateOf(true)
+        var state: PlayerState? = null
+
+        // 用于等待首帧真实渲染的回调门闩
+        val renderedFirstFrameLatch = CountDownLatch(1)
+        // 记录出帧过程中是否发生过非预期的播放行为
+        val everPlayed = AtomicBoolean(false)
+        // 用于等待调用 play() 后真正开始播放的回调门闩
+        val playingLatch = CountDownLatch(1)
+        // 记录播放器底层发生的异常
+        val playbackError = AtomicReference<PlaybackException?>()
+
+        val listener =
+            object : Player.Listener {
+                override fun onRenderedFirstFrame() {
+                    renderedFirstFrameLatch.countDown()
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        everPlayed.set(true)
+                        playingLatch.countDown()
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    playbackError.set(error)
+                    renderedFirstFrameLatch.countDown()
+                    playingLatch.countDown()
+                }
+            }
+
+        try {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            // 复制 asset 中的测试素材到目标缓存文件
+            fixture =
+                File.createTempFile(
+                        "paused-first-frame-",
+                        ".mp4",
+                        instrumentation.targetContext.cacheDir,
+                    )
+                    .apply {
+                        instrumentation.context.assets.open("media/resume-fixture.mp4").use { input
+                            ->
+                            outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+            val source = Uri.fromFile(fixture)
+            val targetMediaItem = MediaItem.fromUri(source)
+
+            // 挂载包含真实 SurfaceView 的 PlayerBase 组件与 PlayerState
+            compose.setContent {
+                if (mounted.value) {
+                    val playerState = rememberPlayerState()
+                    SideEffect { state = playerState }
+                    PlayerBase(Modifier.size(320.dp, 180.dp), playerState)
+                }
+            }
+
+            compose.runOnIdle {
+                val playerState = checkNotNull(state) { "PlayerState 未成功完成初始化" }
+                val player = playerState.player
+                // 静音以避免测试音频干扰，但绝对不调用 play() 获取首帧
+                player.volume = 0f
+                player.addListener(listener)
+                // 正常通过 PlayerState.updatePlayerItems 提交本地清晰度源，依赖播放器内部逻辑准备并渲染首帧
+                playerState.updatePlayerItems(
+                    listOf(PlayerState.PlayerItem("Source", targetMediaItem))
+                )
+            }
+
+            // 最多等待 15 秒等待真实 Surface 渲染器出帧
+            assertTrue("首帧真实渲染回调超时（15秒）", renderedFirstFrameLatch.await(15, TimeUnit.SECONDS))
+            assertEquals("播放器出现异常", null, playbackError.get()?.errorCodeName)
+
+            // 断言首帧出帧后处于暂停、就绪且未播放的状态
+            compose.runOnIdle {
+                val playerState = checkNotNull(state)
+                val player = playerState.player
+                assertTrue(
+                    "PlayerState.renderedFirstFrame 应置为 true",
+                    playerState.renderedFirstFrame,
+                )
+                assertFalse("播放意图 playWhenReady 应为 false", player.playWhenReady)
+                assertFalse("PlayerState.playing 应为 false", playerState.playing)
+                assertFalse("底层 player.isPlaying 应为 false", player.isPlaying)
+                assertFalse("首帧出帧全过程中绝不应触发实际播放", everPlayed.get())
+                assertTrue(
+                    "首帧渲染后进度应接近 0ms（实际=${player.currentPosition}ms）",
+                    abs(player.currentPosition) <= 100L,
+                )
+                assertEquals(
+                    "PlayerState.state 应为 READY",
+                    PlayerState.State.READY,
+                    playerState.state,
+                )
+                assertEquals(
+                    "底层 playbackState 应为 STATE_READY",
+                    Player.STATE_READY,
+                    player.playbackState,
+                )
+                assertFalse("已处于 READY 且未在播放时 showLoading 应为 false", playerState.showLoading)
+                assertEquals("当前媒体项应与目标媒体项一致", targetMediaItem, playerState.currentMediaItem)
+            }
+
+            // 主动调用 play()，等待 5 秒内触发实际播放
+            compose.runOnIdle { checkNotNull(state).play() }
+            assertTrue("调用 play() 后等待开始播放超时（5秒）", playingLatch.await(5, TimeUnit.SECONDS))
+            assertEquals("播放器出现异常", null, playbackError.get()?.errorCodeName)
+
+            compose.runOnIdle {
+                val playerState = checkNotNull(state)
+                val player = playerState.player
+                assertTrue("调用 play() 后 PlayerState.playing 应为 true", playerState.playing)
+                assertTrue("调用 play() 后 player.isPlaying 应为 true", player.isPlaying)
+                assertTrue("调用 play() 后 player.playWhenReady 应为 true", player.playWhenReady)
+                assertEquals("开始播放后应保持相同的 mediaItem", targetMediaItem, playerState.currentMediaItem)
+            }
+        } finally {
+            // 卸载组件并释放播放器资源
+            runCatching {
+                compose.runOnIdle {
+                    state?.player?.apply {
+                        removeListener(listener)
+                        pause()
+                    }
+                    mounted.value = false
+                }
+                compose.waitForIdle()
+            }
+            // 清理临时测试素材文件
+            fixture?.delete()
+            // 恢复 setting.auto_play 偏好设置
+            mmkvPreference.putBoolean("setting.auto_play", previousAutoPlay)
         }
     }
 

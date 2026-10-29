@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.LinearScale
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -71,6 +72,7 @@ import me.rerere.awara.data.download.DownloadLaunchPolicy
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.DownloadTransferSettings
+import me.rerere.awara.data.playback.PlaybackSettings
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.Avatar
 import me.rerere.awara.ui.component.common.BackButton
@@ -127,6 +129,47 @@ internal fun PlayerMinimalProgressSetting(
         state = enabled,
         title = { Text(stringResource(R.string.setting_player_minimal_progress)) },
         icon = { Icon(Icons.Outlined.LinearScale, null) },
+    )
+}
+
+/**
+ * 扩大缓冲区设置项。
+ *
+ * 开启后增加预读数据量以减少卡顿，会消耗更多内存与流量；下次打开视频生效。
+ *
+ * @param enabled 扩大缓冲区开关状态包装对象
+ * @param modifier 外部修饰符
+ */
+@Composable
+internal fun PlayerExpandedBufferSetting(
+    enabled: MutableState<Boolean>,
+    modifier: Modifier = Modifier,
+) {
+    SettingBooleanItem(
+        modifier = modifier,
+        state = enabled,
+        title = { Text(stringResource(R.string.setting_player_expanded_buffer_title)) },
+        text = { Text(stringResource(R.string.setting_player_expanded_buffer_text)) },
+        icon = { Icon(Icons.Outlined.Layers, null) },
+    )
+}
+
+/**
+ * 多 CDN 播放（实验）设置项。
+ *
+ * 开启后验证可用节点并在缓冲不足时自动换源，非保证提速；下次打开视频生效。
+ *
+ * @param enabled 多 CDN 播放开关状态包装对象
+ * @param modifier 外部修饰符
+ */
+@Composable
+internal fun PlayerMultiCdnSetting(enabled: MutableState<Boolean>, modifier: Modifier = Modifier) {
+    SettingBooleanItem(
+        modifier = modifier,
+        state = enabled,
+        title = { Text(stringResource(R.string.setting_player_multi_cdn_title)) },
+        text = { Text(stringResource(R.string.setting_player_multi_cdn_text)) },
+        icon = { Icon(Icons.Outlined.AltRoute, null) },
     )
 }
 
@@ -503,6 +546,22 @@ fun SettingPage() {
                                 default = true,
                             )
                     )
+
+                    // 扩大缓冲区配置项（默认关闭）
+                    val expandedBuffer =
+                        rememberBooleanPreference(
+                            key = PlaybackSettings.KEY_EXPANDED_BUFFER,
+                            default = false,
+                        )
+                    PlayerExpandedBufferSetting(enabled = expandedBuffer)
+
+                    // 多 CDN 播放（实验）配置项（默认关闭）
+                    val multiCdnPlay =
+                        rememberBooleanPreference(
+                            key = PlaybackSettings.KEY_MULTI_CDN,
+                            default = false,
+                        )
+                    PlayerMultiCdnSetting(enabled = multiCdnPlay)
 
                     // 下载视频播放器选择：内置（internal）/ 第三方（external）
                     SettingPickerItem(

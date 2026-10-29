@@ -2,15 +2,18 @@ package me.rerere.awara.ui.component.player
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.net.ConnectivityManager
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.media3.common.C
@@ -18,10 +21,19 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
+import java.io.File
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import me.rerere.awara.data.download.DownloadCdnDirectory
+import me.rerere.awara.data.playback.PlaybackBufferSample
+import me.rerere.awara.data.playback.PlaybackCdnController
+import me.rerere.awara.data.playback.PlaybackSettings
 import me.rerere.compose_setting.preference.mmkvPreference
+import okhttp3.OkHttpClient
 
 private const val TAG = "PlayerState"
 
@@ -42,28 +54,82 @@ internal fun normalizePlaybackSpeed(value: Float): Float =
 @OptIn(UnstableApi::class)
 @Composable
 fun rememberPlayerState(
-    builder: (Context) -> ExoPlayer = {
-        ExoPlayer.Builder(it, DefaultMediaSourceFactory(PlayerCache.get(it)))
-            .setHandleAudioBecomingNoisy(true)
-            // 对照验证：停止按视频帧率请求刷新率，保留系统对屏幕刷新率的选择。
-            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-            .build()
-            .apply {
-                playWhenReady = true
-                repeatMode =
-                    if (mmkvPreference.getBoolean("setting.loop_play", false))
-                        Player.REPEAT_MODE_ONE
-                    else Player.REPEAT_MODE_OFF
-            }
-    }
+    refreshPlaybackSource: suspend (String) -> String? = { null },
+    builder: ((Context) -> ExoPlayer)? = null,
 ): PlayerState {
     val context = LocalContext.current
+    val settings = remember { PlaybackSettings.read() }
+    val refreshSource by rememberUpdatedState(refreshPlaybackSource)
+    val cdnController = remember {
+        if (builder == null && settings.multiCdnEnabled) {
+            val client = OkHttpClient()
+            PlaybackCdnController(
+                client = client,
+                directory =
+                    DownloadCdnDirectory(
+                        client,
+                        File(context.cacheDir, "playback-cdn-directory.json"),
+                    ),
+                refreshSource = { refreshSource(it) },
+            )
+        } else null
+    }
     val initialSpeed = remember {
         val speedStr = mmkvPreference.getString(PREFERENCE_KEY_PLAYER_SPEED, "1.0")
         normalizePlaybackSpeed(speedStr?.toFloatOrNull() ?: 1f)
     }
     val state by remember {
-        mutableStateOf(PlayerState(player = builder(context), initialPlaybackSpeed = initialSpeed))
+        val player =
+            builder?.invoke(context)
+                ?: ExoPlayer.Builder(
+                        context,
+                        DefaultMediaSourceFactory(
+                            PlayerCache.get(
+                                context,
+                                cdnController ?: DefaultHttpDataSource.Factory(),
+                            )
+                        ),
+                    )
+                    .setLoadControl(PlayerBufferPolicy.create(settings))
+                    .setHandleAudioBecomingNoisy(true)
+                    .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+                    .build()
+                    .apply {
+                        // 自动播放只控制播放意图；暂停时同样允许准备媒体和正常渲染首帧。
+                        playWhenReady = mmkvPreference.getBoolean("setting.auto_play", true)
+                        repeatMode =
+                            if (mmkvPreference.getBoolean("setting.loop_play", false))
+                                Player.REPEAT_MODE_ONE
+                            else Player.REPEAT_MODE_OFF
+                    }
+        mutableStateOf(
+            PlayerState(
+                player = player,
+                initialPlaybackSpeed = initialSpeed,
+                onBufferDiscontinuity = { cdnController?.resetBufferDetection() },
+            )
+        )
+    }
+    LaunchedEffect(state, cdnController) {
+        val controller = cdnController ?: return@LaunchedEffect
+        val connectivity =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        while (isActive) {
+            val player = state.player
+            controller.sample(
+                sourceUri = player.currentMediaItem?.localConfiguration?.uri?.toString(),
+                sample =
+                    PlaybackBufferSample(
+                        bufferedDurationMs = player.totalBufferedDuration,
+                        playbackSpeed = player.playbackParameters.speed,
+                        playWhenReady = player.playWhenReady,
+                        isBuffering = player.playbackState == Player.STATE_BUFFERING,
+                        isLoading = player.isLoading,
+                    ),
+                networkIdentity = connectivity.activeNetwork?.toString() ?: "offline",
+            )
+            delay(500)
+        }
     }
     DisposableEffect(context) {
         state.playing = state.player.isPlaying
@@ -86,6 +152,7 @@ fun rememberPlayerState(
         state.duration = state.player.duration
         Log.i(TAG, "rememberPlayerState: Init")
         onDispose {
+            cdnController?.close()
             state.player.run {
                 removeListener(state.playbackListener)
                 release()
@@ -109,10 +176,15 @@ class PlayerState(
     private val savePlaybackSpeedPreference: (Float) -> Unit = { speed ->
         mmkvPreference.putString(PREFERENCE_KEY_PLAYER_SPEED, speed.toString())
     },
+    private val onBufferDiscontinuity: () -> Unit = {},
 ) {
     var playing by mutableStateOf(false)
     var state by mutableStateOf(State.IDLE)
     var isLoading by mutableStateOf(false)
+
+    /** 只由视频渲染器实际出帧回调置位，READY 本身不表示画面已显示。 */
+    var renderedFirstFrame by mutableStateOf(false)
+        private set
 
     /** 跟随播放器而非界面实例保存，进入全屏时不恢复已隐藏的控制区。 */
     internal val controllerState = PlayerControllerState()
@@ -122,10 +194,22 @@ class PlayerState(
         private set
 
     val showLoading: Boolean
-        get() = !playing && (state == State.BUFFERING || isLoading)
+        get() = !playing && (state == State.BUFFERING || (isLoading && state != State.READY))
 
     val playbackListener: Player.Listener =
         object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                renderedFirstFrame = true
+            }
+
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                onBufferDiscontinuity()
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 super.onPlaybackStateChanged(playbackState)
                 this@PlayerState.state =
@@ -200,6 +284,8 @@ class PlayerState(
     }
 
     fun updatePlayerItems(items: List<PlayerItem>) {
+        renderedFirstFrame = false
+        onBufferDiscontinuity()
         playerItems = items
         if (items.isEmpty()) {
             player.clearMediaItems()
@@ -217,6 +303,8 @@ class PlayerState(
                 player.setMediaItem(targetItem.mediaItem, position)
                 player.playWhenReady = playWhenReady
                 currentMediaItem = targetItem.mediaItem
+                // 准备不等于播放，暂停也可以下载缓冲并显示解码后的第一帧。
+                player.prepare()
             }
         }
     }
@@ -231,6 +319,8 @@ class PlayerState(
         // 切换清晰度保留当前进度与播控状态，不强制开始播放
         val currentPosition = player.currentPosition.coerceAtLeast(0L)
         val playWhenReady = player.playWhenReady
+        renderedFirstFrame = false
+        onBufferDiscontinuity()
         player.setMediaItem(item.mediaItem, currentPosition)
         player.playWhenReady = playWhenReady
         player.prepare()
@@ -276,7 +366,7 @@ class PlayerState(
     }
 
     fun play() {
-        player.prepare()
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
         player.play()
     }
 

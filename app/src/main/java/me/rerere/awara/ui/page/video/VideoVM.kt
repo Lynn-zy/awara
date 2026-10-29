@@ -28,9 +28,13 @@ import me.rerere.awara.data.entity.Playlist
 import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.VideoFile
+import me.rerere.awara.data.entity.fixUrl
+import me.rerere.awara.data.entity.playableVideoFiles
+import me.rerere.awara.data.entity.qualityKey
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.entity.toAvatarUrl
 import me.rerere.awara.data.history.HistoryRetention
+import me.rerere.awara.data.playback.playbackResourceKey
 import me.rerere.awara.data.repo.CommentRepo
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
@@ -636,6 +640,39 @@ class VideoVM(
             state = state.copy(playlistLoading = false)
         }
     }
+
+    /** 传输层鉴权失败时只刷新相同文件和画质，不更新 urls 以免重建媒体、丢失已有缓冲。 */
+    internal suspend fun refreshPlaybackSource(oldUrl: String): String? =
+        withContext(Dispatchers.Main.immediate) {
+            if (state.isLocalPlayback || state.video == null || state.onlineUrlsLoading)
+                return@withContext null
+            val resourceKey = playbackResourceKey(oldUrl)
+            val previous =
+                state.urls.playableVideoFiles().firstOrNull {
+                    playbackResourceKey(it.src.view.fixUrl()) == resourceKey
+                } ?: return@withContext null
+            state = state.copy(onlineUrlsLoading = true, onlineUrlsError = null)
+            try {
+                val refreshed = mediaRepo.parseVideoUrl(mediaRepo.getVideo(id)).playableVideoFiles()
+                if (state.isLocalPlayback) return@withContext null
+                refreshed
+                    .firstOrNull {
+                        it.qualityKey == previous.qualityKey &&
+                            playbackResourceKey(it.src.view.fixUrl()) == resourceKey
+                    }
+                    ?.src
+                    ?.view
+                    ?.fixUrl()
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                state =
+                    state.copy(onlineUrlsError = VideoPlaybackCoordinator.sanitizeReason(exception))
+                null
+            } finally {
+                state = state.copy(onlineUrlsLoading = false)
+            }
+        }
 
     // 仅在用户主动请求或切换在线清晰度时按需拉取网络源
     fun requestOnlineUrls(onSuccess: (() -> Unit)? = null) {
