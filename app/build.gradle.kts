@@ -14,8 +14,8 @@ android {
         applicationId = "me.rerere.awara"
         minSdk = 26
         targetSdk = 33
-        versionCode = 25
-        versionName = "1.2.5"
+        versionCode = 26
+        versionName = "1.2.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
