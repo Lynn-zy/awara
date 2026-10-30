@@ -132,6 +132,10 @@ internal class PlaybackCdnController(
 
         val session = sessions[targetKey] ?: return
         if (currentResourceKey != targetKey) {
+            // 单次流关闭保留探测，但离开资源后必须停止旧会话的网络请求。
+            for ((key, previous) in sessions) {
+                if (key != targetKey) previous.cancelProbes()
+            }
             monitor.reset()
             currentResourceKey = targetKey
         }

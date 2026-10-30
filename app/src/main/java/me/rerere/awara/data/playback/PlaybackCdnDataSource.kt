@@ -209,11 +209,11 @@ internal class PlaybackCdnDataSource(
         currentPosition = dataSpec.position
         bytesRemaining = dataSpec.length
 
-        // 3. 发起主源连接（不等后台目录与探测，主源优先起播）
+        // 3. 首次主源优先起播；后续定位重开复用会话的验证与吞吐，不固定回到原始节点。
         val resolvedLength =
             connectWithRetry(
                 session = session,
-                targetHost = session.currentUrl.host,
+                targetHost = session.selectOpeningHost(now()),
                 position = currentPosition,
                 length = bytesRemaining,
                 dataSpec = dataSpec,
@@ -324,9 +324,7 @@ internal class PlaybackCdnDataSource(
             synchronized(this) { connectionTracker?.unregister(this) }
             onDataSourceClosed(this)
 
-            // 取消当前会话正在运行的后台探测
-            currentSession?.cancelProbes()
-
+            // 本次媒体流结束不取消会话探测，退出视频与换网由控制器统一取消。
             fallbackDataSource?.let {
                 try {
                     it.close()
@@ -538,7 +536,7 @@ internal class PlaybackCdnDataSource(
                 val contentLength = response.body?.contentLength() ?: -1L
                 bytesRemaining = if (length != C.LENGTH_UNSET.toLong()) length else contentLength
                 streamAcquired = true
-                session.markVerifiedHost(targetHost, connectionGeneration)
+                session.recordMediaConnection(targetHost, connectionGeneration)
                 synchronized(this) {
                     if (!isClosed.get() && bytesRemaining != 0L)
                         connectionTracker?.register(this, targetHost)
@@ -643,7 +641,7 @@ internal class PlaybackCdnDataSource(
                 bytesRemaining =
                     if (length != C.LENGTH_UNSET.toLong()) minOf(length, rangeLen) else rangeLen
                 streamAcquired = true
-                session.markVerifiedHost(targetHost, connectionGeneration)
+                session.recordMediaConnection(targetHost, connectionGeneration)
                 synchronized(this) {
                     if (!isClosed.get() && bytesRemaining != 0L)
                         connectionTracker?.register(this, targetHost)
@@ -700,10 +698,10 @@ internal class PlaybackCdnDataSource(
                     throw (e as? IOException ?: IOException("会话级累计错误超限", e))
                 }
 
-                // 若允许跨源且有已验证备选，换源重试
+                // 重开可能首选镜像，故障回退必须同时考虑仍可用的主源与其他已验证备选。
                 if (session.allowsCrossCdn) {
                     val nextHost =
-                        session.backupNodes.firstOrNull {
+                        (listOf(session.initialHost) + session.backupNodes).distinct().firstOrNull {
                             it != currentAttemptHost && session.isHostAvailable(it, now())
                         }
                     if (nextHost != null) {
@@ -713,6 +711,7 @@ internal class PlaybackCdnDataSource(
                         ) {
                             throw (e as? IOException ?: IOException("会话换源次数已达上限", e))
                         }
+                        session.lastSwitchTimestamp = now()
                         currentAttemptHost = nextHost
                         continue
                     }
@@ -1051,7 +1050,7 @@ internal class PlaybackCdnDataSource(
         generation: Int,
     ): SampleResult? = coroutineScope {
         ensureActive()
-        if (isClosed.get()) return@coroutineScope null
+        if (generation != session.networkGeneration.get()) return@coroutineScope null
         val networkUrl = urlResolver(url)
         val request =
             Request.Builder()
@@ -1062,7 +1061,7 @@ internal class PlaybackCdnDataSource(
 
         val call = probeClient.newCall(request)
         session.activeProbeCalls.add(call)
-        if (isClosed.get()) call.cancel()
+        if (generation != session.networkGeneration.get()) call.cancel()
         val cancellationWatcher =
             launch(start = CoroutineStart.UNDISPATCHED) {
                 try {

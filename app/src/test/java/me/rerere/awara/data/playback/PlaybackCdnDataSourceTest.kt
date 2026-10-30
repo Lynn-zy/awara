@@ -7,6 +7,7 @@ import androidx.media3.datasource.TransferListener
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -518,6 +519,307 @@ class PlaybackCdnDataSourceTest {
         } finally {
             source.close()
             testScope.cancel()
+        }
+    }
+
+    /** 定位首选镜像故障时必须允许回退健康主源，两个节点仍各自携带独立校验器。 */
+    @Test(timeout = 15_000)
+    fun failedPreferredMirrorOpenFallsBackToValidatedPrimary() {
+        val content = ByteArray(4096) { (it % 251).toByte() }
+        val url = TEST_URL.toHttpUrl()
+        val mirror = "silverwolf.iwara.tv"
+        server.dispatcher =
+            object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.requestUrl!!.queryParameter("host") == mirror) {
+                        return MockResponse().setResponseCode(503)
+                    }
+                    val range = request.getHeader("Range")!!.removePrefix("bytes=").split('-')
+                    return rangeResponse(content, range[0].toInt(), range[1].toInt())
+                        .setHeader("ETag", "\"primary\"")
+                }
+            }
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        session.totalBytes = content.size.toLong()
+        session.allowsCrossCdn = true
+        session.isFingerprintReady.set(true)
+        session.backupNodes.add(mirror)
+        session.etagByHost[url.host] = "\"primary\""
+        session.etagByHost[mirror] = "\"mirror\""
+        session.recordMediaConnection(url.host, 0)
+        session.recordThroughput(url.host, 1024, 100)
+        session.recordThroughput(mirror, 8192, 100)
+        val source =
+            createSource(
+                session = session,
+                urlResolver = { original ->
+                    server.url(
+                        "${original.encodedPath}?${original.encodedQuery}&host=${original.host}"
+                    )
+                },
+            )
+        try {
+            source.open(spec(1024, 1024))
+            assertArrayEquals(content.copyOfRange(1024, 2048), readAll(source))
+            val failed = server.takeRequest(1, TimeUnit.SECONDS)!!
+            val recovered = server.takeRequest(1, TimeUnit.SECONDS)!!
+            assertEquals(mirror, failed.requestUrl!!.queryParameter("host"))
+            assertEquals("\"mirror\"", failed.getHeader("If-Range"))
+            assertEquals(url.host, recovered.requestUrl!!.queryParameter("host"))
+            assertEquals("\"primary\"", recovered.getHeader("If-Range"))
+            assertEquals("bytes=1024-2047", recovered.getHeader("Range"))
+            assertEquals(2, session.switchCount.get())
+            assertTrue(session.lastSwitchTimestamp > 0L)
+            assertEquals(2, server.requestCount)
+        } finally {
+            source.close()
+        }
+    }
+
+    /** 定位重开不把高吞吐的未验证、冷却或退役节点纳入候选，也不突破已有换源预算。 */
+    @Test
+    fun openingSelectionExcludesUnverifiedCoolingRetiredAndOverBudgetNodes() {
+        val url = TEST_URL.toHttpUrl()
+        val mirror = "silverwolf.iwara.tv"
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        session.recordMediaConnection(url.host, 0)
+        session.allowsCrossCdn = true
+        session.recordThroughput(url.host, 1024, 100)
+        session.recordThroughput(mirror, 8192, 100)
+        assertEquals(url.host, session.selectOpeningHost(1000))
+        session.isFingerprintReady.set(true)
+        assertEquals("目录候选未验证不能选用", url.host, session.selectOpeningHost(1000))
+        session.backupNodes.add(mirror)
+        session.setCooldown(mirror, 2000, 1000)
+        assertEquals("冷却中的镜像不能选用", url.host, session.selectOpeningHost(1500))
+        session.switchCount.set(PlaybackCdnPolicy.MAX_SWITCH_COUNT)
+        assertEquals("预算用尽不能新换源", url.host, session.selectOpeningHost(4000))
+        session.retireHost(mirror)
+        assertEquals("退役镜像不能选用", url.host, session.selectOpeningHost(5000))
+        assertEquals(PlaybackCdnPolicy.MAX_SWITCH_COUNT, session.switchCount.get())
+    }
+
+    /** 最近节点在全局换源冷却内保持稳定，换网络则必须回主源重验且拒绝旧代次回写。 */
+    @Test
+    fun openingSelectionKeepsRecentHostDuringCooldownAndRevalidatesOnNetworkChange() {
+        val url = TEST_URL.toHttpUrl()
+        val mirror = "silverwolf.iwara.tv"
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        session.recordMediaConnection(url.host, 0)
+        session.allowsCrossCdn = true
+        session.isFingerprintReady.set(true)
+        session.backupNodes.add(mirror)
+        session.recordMediaConnection(mirror, 0)
+        session.recordThroughput(url.host, 8192, 100)
+        session.recordThroughput(mirror, 1024, 100)
+        session.switchCount.set(1)
+        session.lastSwitchTimestamp = 1000
+        assertEquals("换源冷却内不来回切换", mirror, session.selectOpeningHost(1100))
+        session.invalidateNetwork()
+        session.recordMediaConnection(mirror, 0)
+        assertEquals("网络变化后不复用旧镜像", url.host, session.selectOpeningHost(1200))
+        assertTrue(session.availableHosts(1200).isEmpty())
+        assertTrue(session.hostThroughputEwma.isEmpty())
+        assertEquals(1, session.switchCount.get())
+    }
+
+    /** 定位重开应使用已验证且吞吐更优的节点，重复打开同一节点不消耗额外换源预算。 */
+    @Test(timeout = 15_000)
+    fun reopenedStreamSelectsVerifiedFasterHostAndReusesItAtSwitchLimit() {
+        val content = ByteArray(8192) { (it % 251).toByte() }
+        val mirrorHost = "silverwolf.iwara.tv"
+        server.dispatcher =
+            object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val host = request.requestUrl!!.queryParameter("host")!!
+                    val range = request.getHeader("Range")!!.removePrefix("bytes=").split('-')
+                    val etag = if (host == mirrorHost) "\"mirror\"" else "\"primary\""
+                    return rangeResponse(content, range[0].toInt(), range[1].toInt())
+                        .setHeader("ETag", etag)
+                }
+            }
+        val url = TEST_URL.toHttpUrl()
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        val source =
+            createSource(
+                session = session,
+                urlResolver = { original ->
+                    server.url(
+                        "${original.encodedPath}?${original.encodedQuery}&host=${original.host}"
+                    )
+                },
+            )
+        try {
+            source.open(spec(0, 1024))
+            assertArrayEquals(content.copyOfRange(0, 1024), readAll(source))
+            source.close()
+            assertEquals(
+                "bytes=0-1023",
+                server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Range"),
+            )
+            session.backupNodes.add(mirrorHost)
+            session.etagByHost[mirrorHost] = "\"mirror\""
+            session.isFingerprintReady.set(true)
+            session.hostThroughputEwma.clear()
+            session.recordThroughput(url.host, 1024, 100)
+            session.recordThroughput(mirrorHost, 8192, 100)
+
+            source.open(spec(2048, 1024))
+            val mirrorRequest = server.takeRequest(1, TimeUnit.SECONDS)!!
+            assertEquals(
+                "定位重开不能固定回原始源",
+                mirrorHost,
+                mirrorRequest.requestUrl!!.queryParameter("host"),
+            )
+            assertEquals("bytes=2048-3071", mirrorRequest.getHeader("Range"))
+            assertEquals("\"mirror\"", mirrorRequest.getHeader("If-Range"))
+            assertArrayEquals(content.copyOfRange(2048, 3072), readAll(source))
+            source.close()
+            assertEquals(1, session.switchCount.get())
+
+            session.switchCount.set(PlaybackCdnPolicy.MAX_SWITCH_COUNT)
+            source.open(spec(4096, 1024))
+            val reopenedRequest = server.takeRequest(1, TimeUnit.SECONDS)!!
+            assertEquals(
+                "重用同一节点不应被换源上限挡回原始源",
+                mirrorHost,
+                reopenedRequest.requestUrl!!.queryParameter("host"),
+            )
+            assertEquals("bytes=4096-5119", reopenedRequest.getHeader("Range"))
+            assertEquals("\"mirror\"", reopenedRequest.getHeader("If-Range"))
+            assertArrayEquals(content.copyOfRange(4096, 5120), readAll(source))
+            assertEquals(PlaybackCdnPolicy.MAX_SWITCH_COUNT, session.switchCount.get())
+            assertEquals(3, server.requestCount)
+        } finally {
+            source.close()
+        }
+    }
+
+    /** 短时媒体流结束不等于退出视频，镜像应在未承担正文传输时完成会话级验证。 */
+    @Test(timeout = 15_000)
+    fun backgroundDiscoverySurvivesClosedMediaStream() {
+        verifyDiscoveryAfterMediaClose(cancelSession = false)
+    }
+
+    /** 会话退出仍必须取消流关闭后存活的探测，拒绝迟到镜像结果。 */
+    @Test(timeout = 15_000)
+    fun sessionExitCancelsDiscoveryAfterMediaStreamClosed() {
+        verifyDiscoveryAfterMediaClose(cancelSession = true)
+    }
+
+    /** 用首个主源样本闸门固定交错，模拟快速缓冲结束后镜像尚未完成验证的场景。 */
+    private fun verifyDiscoveryAfterMediaClose(cancelSession: Boolean) {
+        val content = ByteArray(64 * 1024) { (it % 251).toByte() }
+        val firstSampleStarted = CountDownLatch(1)
+        val releaseFirstSample = CountDownLatch(1)
+        val mirrorRanges = CopyOnWriteArrayList<String>()
+        server.dispatcher =
+            object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.requestUrl!!.encodedPath == "/directory") {
+                        return MockResponse()
+                            .setBody(
+                                "<table><tr><td>acheron.iwara.tv</td><td>recent=1700GB</td></tr>" +
+                                    "<tr><td>silverwolf.iwara.tv</td><td>recent=1700GB</td></tr></table>"
+                            )
+                    }
+                    val host = request.requestUrl!!.queryParameter("host")!!
+                    val rangeHeader = request.getHeader("Range")!!
+                    if (host == "acheron.iwara.tv" && rangeHeader == "bytes=0-16383") {
+                        firstSampleStarted.countDown()
+                        check(releaseFirstSample.await(5, TimeUnit.SECONDS))
+                    }
+                    if (host == "silverwolf.iwara.tv") mirrorRanges.add(rangeHeader)
+                    val rangeParts = rangeHeader.removePrefix("bytes=").split('-')
+                    val start = rangeParts[0].toInt()
+                    val end = rangeParts[1].toIntOrNull() ?: content.lastIndex
+                    val etag = if (host == "silverwolf.iwara.tv") "\"mirror\"" else "\"primary\""
+                    return rangeResponse(content, start, end).setHeader("ETag", etag)
+                }
+            }
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val url = TEST_URL.toHttpUrl()
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        val tracker = me.rerere.awara.data.diagnostics.CdnConnectionTracker()
+        val source =
+            createSource(
+                session = session,
+                scope = scope,
+                directory =
+                    DownloadCdnDirectory(client = client, directoryUrl = server.url("/directory")),
+                connectionTracker = tracker,
+                urlResolver = { original ->
+                    server.url(
+                        "${original.encodedPath}?${original.encodedQuery}&host=${original.host}"
+                    )
+                },
+            )
+        try {
+            source.open(spec(position = 0, length = 1024))
+            assertTrue("后台探测必须已开始", firstSampleStarted.await(3, TimeUnit.SECONDS))
+            val probeJob = checkNotNull(session.probeJob)
+            assertArrayEquals(content.copyOfRange(0, 1024), readAll(source))
+            source.close()
+            assertEquals("媒体流结束后活动连接应为零", 0, tracker.snapshot.value.connectionCount)
+            if (cancelSession) {
+                scope.cancel()
+                session.cancelProbes()
+            }
+            releaseFirstSample.countDown()
+            runBlocking { withTimeout(5_000) { probeJob.join() } }
+            if (cancelSession) {
+                assertTrue("退出会话必须取消探测", probeJob.isCancelled)
+                assertTrue("取消后不得继续探测镜像", mirrorRanges.isEmpty())
+                assertEquals(1, session.availableHosts(System.currentTimeMillis()).size)
+            } else {
+                assertEquals(
+                    "镜像未传输正文也应被发现",
+                    2,
+                    session.availableHosts(System.currentTimeMillis()).size,
+                )
+                assertEquals(
+                    "镜像请求应只有三段样本",
+                    listOf("bytes=0-16383", "bytes=24576-40959", "bytes=49152-65535"),
+                    mirrorRanges.toList(),
+                )
+            }
+            assertTrue("结束后不应残留活动探测请求", session.activeProbeCalls.isEmpty())
+        } finally {
+            releaseFirstSample.countDown()
+            source.close()
+            scope.cancel()
+            session.cancelProbes()
         }
     }
 

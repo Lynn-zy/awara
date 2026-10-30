@@ -1,5 +1,6 @@
 package me.rerere.awara.data.playback
 
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,6 +35,9 @@ internal class PlaybackCdnSession(
 ) {
     /** 当前使用的有效播放 URL（受签名刷新更新） */
     @Volatile var currentUrl: HttpUrl = initialUrl
+
+    /** 最近通过媒体响应校验的节点，供后续定位重开复用，不改变签名 URL 的资源身份。 */
+    private var lastMediaHost: String = initialHost
 
     /** 媒体文件确切总字节数（由首个合法响应确定） */
     @Volatile var totalBytes: Long? = null
@@ -103,11 +107,49 @@ internal class PlaybackCdnSession(
             hostThroughputEwma.clear()
             cooldownUntil.clear()
             retiredHosts.clear()
+            lastMediaHost = currentUrl.host
         }
 
     /** 验证结果只属于发起请求时的网络代次，旧响应不能恢复已失效的可用数量。 */
     fun markVerifiedHost(host: String, generation: Int) =
         synchronized(this) { if (generation == networkGeneration.get()) verifiedHosts.add(host) }
+
+    /** 只有当前网络代次的合法媒体响应才能更新定位重开时使用的节点。 */
+    fun recordMediaConnection(host: String, generation: Int) =
+        synchronized(this) {
+            if (generation == networkGeneration.get()) {
+                verifiedHosts.add(host)
+                lastMediaHost = host
+            }
+        }
+
+    /** 首次起播不等探测；后续重开按已验证吞吐选源，重用同一节点不消耗换源额度。 */
+    fun selectOpeningHost(now: Long): String =
+        synchronized(this) {
+            if (!allowsCrossCdn || !isFingerprintReady.get()) return@synchronized currentUrl.host
+            val available = availableHosts(now)
+            val previous = lastMediaHost
+            val selected =
+                (listOf(previous) + available)
+                    .distinct()
+                    .filter { it in available }
+                    .maxByOrNull { hostThroughputEwma[it] ?: 0.0 }
+                    ?: return@synchronized currentUrl.host
+            if (selected == previous) return@synchronized previous
+
+            val previousAvailable = previous in available
+            val cooling =
+                previousAvailable &&
+                    lastSwitchTimestamp > 0L &&
+                    now - lastSwitchTimestamp < PlaybackCdnPolicy.SWITCH_COOLDOWN_MS
+            if (switchCount.get() >= PlaybackCdnPolicy.MAX_SWITCH_COUNT || cooling) {
+                if (previousAvailable) return@synchronized previous
+                throw IOException("会话换源预算已用尽，且此前节点已不可用")
+            }
+            switchCount.incrementAndGet()
+            lastSwitchTimestamp = now
+            selected
+        }
 
     /** 与调度器共用退役与冷却判断，只返回当前资源实际可选择的已验证主机。 */
     fun availableHosts(now: Long): List<String> =

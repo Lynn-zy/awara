@@ -3,13 +3,19 @@ package me.rerere.awara.data.playback
 import android.net.Uri
 import androidx.media3.datasource.DataSpec
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import me.rerere.awara.data.download.DownloadCdnDirectory
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
+import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -98,6 +104,79 @@ class PlaybackCdnControllerTest {
         controller.close()
         assertTrue("重新打开的请求没有纳入取消范围", result.get(3, TimeUnit.SECONDS))
         assertEquals(2, server.requestCount)
+    }
+
+    /** 换资源应取消旧样本请求，不能把单次媒体流关闭与资源会话结束混为一谈。 */
+    @Test(timeout = 15_000)
+    fun changingResourceCancelsOldDiscoveryAfterMediaStreamClosed() {
+        val probeStarted = CountDownLatch(1)
+        val releaseProbe = CountDownLatch(1)
+        val probeCancelled = CountDownLatch(1)
+        val client =
+            OkHttpClient.Builder()
+                .eventListener(
+                    object : EventListener() {
+                        override fun callFailed(call: Call, ioe: IOException) {
+                            val request = call.request()
+                            if (
+                                request.url.queryParameter("filename") == "test_Source.mp4" &&
+                                    request.header("Range") == "bytes=0-16383" &&
+                                    call.isCanceled()
+                            )
+                                probeCancelled.countDown()
+                        }
+                    }
+                )
+                .build()
+        server.dispatcher =
+            object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.requestUrl!!.encodedPath == "/directory") {
+                        return MockResponse().setBody("<table></table>")
+                    }
+                    val header = request.getHeader("Range")!!
+                    if (
+                        request.requestUrl!!.queryParameter("filename") == "test_Source.mp4" &&
+                            header == "bytes=0-16383"
+                    ) {
+                        probeStarted.countDown()
+                        check(releaseProbe.await(5, TimeUnit.SECONDS))
+                    }
+                    val range = header.removePrefix("bytes=").split('-')
+                    val start = range[0].toInt()
+                    val end = range[1].toInt()
+                    return MockResponse()
+                        .setResponseCode(206)
+                        .setHeader("Content-Range", "bytes $start-$end/65536")
+                        .setHeader("ETag", "\"stable\"")
+                        .setBody(Buffer().write(ByteArray(end - start + 1)))
+                }
+            }
+        controller.close()
+        controller =
+            PlaybackCdnController(
+                client = client,
+                directory = DownloadCdnDirectory(client, directoryUrl = server.url("/directory")),
+                refreshSource = { null },
+                urlResolver = { server.url(it.encodedPath + "?" + it.encodedQuery) },
+            )
+        val previous = controller.createDataSource()
+        val next = controller.createDataSource()
+        val nextUri = Uri.parse(spec.uri.toString().replace("test_Source.mp4", "other_Source.mp4"))
+        val idle = PlaybackBufferSample(0L, 1f, false, false, false)
+        try {
+            previous.open(DataSpec.Builder().setUri(spec.uri).setLength(1024).build())
+            controller.sample(spec.uri.toString(), idle)
+            assertTrue("旧资源探测必须已启动", probeStarted.await(3, TimeUnit.SECONDS))
+            previous.close()
+            next.open(DataSpec.Builder().setUri(nextUri).setLength(1024).build())
+            controller.sample(nextUri.toString(), idle)
+            assertTrue("切换资源后旧探测应及时取消", probeCancelled.await(1, TimeUnit.SECONDS))
+        } finally {
+            releaseProbe.countDown()
+            previous.close()
+            next.close()
+        }
     }
 
     @Test
