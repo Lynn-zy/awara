@@ -364,6 +364,8 @@ class RouterActivity : ComponentActivity() {
 
                 composable("setting") { SettingPage() }
 
+                composable("user_blocklist") { me.rerere.awara.ui.page.user.UserBlocklistPage() }
+
                 composable("search") { SearchPage() }
 
                 composable("history") { HistoryPage() }

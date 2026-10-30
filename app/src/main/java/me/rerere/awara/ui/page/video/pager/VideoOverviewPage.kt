@@ -93,6 +93,7 @@ import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.component.iwara.TagRow
 import me.rerere.awara.ui.component.player.VideoQualityDownloadDialog
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
+import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.util.openUrl
 import me.rerere.awara.util.shareLink
@@ -103,6 +104,15 @@ import org.koin.compose.koinInject
 @Composable
 fun VideoOverviewPage(vm: VideoVM) {
     val state = vm.state
+    // 仅过滤额外推荐，不阻止当前作品正常播放，也不影响本地历史记录。
+    val authorVideos =
+        rememberUnblockedWorks(state.userMoreVideos) {
+                // 此列表由明确的作者查询获得，条目缺失作者摘要时可使用已确认的当前作者。
+                it.user?.id ?: state.video?.user?.id
+            }
+            .filter { it.id != vm.id }
+    val relatedVideos =
+        rememberUnblockedWorks(state.relatedVideos) { it.user?.id }.filter { it.id != vm.id }
     if (state.private) {
         Column(modifier = Modifier.padding(8.dp)) {
             AuthorCard(user = state.privateUser, onClickSub = null)
@@ -252,9 +262,6 @@ fun VideoOverviewPage(vm: VideoVM) {
                     if (video.tags.isNotEmpty()) {
                         item(span = StaggeredGridItemSpan.FullLine) { TagRow(tags = video.tags) }
                     }
-
-                    val authorVideos = state.userMoreVideos.filter { it.id != vm.id }
-                    val relatedVideos = state.relatedVideos.filter { it.id != vm.id }
 
                     if (
                         video.user != null &&

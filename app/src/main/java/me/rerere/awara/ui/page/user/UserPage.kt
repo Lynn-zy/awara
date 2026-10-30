@@ -45,6 +45,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState as collectFlowAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -103,6 +104,7 @@ import org.koin.androidx.compose.koinViewModel
 @Composable
 fun UserPage(vm: UserVM = koinViewModel()) {
     val profileState = vm.state.profile
+    val blockedUsers by vm.blockedUsers.collectFlowAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val message = LocalMessageProvider.current
@@ -219,6 +221,22 @@ fun UserPage(vm: UserVM = koinViewModel()) {
     LaunchedEffect(vm) {
         vm.events.collectLatest { event ->
             when (event) {
+                is UserVM.UserVMEvent.BlocklistUpdated -> {
+                    message.success {
+                        Text(
+                            stringResource(
+                                if (event.blocked) R.string.blocklist_blocked
+                                else R.string.blocklist_unblocked
+                            )
+                        )
+                    }
+                }
+                UserVM.UserVMEvent.BlockUnfollowFailed -> {
+                    message.error { Text(stringResource(R.string.blocklist_unfollow_failed)) }
+                }
+                is UserVM.UserVMEvent.BlocklistException -> {
+                    message.error { Text(stringResource(R.string.blocklist_save_failed)) }
+                }
                 is UserVM.UserVMEvent.CommentPosted -> {
                     message.success { Text(stringResource(R.string.comment_success)) }
                 }
@@ -312,6 +330,18 @@ fun UserPage(vm: UserVM = koinViewModel()) {
     }
 
     val conversationActions: @Composable RowScope.() -> Unit = {
+        // 拉黑入口仅在有效的其他用户主页出现，作品列表保持原样。
+        if (targetUser != null && !isSelf && targetUser.deletedAt == null) {
+            UserBlockAction(
+                userId = targetUser.id,
+                displayName = targetUser.name ?: targetUser.username ?: targetUser.id,
+                blocked = blockedUsers.any { it.user.id == targetUser.id },
+                loading = vm.state.blockLoading || vm.state.followLoading,
+                retryUnfollow = vm.state.unfollowFailed && currentUser != null,
+                onBlock = vm::blockUser,
+                onUnblock = vm::unblockUser,
+            )
+        }
         IconButton(onClick = { showNewConversationDialog() }, enabled = canStartConversation) {
             Icon(
                 imageVector = Icons.Outlined.Message,
@@ -613,6 +643,8 @@ private fun UserCard(
     onFriend: () -> Unit,
 ) {
     val context = LocalContext.current
+    val blockedUsers by vm.blockedUsers.collectFlowAsState()
+    val blocked = blockedUsers.any { it.user.id == profileState?.user?.id }
     Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -679,21 +711,24 @@ private fun UserCard(
                 )
             }
 
-            Button(
-                onClick = { onFollow() },
-                type =
-                    if (profileState?.user?.following == true) ButtonType.Outlined
-                    else ButtonType.Default,
-                loading = vm.state.followLoading,
-            ) {
-                Text(
-                    text =
-                        if (profileState?.user?.following == true) {
-                            stringResource(R.string.user_followed)
-                        } else {
-                            stringResource(R.string.user_follow)
-                        }
-                )
+            // 已拉黑且取关成功后不再展示无效的关注按钮；解除拉黑即可恢复。
+            if (!blocked || profileState?.user?.following == true) {
+                Button(
+                    onClick = { onFollow() },
+                    type =
+                        if (profileState?.user?.following == true) ButtonType.Outlined
+                        else ButtonType.Default,
+                    loading = vm.state.followLoading,
+                ) {
+                    Text(
+                        text =
+                            if (profileState?.user?.following == true) {
+                                stringResource(R.string.user_followed)
+                            } else {
+                                stringResource(R.string.user_follow)
+                            }
+                    )
+                }
             }
         }
 

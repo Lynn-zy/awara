@@ -21,12 +21,17 @@ import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.param.FilterAndSort
 import me.rerere.awara.ui.component.iwara.param.sort.MediaSortOptions
+import me.rerere.awara.ui.hooks.OnlineWorksEmptyStatus
 import me.rerere.awara.ui.hooks.PageScrollEffect
+import me.rerere.awara.ui.hooks.onlineWorksState
+import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import me.rerere.awara.ui.page.index.IndexVM
 
 @Composable
 fun IndexImagePage(vm: IndexVM) {
     val state = vm.state
+    // 仅在线作品使用名单，主页作品列表不调用该过滤器。
+    val visibleImages = rememberUnblockedWorks(state.imageList) { it.user?.id }
     val gridState = rememberLazyStaggeredGridState()
     PageScrollEffect(state.imageLoadedPage) { gridState.scrollToItem(0) }
     Column {
@@ -40,7 +45,8 @@ fun IndexImagePage(vm: IndexVM) {
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
             UiStateBox(
-                state = state.imageState,
+                state = onlineWorksState(state.imageState, visibleImages.isNotEmpty()),
+                emptyStatus = { OnlineWorksEmptyStatus() },
                 modifier = Modifier.fillMaxSize(),
                 onErrorRetry = { vm.loadImageList(force = true) },
             ) {
@@ -52,7 +58,7 @@ fun IndexImagePage(vm: IndexVM) {
                     verticalItemSpacing = 8.dp,
                     modifier = Modifier.matchParentSize(),
                 ) {
-                    items(state.imageList, key = { it.id }) { MediaCard(media = it) }
+                    items(visibleImages, key = { it.id }) { MediaCard(media = it) }
                 }
             }
         }

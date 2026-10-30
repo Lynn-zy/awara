@@ -218,4 +218,18 @@
     <string name="cdn_connection_debug_available">利用可能なCDN数：%1$d</string>
     <string name="cdn_connection_debug_connected">接続中：%1$s</string>
     <string name="cdn_connection_debug_idle">なし</string>
+    <string name="user_blocked">ブロック済み</string>
+    <string name="user_not_blocked">未ブロック</string>
+    <string name="blocklist_unblock_confirm">%1$s のブロックを解除しますか？オンライン一覧に作品が再び表示されますが、自動的にフォローはしません。</string>
+    <string name="user_block">ユーザーをブロック</string>
+    <string name="user_unblock">ブロックを解除</string>
+    <string name="user_blocklist">ブロックしたユーザー</string>
+    <string name="blocklist_confirm">%1$s をローカルでブロックしてフォローを解除しますか？オンライン一覧では作品を非表示にしますが、プロフィール、履歴、ダウンロードは引き続き利用できます。</string>
+    <string name="blocklist_blocked">ローカルでブロックしました</string>
+    <string name="blocklist_unblocked">ブロックを解除しました</string>
+    <string name="blocklist_retry_unfollow">フォロー解除を再試行</string>
+    <string name="blocklist_unfollow_failed">ローカルでブロックしましたが、フォロー解除に失敗しました。プロフィールから再試行できます。</string>
+    <string name="blocklist_save_failed">ブロックリストを保存できませんでした。再試行してください。</string>
+    <string name="blocklist_empty">ブロックしたユーザーはいません</string>
+    <string name="blocklist_filtered_empty">このページに表示できる作品はありません</string>
 </resources>

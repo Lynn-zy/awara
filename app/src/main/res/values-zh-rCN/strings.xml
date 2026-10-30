@@ -261,4 +261,18 @@
     <string name="cdn_connection_debug_available">可用CDN数量：%1$d</string>
     <string name="cdn_connection_debug_connected">已连接：%1$s</string>
     <string name="cdn_connection_debug_idle">无</string>
+    <string name="user_blocked">已拉黑</string>
+    <string name="user_not_blocked">未拉黑</string>
+    <string name="blocklist_unblock_confirm">确认解除对 %1$s 的拉黑？在线列表将重新显示其作品，但不会自动重新关注。</string>
+    <string name="user_block">拉黑用户</string>
+    <string name="user_unblock">解除拉黑</string>
+    <string name="user_blocklist">用户黑名单</string>
+    <string name="blocklist_confirm">将 %1$s 加入本地黑名单并取消关注？在线列表将隐藏其作品，仍可进入其主页查看，历史和已下载内容不受影响。</string>
+    <string name="blocklist_blocked">已加入本地黑名单</string>
+    <string name="blocklist_unblocked">已解除拉黑</string>
+    <string name="blocklist_retry_unfollow">重试取消关注</string>
+    <string name="blocklist_unfollow_failed">已本地拉黑，但取消关注失败，可在用户主页重试。</string>
+    <string name="blocklist_save_failed">黑名单保存失败，请重试。</string>
+    <string name="blocklist_empty">黑名单为空</string>
+    <string name="blocklist_filtered_empty">本页没有可显示的作品</string>
 </resources>

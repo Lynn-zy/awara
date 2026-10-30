@@ -43,6 +43,7 @@ import me.rerere.awara.ui.component.ext.onlyBottom
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.hooks.PageScrollEffect
+import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -52,6 +53,9 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
     // 收藏夹包含视频与图片2个标签页，页数由 PagerState 统一提供
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
+    // 收藏包装对象的 user 是收藏者，必须从实际作品提取作者。
+    val visibleVideos = rememberUnblockedWorks(vm.state.videoList) { it.video.user?.id }
+    val visibleImages = rememberUnblockedWorks(vm.state.imageList) { it.image.user.id }
     val videoGridState = rememberLazyStaggeredGridState()
     val imageGridState = rememberLazyStaggeredGridState()
     PageScrollEffect(vm.state.videoLoadedPage) { videoGridState.scrollToItem(0) }
@@ -118,9 +122,7 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                                 onRetry = { vm.loadVideo() },
                                             )
                                         }
-                                    } else if (
-                                        vm.state.videoList.isEmpty() && !vm.state.videoLoading
-                                    ) {
+                                    } else if (visibleVideos.isEmpty() && !vm.state.videoLoading) {
                                         Box(
                                             modifier =
                                                 Modifier.fillMaxSize()
@@ -142,7 +144,7 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                                         appbarBehavior.nestedScrollConnection
                                                     ),
                                         ) {
-                                            items(vm.state.videoList, key = { it.id }) { video ->
+                                            items(visibleVideos, key = { it.id }) { video ->
                                                 MediaCard(media = video.video)
                                             }
                                         }
@@ -188,9 +190,7 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                                 onRetry = { vm.loadImages() },
                                             )
                                         }
-                                    } else if (
-                                        vm.state.imageList.isEmpty() && !vm.state.imageLoading
-                                    ) {
+                                    } else if (visibleImages.isEmpty() && !vm.state.imageLoading) {
                                         Box(
                                             modifier =
                                                 Modifier.fillMaxSize()
@@ -212,7 +212,7 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
                                                         appbarBehavior.nestedScrollConnection
                                                     ),
                                         ) {
-                                            items(vm.state.imageList, key = { it.id }) { image ->
+                                            items(visibleImages, key = { it.id }) { image ->
                                                 MediaCard(media = image.image)
                                             }
                                         }

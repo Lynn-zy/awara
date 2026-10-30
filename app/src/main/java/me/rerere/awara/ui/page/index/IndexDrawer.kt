@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -203,6 +204,13 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
         icon = { Icon(Icons.Outlined.History, "History") },
         label = { Text(stringResource(R.string.drawer_history)) },
         onClick = { router.navigate("history") },
+    )
+
+    // 本地名单不依赖登录，和设置保持同级入口。
+    DrawerItem(
+        icon = { Icon(Icons.Outlined.Block, null) },
+        label = { Text(stringResource(R.string.user_blocklist)) },
+        onClick = { router.navigate("user_blocklist") },
     )
 
     DrawerItem(

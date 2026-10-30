@@ -25,6 +25,8 @@ import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
+import me.rerere.awara.data.user.BlockUserResult
+import me.rerere.awara.data.user.UserBlocklist
 import me.rerere.awara.ui.component.iwara.comment.CommentActionPolicy
 import me.rerere.awara.ui.component.iwara.comment.CommentState
 import me.rerere.awara.ui.component.iwara.comment.markCommentsChanged
@@ -34,6 +36,7 @@ import me.rerere.awara.ui.component.iwara.comment.removeComment
 import me.rerere.awara.ui.component.iwara.comment.updateCommentBody
 import me.rerere.awara.ui.component.iwara.comment.updatePage
 import me.rerere.awara.ui.component.iwara.comment.updateTopStack
+import retrofit2.HttpException
 
 private const val TAG = "UserVM"
 
@@ -42,12 +45,15 @@ class UserVM(
     private val userRepo: UserRepo,
     private val mediaRepo: MediaRepo,
     private val commentRepo: CommentRepo,
+    private val userBlocklist: UserBlocklist,
 ) : ViewModel() {
     val id = checkNotNull(savedStateHandle.get<String>("id"))
     var state by mutableStateOf(UserVMState())
 
     // 页面事件流，通知界面操作结果（评论发布成功/失败、会话创建成功/失败等）
     val events = MutableSharedFlow<UserVMEvent>()
+    /** 与在线列表共用本机名单，但本主页的作品不做过滤。 */
+    val blockedUsers = userBlocklist.entries
     private var profileJob: Job? = null
     private var videoLoadJob: Job? = null
     private var imageLoadJob: Job? = null
@@ -67,7 +73,14 @@ class UserVM(
                 try {
                     runAPICatching { userRepo.getProfile(id) }
                         .onSuccess { profile ->
-                            state = state.copy(profile = profile, profileError = null)
+                            state =
+                                state.copy(
+                                    profile = profile,
+                                    profileError = null,
+                                    unfollowFailed =
+                                        userBlocklist.isBlocked(profile.user?.id) &&
+                                            profile.user?.following == true,
+                                )
                             loadVideoList()
                             loadImageList()
                             // 用户资料加载成功后加载主页留言列表
@@ -102,13 +115,15 @@ class UserVM(
     }
 
     fun followOrUnfollow() {
-        if (state.followLoading) {
+        if (state.followLoading || state.blockLoading) {
             return
         }
         val targetUserId = state.profile?.user?.id
         if (targetUserId.isNullOrEmpty()) {
             return
         }
+        // 已拉黑时允许取消残留关注，但不允许重新关注后悄悄绕过本地过滤。
+        if (userBlocklist.isBlocked(targetUserId) && state.profile?.user?.following != true) return
 
         viewModelScope.launch {
             state = state.copy(followLoading = true)
@@ -121,6 +136,63 @@ class UserVM(
                 state = state.copy(profile = userRepo.getProfile(id))
             }
             state = state.copy(followLoading = false)
+        }
+    }
+
+    /** 拉黑先在本地生效，再尝试取关；失败保持名单且允许在主页重试。 */
+    fun blockUser() {
+        if (state.blockLoading || state.followLoading) return
+        val target = state.profile?.user ?: return
+        state = state.copy(blockLoading = true)
+        viewModelScope.launch {
+            try {
+                when (
+                    val result =
+                        userBlocklist.blockAndUnfollow(target) { userId ->
+                            val response = userRepo.unfollowUser(userId)
+                            if (!response.isSuccessful) throw HttpException(response)
+                        }
+                ) {
+                    BlockUserResult.Blocked -> {
+                        val profile = state.profile
+                        if (profile?.user?.id == target.id) {
+                            state =
+                                state.copy(
+                                    profile =
+                                        profile.copy(user = profile.user.copy(following = false)),
+                                    unfollowFailed = false,
+                                )
+                        }
+                        events.emit(UserVMEvent.BlocklistUpdated(true))
+                    }
+                    is BlockUserResult.UnfollowFailed -> {
+                        state = state.copy(unfollowFailed = true)
+                        events.emit(UserVMEvent.BlockUnfollowFailed)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                events.emit(UserVMEvent.BlocklistException(error))
+            } finally {
+                state = state.copy(blockLoading = false)
+            }
+        }
+    }
+
+    /** 解除拉黑只修改本地名单，不恢复关注，也不重新加载或清空主页作品。 */
+    fun unblockUser() {
+        if (state.blockLoading) return
+        val target = state.profile?.user ?: return
+        viewModelScope.launch {
+            try {
+                userBlocklist.unblock(target.id)
+                state = state.copy(unfollowFailed = false)
+                events.emit(UserVMEvent.BlocklistUpdated(false))
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                events.emit(UserVMEvent.BlocklistException(error))
+            }
         }
     }
 
@@ -494,6 +566,12 @@ class UserVM(
 
     /** 用户页面 ViewModel 事件定义。 */
     sealed class UserVMEvent {
+        class BlocklistUpdated(val blocked: Boolean) : UserVMEvent()
+
+        object BlockUnfollowFailed : UserVMEvent()
+
+        class BlocklistException(val throwable: Throwable) : UserVMEvent()
+
         object CommentPosted : UserVMEvent()
 
         class CommentLoadFailed(val error: APIResult.Error) : UserVMEvent()
@@ -525,6 +603,8 @@ class UserVM(
 
     data class UserVMState(
         val loading: Boolean = false,
+        val blockLoading: Boolean = false,
+        val unfollowFailed: Boolean = false,
         val followLoading: Boolean = false,
         val profile: ProfileDto? = null,
         val profileError: String? = null,

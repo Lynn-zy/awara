@@ -38,10 +38,12 @@ import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.hooks.PageScrollEffect
+import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun PlaylistDetailPage(vm: PlaylistDetailVM = koinViewModel()) {
+    val visibleVideos = rememberUnblockedWorks(vm.state.list) { it.user?.id }
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val gridState = rememberLazyStaggeredGridState()
@@ -91,7 +93,7 @@ fun PlaylistDetailPage(vm: PlaylistDetailVM = koinViewModel()) {
                             Text(stringResource(R.string.retry))
                         }
                     }
-                } else if (vm.state.list.isEmpty() && !vm.state.loading) {
+                } else if (visibleVideos.isEmpty() && !vm.state.loading) {
                     Box(
                         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                         contentAlignment = Alignment.Center,
@@ -109,7 +111,7 @@ fun PlaylistDetailPage(vm: PlaylistDetailVM = koinViewModel()) {
                             Modifier.matchParentSize()
                                 .nestedScroll(appbarBehavior.nestedScrollConnection),
                     ) {
-                        items(vm.state.list, key = { it.id }) { video -> MediaCard(media = video) }
+                        items(visibleVideos, key = { it.id }) { video -> MediaCard(media = video) }
                     }
                 }
             }

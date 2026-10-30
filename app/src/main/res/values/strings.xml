@@ -310,4 +310,18 @@
     <string name="cdn_connection_debug_available">Available CDNs: %1$d</string>
     <string name="cdn_connection_debug_connected">Connected: %1$s</string>
     <string name="cdn_connection_debug_idle">None</string>
+    <string name="user_blocked">Blocked</string>
+    <string name="user_not_blocked">Not blocked</string>
+    <string name="blocklist_unblock_confirm">Unblock %1$s? Their works will appear in online lists again. You will not automatically follow them.</string>
+    <string name="user_block">Block User</string>
+    <string name="user_unblock">Unblock User</string>
+    <string name="user_blocklist">Blocked Users</string>
+    <string name="blocklist_confirm">Block %1$s locally and unfollow them? Their works will be hidden from online lists, but their profile, history and downloads will remain accessible.</string>
+    <string name="blocklist_blocked">User blocked locally</string>
+    <string name="blocklist_unblocked">User unblocked</string>
+    <string name="blocklist_retry_unfollow">Retry Unfollowing</string>
+    <string name="blocklist_unfollow_failed">Blocked locally, but unfollowing failed. Retry from their profile.</string>
+    <string name="blocklist_save_failed">Could not save the blocklist. Please retry.</string>
+    <string name="blocklist_empty">No blocked users</string>
+    <string name="blocklist_filtered_empty">No visible works on this page</string>
 </resources>

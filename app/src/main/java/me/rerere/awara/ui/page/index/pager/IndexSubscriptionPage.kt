@@ -29,12 +29,17 @@ import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.hooks.OnlineWorksEmptyStatus
 import me.rerere.awara.ui.hooks.PageScrollEffect
+import me.rerere.awara.ui.hooks.onlineWorksState
 import me.rerere.awara.ui.hooks.rememberDebounce
+import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import me.rerere.awara.ui.page.index.IndexVM
 
 @Composable
 fun IndexSubscriptionPage(vm: IndexVM) {
+    // 即使远端取关失败，已保存的本地名单也立即隐藏订阅作品。
+    val visibleSubscriptions = rememberUnblockedWorks(vm.state.subscriptions) { it.user?.id }
     val gridState = rememberLazyStaggeredGridState()
     PageScrollEffect(vm.state.subscriptionLoadedPage) { gridState.scrollToItem(0) }
     Column(modifier = Modifier.fillMaxSize()) {
@@ -48,7 +53,9 @@ fun IndexSubscriptionPage(vm: IndexVM) {
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
             UiStateBox(
-                state = vm.state.subscriptionState,
+                state =
+                    onlineWorksState(vm.state.subscriptionState, visibleSubscriptions.isNotEmpty()),
+                emptyStatus = { OnlineWorksEmptyStatus() },
                 modifier = Modifier.fillMaxSize(),
                 onErrorRetry = { vm.loadSubscriptions(force = true) },
             ) {
@@ -60,7 +67,7 @@ fun IndexSubscriptionPage(vm: IndexVM) {
                     contentPadding = PaddingValues(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(vm.state.subscriptions, key = { it.id }) { MediaCard(media = it) }
+                    items(visibleSubscriptions, key = { it.id }) { MediaCard(media = it) }
                 }
             }
         }

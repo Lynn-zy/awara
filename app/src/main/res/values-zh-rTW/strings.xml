@@ -218,4 +218,18 @@
     <string name="cdn_connection_debug_available">可用CDN數量：%1$d</string>
     <string name="cdn_connection_debug_connected">已連線：%1$s</string>
     <string name="cdn_connection_debug_idle">無</string>
+    <string name="user_blocked">已封鎖</string>
+    <string name="user_not_blocked">未封鎖</string>
+    <string name="blocklist_unblock_confirm">確認解除對 %1$s 的封鎖？線上清單將重新顯示其作品，但不會自動重新關注。</string>
+    <string name="user_block">封鎖使用者</string>
+    <string name="user_unblock">解除封鎖</string>
+    <string name="user_blocklist">使用者黑名單</string>
+    <string name="blocklist_confirm">將 %1$s 加入本機黑名單並取消關注？線上清單將隱藏其作品，仍可進入其主頁查看，歷史和已下載內容不受影響。</string>
+    <string name="blocklist_blocked">已加入本機黑名單</string>
+    <string name="blocklist_unblocked">已解除封鎖</string>
+    <string name="blocklist_retry_unfollow">重試取消關注</string>
+    <string name="blocklist_unfollow_failed">已本機封鎖，但取消關注失敗，可在使用者主頁重試。</string>
+    <string name="blocklist_save_failed">黑名單儲存失敗，請重試。</string>
+    <string name="blocklist_empty">黑名單為空</string>
+    <string name="blocklist_filtered_empty">本頁沒有可顯示的作品</string>
 </resources>

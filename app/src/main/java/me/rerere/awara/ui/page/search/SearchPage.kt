@@ -27,6 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.EmptyStatus
 import me.rerere.awara.ui.component.common.SearchInput
 import me.rerere.awara.ui.component.common.SelectOption
 import me.rerere.awara.ui.component.common.UiState
@@ -40,11 +41,23 @@ import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.component.iwara.UserCard
 import me.rerere.awara.ui.component.iwara.param.SortButton
 import me.rerere.awara.ui.component.iwara.param.SortOption
+import me.rerere.awara.ui.hooks.OnlineWorksEmptyStatus
 import me.rerere.awara.ui.hooks.PageScrollEffect
+import me.rerere.awara.ui.hooks.onlineWorksState
+import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun SearchPage(vm: SearchVM = koinViewModel()) {
+    // 用户搜索不隐藏账号，以便始终可以主动进入其主页。
+    val visibleVideos = rememberUnblockedWorks(vm.state.videoList) { it.user?.id }
+    val visibleImages = rememberUnblockedWorks(vm.state.imageList) { it.user?.id }
+    val hasVisibleResults =
+        when (vm.state.loadedSearchType ?: vm.state.searchType) {
+            "video" -> visibleVideos.isNotEmpty()
+            "image" -> visibleImages.isNotEmpty()
+            else -> vm.state.userList.isNotEmpty()
+        }
     val gridState = key(vm.state.loadedSearchType) { rememberLazyStaggeredGridState() }
     PageScrollEffect(vm.state.loadedPage) { gridState.scrollToItem(0) }
     Scaffold(
@@ -119,7 +132,12 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
             ) {
                 UiStateBox(
                     modifier = Modifier.fillMaxSize(),
-                    state = vm.state.uiState,
+                    state = onlineWorksState(vm.state.uiState, hasVisibleResults),
+                    emptyStatus = {
+                        if ((vm.state.loadedSearchType ?: vm.state.searchType) == "user")
+                            EmptyStatus()
+                        else OnlineWorksEmptyStatus()
+                    },
                     onErrorRetry = { vm.search(force = true) },
                 ) {
                     LazyVerticalStaggeredGrid(
@@ -132,11 +150,11 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                     ) {
                         when (vm.state.loadedSearchType ?: vm.state.searchType) {
                             "video" -> {
-                                items(vm.state.videoList, key = { it.id }) { MediaCard(media = it) }
+                                items(visibleVideos, key = { it.id }) { MediaCard(media = it) }
                             }
 
                             "image" -> {
-                                items(vm.state.imageList, key = { it.id }) { MediaCard(media = it) }
+                                items(visibleImages, key = { it.id }) { MediaCard(media = it) }
                             }
 
                             "user" -> {
