@@ -162,7 +162,7 @@ internal class DownloadSourcePool(
 
     /** 正在恢复的文件若更换了主节点，应先比对上次保存的内容抽样而不是全局比较 ETag。 */
     suspend fun matchesFingerprint(expected: String): Boolean {
-        val sampled = samples(primaryUrl, anchorValidator)
+        val sampled = DownloadCdnBudget.withPermit { samples(primaryUrl, anchorValidator) }
         fingerprint = sampled.second
         val matches = sampled.second == expected
         if (!matches) {
@@ -177,56 +177,58 @@ internal class DownloadSourcePool(
         return launchDiscovery(owner)
     }
 
+    /** 有界验证连续占用一路额度，另一条正文通道保持可用，不在每个小样本之间重新排队。 */
     private fun launchDiscovery(owner: CoroutineScope): Job =
         owner
             .launch {
                 val networkAtStart = network
                 try {
-                    val primarySamples = samples(primaryUrl, anchorValidator)
-                    synchronized(this@DownloadSourcePool) {
-                        if (fingerprint != null && fingerprint != primarySamples.second) {
-                            identityFailed = true
-                            throw DownloadCdnIntegrityException()
-                        }
-                        fingerprint = primarySamples.second
-                    }
                     val candidates = directory.candidates(primaryUrl.host, onBind, onUnbind)
-                    for (host in candidates.take(DownloadCdnPolicy.MAX_CANDIDATES)) {
-                        currentCoroutineContext().ensureActive()
-                        if (networkAtStart != network) break
-                        if (unavailableForFile(host)) continue
-                        try {
-                            val candidate = resolve(primaryUrl, host)
-                            val sampled = samples(candidate, null)
-                            if (sampled.second != primarySamples.second)
+                    DownloadCdnBudget.withPermit {
+                        val primarySamples = samples(primaryUrl, anchorValidator)
+                        synchronized(this@DownloadSourcePool) {
+                            if (fingerprint != null && fingerprint != primarySamples.second) {
+                                identityFailed = true
                                 throw DownloadCdnIntegrityException()
-                            val added =
-                                synchronized(this@DownloadSourcePool) {
-                                    if (networkAtStart == network) {
-                                        nodes[host] =
-                                            Node(
-                                                DownloadCdnSource(
-                                                    candidate,
-                                                    sampled.first,
-                                                    host,
-                                                    generation,
-                                                )
-                                            )
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                            if (added) {
-                                // 抽样验证通过加入节点池后，增加可用节点数量
-                                publishAvailableHosts()
                             }
-                            // 两个已验证备选足以提供双路及一次换源，不遍历全部目录。
-                            if (synchronized(this@DownloadSourcePool) { nodes.size >= 3 }) break
-                        } catch (exception: CancellationException) {
-                            throw exception
-                        } catch (_: IOException) {
-                            rememberUnavailable(host)
+                            fingerprint = primarySamples.second
+                        }
+                        for (host in candidates.take(DownloadCdnPolicy.MAX_CANDIDATES)) {
+                            currentCoroutineContext().ensureActive()
+                            if (networkAtStart != network) break
+                            if (unavailableForFile(host)) continue
+                            try {
+                                val candidate = resolve(primaryUrl, host)
+                                val sampled = samples(candidate, null)
+                                if (sampled.second != primarySamples.second)
+                                    throw DownloadCdnIntegrityException()
+                                val added =
+                                    synchronized(this@DownloadSourcePool) {
+                                        if (networkAtStart == network) {
+                                            nodes[host] =
+                                                Node(
+                                                    DownloadCdnSource(
+                                                        candidate,
+                                                        sampled.first,
+                                                        host,
+                                                        generation,
+                                                    )
+                                                )
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                if (added) {
+                                    // 抽样完成即可计数，不等待该节点承担正文下载。
+                                    publishAvailableHosts()
+                                }
+                                if (synchronized(this@DownloadSourcePool) { nodes.size >= 3 }) break
+                            } catch (exception: CancellationException) {
+                                throw exception
+                            } catch (_: IOException) {
+                                rememberUnavailable(host)
+                            }
                         }
                     }
                 } catch (exception: CancellationException) {
@@ -337,7 +339,7 @@ internal class DownloadSourcePool(
             val anchorUrl = resolve(updated, primaryUrl.host)
             val sampled =
                 try {
-                    samples(anchorUrl, anchorValidator)
+                    DownloadCdnBudget.withPermit { samples(anchorUrl, anchorValidator) }
                 } catch (e: Exception) {
                     if (e is DownloadCdnIntegrityException) {
                         synchronized(this) { identityFailed = true }
@@ -398,71 +400,68 @@ internal class DownloadSourcePool(
         url: HttpUrl,
         range: LongRange,
         expectedValidator: String?,
-    ): Pair<String, ByteArray> =
-        DownloadCdnBudget.withPermit {
-            coroutineScope {
-                val request =
-                    Request.Builder()
-                        .url(url)
-                        .header("Range", "bytes=${range.first}-${range.last}")
-                        .header("Accept-Encoding", "identity")
-                        .header("Referer", "https://www.iwara.tv/")
-                        .apply { expectedValidator?.let { header("If-Range", it) } }
-                        .build()
-                val call = probeClient.newCall(request)
-                val watcher =
-                    launch(start = CoroutineStart.UNDISPATCHED) {
-                        try {
-                            awaitCancellation()
-                        } finally {
-                            call.cancel()
-                        }
-                    }
+    ): Pair<String, ByteArray> = coroutineScope {
+        val request =
+            Request.Builder()
+                .url(url)
+                .header("Range", "bytes=${range.first}-${range.last}")
+                .header("Accept-Encoding", "identity")
+                .header("Referer", "https://www.iwara.tv/")
+                .apply { expectedValidator?.let { header("If-Range", it) } }
+                .build()
+        val call = probeClient.newCall(request)
+        val watcher =
+            launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
-                    onBind?.invoke(call)
-                    call.await().use { response ->
-                        if (response.code != 206) throw DownloadCdnHttpException(response.code)
-                        val length = (range.last - range.first + 1).toInt()
-                        val etag = response.header("ETag")?.trim()
-                        if (
-                            response.header("Content-Range") !=
-                                "bytes ${range.first}-${range.last}/$total" ||
-                                !DownloadRangeStore.isStrongETag(etag) ||
-                                (expectedValidator != null && etag != expectedValidator) ||
-                                response.header("Content-Encoding", "identity")!!.lowercase() !=
-                                    "identity" ||
-                                response.header("Content-Type").orEmpty().lowercase().let {
-                                    it.contains("text/html") || it.contains("application/json")
-                                }
-                        ) {
-                            throw DownloadCdnIntegrityException()
-                        }
-                        val body = response.body ?: throw DownloadCdnIntegrityException()
-                        if (body.contentLength() != -1L && body.contentLength() != length.toLong())
-                            throw DownloadCdnIntegrityException()
-                        val bytes = ByteArray(length)
-                        withContext(Dispatchers.IO) {
-                            val input = body.byteStream()
-                            var read = 0
-                            while (read < bytes.size) {
-                                currentCoroutineContext().ensureActive()
-                                val count = input.read(bytes, read, bytes.size - read)
-                                if (count < 0) throw DownloadCdnIntegrityException()
-                                read += count
-                            }
-                            if (input.read() != -1) throw DownloadCdnIntegrityException()
-                        }
-                        etag!! to bytes
-                    }
-                } catch (exception: IOException) {
-                    currentCoroutineContext().ensureActive()
-                    throw exception
+                    awaitCancellation()
                 } finally {
-                    watcher.cancel()
-                    onUnbind?.invoke(call)
+                    call.cancel()
                 }
             }
+        try {
+            onBind?.invoke(call)
+            call.await().use { response ->
+                if (response.code != 206) throw DownloadCdnHttpException(response.code)
+                val length = (range.last - range.first + 1).toInt()
+                val etag = response.header("ETag")?.trim()
+                if (
+                    response.header("Content-Range") !=
+                        "bytes ${range.first}-${range.last}/$total" ||
+                        !DownloadRangeStore.isStrongETag(etag) ||
+                        (expectedValidator != null && etag != expectedValidator) ||
+                        response.header("Content-Encoding", "identity")!!.lowercase() !=
+                            "identity" ||
+                        response.header("Content-Type").orEmpty().lowercase().let {
+                            it.contains("text/html") || it.contains("application/json")
+                        }
+                ) {
+                    throw DownloadCdnIntegrityException()
+                }
+                val body = response.body ?: throw DownloadCdnIntegrityException()
+                if (body.contentLength() != -1L && body.contentLength() != length.toLong())
+                    throw DownloadCdnIntegrityException()
+                val bytes = ByteArray(length)
+                withContext(Dispatchers.IO) {
+                    val input = body.byteStream()
+                    var read = 0
+                    while (read < bytes.size) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(bytes, read, bytes.size - read)
+                        if (count < 0) throw DownloadCdnIntegrityException()
+                        read += count
+                    }
+                    if (input.read() != -1) throw DownloadCdnIntegrityException()
+                }
+                etag!! to bytes
+            }
+        } catch (exception: IOException) {
+            currentCoroutineContext().ensureActive()
+            throw exception
+        } finally {
+            watcher.cancel()
+            onUnbind?.invoke(call)
         }
+    }
 
     private fun unavailableKey(host: String): String = "$network|$resourceKey|$host"
 

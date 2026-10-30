@@ -1,10 +1,19 @@
 package me.rerere.awara.data.download
 
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
@@ -213,6 +222,70 @@ class DownloadSourcePoolTest {
                 assertEquals("跨源更慢时可退回同节点双路", firstLease.host, another.host)
                 pool.release(preferred, 0L, 1L)
                 pool.release(another, 0L, 1L)
+            }
+        }
+
+    /** 探测启动后应连续完成有界验证，不能在抽样间交还额度后被两路正文阻塞到下载结束。 */
+    @Test
+    fun discoveryFinishesBeforeCompetingBodiesReleaseTheirPermits() =
+        runBlocking<Unit> {
+            withTimeout(5000) {
+                val firstSampleStarted = CountDownLatch(1)
+                val releaseFirstSample = CountDownLatch(1)
+                val releaseBodies = CompletableDeferred<Unit>()
+                val primaryRequests = AtomicInteger()
+                val rangeDispatcher = createRangeDispatcher("\"primary\"") { fixturePayload }
+                primaryServer.dispatcher =
+                    object : Dispatcher() {
+                        override fun dispatch(request: RecordedRequest): MockResponse {
+                            if (primaryRequests.incrementAndGet() == 1) {
+                                firstSampleStarted.countDown()
+                                check(releaseFirstSample.await(3, TimeUnit.SECONDS))
+                            }
+                            return rangeDispatcher.dispatch(request)
+                        }
+                    }
+
+                val tracker = CdnConnectionTracker()
+                val pool =
+                    DownloadSourcePool(
+                        originalUrl =
+                            primaryServer
+                                .url("/download?filename=${UUID.randomUUID()}.mp4")
+                                .toString(),
+                        client = okHttpClient,
+                        directory = cdnDirectory,
+                        resolve = candidateResolver,
+                        connectionTracker = tracker,
+                    )
+                pool.bind(fixturePayload.size.toLong(), "\"primary\"")
+                val discovery = pool.startDiscovery(this)
+                val bodies = mutableListOf<kotlinx.coroutines.Job>()
+                try {
+                    withContext(Dispatchers.IO) {
+                        assertTrue("主源抽样应已持有一路额度", firstSampleStarted.await(2, TimeUnit.SECONDS))
+                    }
+                    repeat(2) {
+                        bodies +=
+                            launch(start = CoroutineStart.UNDISPATCHED) {
+                                DownloadCdnBudget.withPermit { releaseBodies.await() }
+                            }
+                    }
+                    releaseFirstSample.countDown()
+                    val discovered =
+                        withTimeoutOrNull(1500) {
+                            discovery.join()
+                            true
+                        } ?: false
+                    assertTrue("探测不应被两路正文挡住，直到正文结束才能继续", discovered)
+                    assertEquals("镜像尚未传输正文，也应进入可用池", 2, tracker.snapshot.value.availableCdnCount)
+                    assertEquals("抽样不是活动媒体正文连接", 0, tracker.snapshot.value.connectionCount)
+                } finally {
+                    releaseFirstSample.countDown()
+                    releaseBodies.complete(Unit)
+                    bodies.forEach { it.cancelAndJoin() }
+                    discovery.cancelAndJoin()
+                }
             }
         }
 
