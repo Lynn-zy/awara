@@ -67,7 +67,10 @@ internal class PlaybackCdnDataSource(
     private val urlResolver: (HttpUrl) -> HttpUrl = { it },
     private val onOpening: (PlaybackCdnDataSource, DataSpec) -> Unit = { _, _ -> },
     private val connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
-) : BaseDataSource(/* isNetwork= */ true) {
+) : BaseDataSource(/* isNetwork= */ true), PlaybackReadModeAware {
+
+    /** 由网络预读包装器标记的主动限速，不计入节点吞吐或慢源检测。 */
+    @Volatile override var isKeepAliveRead: Boolean = false
 
     /** 定制的媒体流长连接 OkHttpClient，清除拦截器与 CookieJar 防凭据泄露，读超时设置为 15 秒 */
     private val mediaClient: OkHttpClient =
@@ -254,13 +257,14 @@ internal class PlaybackCdnDataSource(
         val session = currentSession ?: throw IOException("未关联有效播放会话")
 
         // 检查是否有外部缓冲感知触发的主动切源请求
-        if (shouldSwitchSource.compareAndSet(true, false)) {
+        if (!isKeepAliveRead && shouldSwitchSource.compareAndSet(true, false)) {
             trySwitchOrRecover(session = session, cause = null, isProactiveSwitch = true)
         }
 
         while (!isClosed.get()) {
             try {
-                isActiveRead.set(true)
+                val keepAliveRead = isKeepAliveRead
+                isActiveRead.set(!keepAliveRead)
                 val stream = currentInputStream ?: throw IOException("媒体输入流已断开")
                 val toRead =
                     if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
@@ -282,8 +286,10 @@ internal class PlaybackCdnDataSource(
                         bytesRemaining -= bytesRead
                     }
                     if (bytesRemaining == 0L) connectionTracker?.unregister(this)
-                    currentHost?.let { host ->
-                        session.recordThroughput(host, bytesRead.toLong(), durationMs)
+                    if (!keepAliveRead) {
+                        currentHost?.let { host ->
+                            session.recordThroughput(host, bytesRead.toLong(), durationMs)
+                        }
                     }
                     bytesTransferred(bytesRead)
                     segmentRetryCount = 0

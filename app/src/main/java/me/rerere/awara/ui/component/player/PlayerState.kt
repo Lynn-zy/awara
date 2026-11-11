@@ -26,6 +26,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
@@ -33,6 +34,7 @@ import me.rerere.awara.data.diagnostics.CdnTrackingDataSourceFactory
 import me.rerere.awara.data.download.DownloadCdnDirectory
 import me.rerere.awara.data.playback.PlaybackBufferSample
 import me.rerere.awara.data.playback.PlaybackCdnController
+import me.rerere.awara.data.playback.PlaybackReadAheadDataSource
 import me.rerere.awara.data.playback.PlaybackSettings
 import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.OkHttpClient
@@ -82,6 +84,10 @@ fun rememberPlayerState(
             )
         } else null
     }
+    // 仅包装播放 HTTP 上游；本地文件、磁盘缓存命中和缩略图继续使用原有路径。
+    val readAheadFactory = remember {
+        PlaybackReadAheadDataSource.Factory(cdnController ?: httpFactory)
+    }
     val initialSpeed = remember {
         val speedStr = mmkvPreference.getString(PREFERENCE_KEY_PLAYER_SPEED, "1.0")
         normalizePlaybackSpeed(speedStr?.toFloatOrNull() ?: 1f)
@@ -91,9 +97,7 @@ fun rememberPlayerState(
             builder?.invoke(context)
                 ?: ExoPlayer.Builder(
                         context,
-                        DefaultMediaSourceFactory(
-                            PlayerCache.get(context, cdnController ?: httpFactory)
-                        ),
+                        DefaultMediaSourceFactory(PlayerCache.get(context, readAheadFactory)),
                     )
                     .setLoadControl(PlayerBufferPolicy.create(settings))
                     .setHandleAudioBecomingNoisy(true)
@@ -159,6 +163,11 @@ fun rememberPlayerState(
         Log.i(TAG, "rememberPlayerState: Init")
         onDispose {
             connectionTracker.close()
+            try {
+                readAheadFactory.close()
+            } catch (error: IOException) {
+                Log.w(TAG, "关闭播放预读请求失败", error)
+            }
             cdnController?.close()
             state.player.run {
                 removeListener(state.playbackListener)

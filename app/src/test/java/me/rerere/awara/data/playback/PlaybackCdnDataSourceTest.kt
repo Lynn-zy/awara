@@ -150,6 +150,8 @@ class PlaybackCdnDataSourceTest {
         val openLen1 = dataSource.open(spec1)
         assertEquals(100L, openLen1)
 
+        // 首段模拟主动限速保活，不能将其吞吐写入正常节点评分。
+        dataSource.isKeepAliveRead = true
         val buf1 = ByteArray(100)
         var readTotal1 = 0
         while (readTotal1 < 100) {
@@ -159,6 +161,7 @@ class PlaybackCdnDataSourceTest {
         }
         assertEquals(100, readTotal1)
         assertArrayEquals(chunk1, buf1)
+        assertTrue(session.hostThroughputEwma.isEmpty())
         dataSource.close()
 
         // 第 2 次响应：Range 100-199
@@ -178,6 +181,7 @@ class PlaybackCdnDataSourceTest {
         val openLen2 = dataSource.open(spec2)
         assertEquals(100L, openLen2)
 
+        dataSource.isKeepAliveRead = false
         val buf2 = ByteArray(100)
         var readTotal2 = 0
         while (readTotal2 < 100) {

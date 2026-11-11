@@ -215,7 +215,7 @@ internal class PlaybackCdnController(
 
     /** 数据源包装代理，负责生命周期与活跃状态登记 */
     private inner class WrappedPlaybackDataSource(private val delegate: PlaybackCdnDataSource) :
-        DataSource by delegate {
+        DataSource by delegate, PlaybackReadModeAware by delegate {
 
         override fun open(dataSpec: DataSpec): Long {
             if (isClosed.get()) {
