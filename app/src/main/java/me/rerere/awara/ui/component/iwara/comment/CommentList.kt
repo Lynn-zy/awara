@@ -63,6 +63,7 @@ import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
 import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.iwara.PaginationBar
 import me.rerere.awara.ui.hooks.PageScrollEffect
+import me.rerere.awara.ui.page.video.layout.LocalVideoPlayerCanExpand
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 
@@ -355,11 +356,17 @@ fun CommentList(
                 }
             }
             if (onRefresh != null) {
+                // 竖屏播放器尚未完全展开时让出顶部下拉手势，优先平滑恢复播放器高度，拉满后再响应评论下拉刷新
+                val playerCanExpand = LocalVideoPlayerCanExpand.current
                 SwipeRefresh(
                     state = rememberSwipeRefreshState(false),
                     onRefresh = onRefresh,
                     swipeEnabled =
-                        !state.loading && !replySubmitting && !editSubmitting && !deleteSubmitting,
+                        !state.loading &&
+                            !replySubmitting &&
+                            !editSubmitting &&
+                            !deleteSubmitting &&
+                            !playerCanExpand,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     content = listContent,
                 )

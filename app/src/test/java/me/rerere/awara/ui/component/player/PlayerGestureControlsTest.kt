@@ -8,37 +8,54 @@ import org.junit.Test
 
 /** 使用真实控制状态与可观察替身，验证累计位移、实际反馈和生命周期还原。 */
 class PlayerGestureControlsTest {
-    /** 手势只显示定位所需底栏；收起后必须由用户主动单击重新呼出。 */
+    /** 进入页面初始仅展示顶部栏（无底部进度条）；手势定位只显示底栏，收起后可单击完整呼出。 */
     @Test
-    fun controllerSeparatesSeekControlsFromTitleAndHidesImmediately() {
+    fun controllerStartsWithoutBottomBarAndSeparatesSeekControlsFromTitle() {
         val state = PlayerControllerState()
         assertTrue(state.topVisible)
+        assertFalse(state.bottomVisible)
+        assertTrue(state.anyVisible)
+
+        // 处于仅顶部栏状态时 toggle 呼出完整底部进度条控制栏
+        state.toggle()
+        assertTrue(state.topVisible)
         assertTrue(state.bottomVisible)
+
         state.showSeek()
         assertFalse(state.topVisible)
         assertTrue(state.bottomVisible)
+
         state.hide()
         assertFalse(state.topVisible)
         assertFalse(state.bottomVisible)
+        assertFalse(state.anyVisible)
+
         state.toggle()
         assertTrue(state.topVisible)
         assertTrue(state.bottomVisible)
+
         state.toggle()
+        assertFalse(state.topVisible)
         assertFalse(state.bottomVisible)
     }
 
-    /** 全屏标题收起不能意外显示原本已隐藏的底栏。 */
+    /** 首次单击播放与进入全屏均调用 hide 收起全部控件；切换新视频恢复仅顶部栏可见。 */
     @Test
-    fun fullscreenEntryOnlyHidesTitleWithoutReopeningHiddenControls() {
+    fun hideCollapsesAllControlsForPlayAndFullscreenAndResetRestoresTopOnly() {
         val state = PlayerControllerState()
-        state.hideTitle()
-        assertFalse(state.topVisible)
-        assertTrue(state.bottomVisible)
-        state.hide()
-        state.hideTitle()
-        assertFalse(state.bottomVisible)
         state.show()
         assertTrue(state.topVisible)
+        assertTrue(state.bottomVisible)
+
+        // 进入全屏或首次单击播放立即收起顶部与底部全部控件
+        state.hide()
+        assertFalse(state.topVisible)
+        assertFalse(state.bottomVisible)
+
+        // 切换新视频恢复默认初始态：仅顶部标题可见，底部进度条隐藏
+        state.resetForNewMedia()
+        assertTrue(state.topVisible)
+        assertFalse(state.bottomVisible)
     }
 
     private class Target : PlayerGestureControlTarget {

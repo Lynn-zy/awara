@@ -691,4 +691,255 @@ class PlayerStateQualityTest {
         assertEquals(2f, handler2.playbackParametersValue.speed, 0.0f)
         assertNull(state2PersistTriggered)
     }
+
+    @Test
+    fun qualitySwitchRetainsKnownPortraitVideoSizeWhileDifferentVideoResetsIt() {
+        val (player, _) = createMockPlayer()
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "720",
+                saveQualityPreference = {},
+            )
+        val item720 =
+            PlayerState.PlayerItem(
+                quality = "720",
+                mediaItem = MediaItem.Builder().setMediaId("video-portrait").build(),
+            )
+        val itemSource =
+            PlayerState.PlayerItem(
+                quality = "Source",
+                mediaItem = MediaItem.Builder().setMediaId("video-portrait").build(),
+            )
+        state.updatePlayerItems(listOf(item720, itemSource))
+        state.playbackListener.onVideoSizeChanged(androidx.media3.common.VideoSize(720, 1280))
+        assertEquals(PlayerState.VideoSize(720, 1280), state.videoSize)
+
+        // 同视频切换清晰度准备期间内核若短暂回调 0x0，保留已知竖屏尺寸防止详情页播放器闪烁跳变
+        state.updateCurrentQuality("Source")
+        state.playbackListener.onVideoSizeChanged(androidx.media3.common.VideoSize.UNKNOWN)
+        assertEquals(PlayerState.VideoSize(720, 1280), state.videoSize)
+
+        // 新清晰度真实尺寸到达后正常更新
+        state.playbackListener.onVideoSizeChanged(androidx.media3.common.VideoSize(1080, 1920))
+        assertEquals(PlayerState.VideoSize(1080, 1920), state.videoSize)
+
+        // 切换到另一部视频时立即清空旧视频尺寸
+        val nextVideoItem =
+            PlayerState.PlayerItem(
+                quality = "Source",
+                mediaItem = MediaItem.Builder().setMediaId("video-landscape").build(),
+            )
+        state.updatePlayerItems(listOf(nextVideoItem))
+        assertEquals(PlayerState.VideoSize.UNKNOWN, state.videoSize)
+    }
+
+    @Test
+    fun initialPlayPromptWaitsUntilLoadingStopsAndBlocksPrematureControlsDuringBuffering() {
+        val (player, handler) = createMockPlayer()
+        handler.playWhenReadyValue = false
+        handler.isPlayingValue = false
+        val state = PlayerState(player = player, initialQuality = "Source", saveQualityPreference = {})
+
+        val item720 = PlayerState.PlayerItem("720", MediaItem.Builder().setMediaId("v1").build())
+        val item1080 = PlayerState.PlayerItem("1080", MediaItem.Builder().setMediaId("v1").build())
+        state.updatePlayerItems(listOf(item720, item1080))
+
+        // 1. 刚进入详情页（IDLE）：无底部进度条，不展示播放按钮，且点击交互被初始加载门控拦截
+        assertTrue(state.controllerState.topVisible)
+        assertFalse(state.controllerState.bottomVisible)
+        val idlePrompt =
+            shouldShowInitialPlayPrompt(
+                renderedFirstFrame = state.renderedFirstFrame,
+                playing = state.playing,
+                playWhenReady = state.playWhenReady,
+                hasStartedPlayback = state.hasStartedPlayback,
+                showLoading = state.showLoading,
+                playbackState = state.state,
+            )
+        assertFalse(idlePrompt)
+        assertTrue(
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = state.hasStartedPlayback,
+                playing = state.playing,
+                initialPlayPromptReady = idlePrompt,
+                playbackState = state.state,
+            )
+        )
+
+        // 2. 仍在 BUFFERING 转圈中，即使视频解码器已经提前渲染出第一帧画面：
+        // 依然不能显示播放按钮，且点击播放器区域依然被拦截（不弹出底部进度条）
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+        state.playbackListener.onRenderedFirstFrame()
+        assertTrue(state.renderedFirstFrame)
+        assertTrue(state.showLoading)
+        val bufferingWithFirstFramePrompt =
+            shouldShowInitialPlayPrompt(
+                renderedFirstFrame = state.renderedFirstFrame,
+                playing = state.playing,
+                playWhenReady = state.playWhenReady,
+                hasStartedPlayback = state.hasStartedPlayback,
+                showLoading = state.showLoading,
+                playbackState = state.state,
+            )
+        assertFalse(bufferingWithFirstFramePrompt)
+        assertTrue(
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = state.hasStartedPlayback,
+                playing = state.playing,
+                initialPlayPromptReady = bufferingWithFirstFramePrompt,
+                playbackState = state.state,
+            )
+        )
+
+        // 3. 缓存达到起播水位，loading 停止（进入 STATE_READY）：此时才展示播放按钮并放开首次单击播放
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_READY)
+        assertFalse(state.showLoading)
+        val readyPrompt =
+            shouldShowInitialPlayPrompt(
+                renderedFirstFrame = state.renderedFirstFrame,
+                playing = state.playing,
+                playWhenReady = state.playWhenReady,
+                hasStartedPlayback = state.hasStartedPlayback,
+                showLoading = state.showLoading,
+                playbackState = state.state,
+            )
+        assertTrue(readyPrompt)
+        assertFalse(
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = state.hasStartedPlayback,
+                playing = state.playing,
+                initialPlayPromptReady = readyPrompt,
+                playbackState = state.state,
+            )
+        )
+
+        // 4. 用户单击开始播放：标记已开始播放，图标消失，后续单击可正常切换控制栏
+        state.play()
+        state.playbackListener.onIsPlayingChanged(true)
+        assertTrue(state.hasStartedPlayback)
+        val playingPrompt =
+            shouldShowInitialPlayPrompt(
+                renderedFirstFrame = state.renderedFirstFrame,
+                playing = state.playing,
+                playWhenReady = state.playWhenReady,
+                hasStartedPlayback = state.hasStartedPlayback,
+                showLoading = state.showLoading,
+                playbackState = state.state,
+            )
+        assertFalse(playingPrompt)
+        assertFalse(
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = state.hasStartedPlayback,
+                playing = state.playing,
+                initialPlayPromptReady = playingPrompt,
+                playbackState = state.state,
+            )
+        )
+
+        // 5. 播放中途双击暂停（playing = false）：因已播放过，绝不再出现首次播放图标，且允许单击呼出进度条
+        state.pause()
+        state.playbackListener.onIsPlayingChanged(false)
+        assertTrue(state.hasStartedPlayback)
+        val pausedPrompt =
+            shouldShowInitialPlayPrompt(
+                renderedFirstFrame = state.renderedFirstFrame,
+                playing = state.playing,
+                playWhenReady = state.playWhenReady,
+                hasStartedPlayback = state.hasStartedPlayback,
+                showLoading = state.showLoading,
+                playbackState = state.state,
+            )
+        assertFalse(pausedPrompt)
+        assertFalse(
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = state.hasStartedPlayback,
+                playing = state.playing,
+                initialPlayPromptReady = pausedPrompt,
+                playbackState = state.state,
+            )
+        )
+
+        // 6. 同视频切换清晰度保留已播放状态；切换到新视频（即便开启了自动播放）在真正起播前也重置为初始加载拦截态
+        state.controllerState.show()
+        assertTrue(state.controllerState.bottomVisible)
+        state.updateCurrentQuality("1080")
+        assertTrue(state.hasStartedPlayback)
+
+        val nextVideo = PlayerState.PlayerItem("Source", MediaItem.Builder().setMediaId("v2").build())
+        handler.playWhenReadyValue = true
+        state.updatePlayerItems(listOf(nextVideo))
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+        state.playbackListener.onRenderedFirstFrame()
+        assertFalse(state.hasStartedPlayback)
+        assertTrue(state.controllerState.topVisible)
+        assertFalse(state.controllerState.bottomVisible)
+        val autoPlayBufferingPrompt =
+            shouldShowInitialPlayPrompt(
+                renderedFirstFrame = state.renderedFirstFrame,
+                playing = state.playing,
+                playWhenReady = state.playWhenReady,
+                hasStartedPlayback = state.hasStartedPlayback,
+                showLoading = state.showLoading,
+                playbackState = state.state,
+            )
+        assertFalse(autoPlayBufferingPrompt)
+        assertTrue(
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = state.hasStartedPlayback,
+                playing = state.playing,
+                initialPlayPromptReady = autoPlayBufferingPrompt,
+                playbackState = state.state,
+            )
+        )
+    }
+
+    @Test
+    fun initialPlayVeilEnvelopeStartsVisibleOnFirstFrameAndDoubleTapIsDisabledUntilPlayed() {
+        assertEquals(300, INITIAL_PLAY_VEIL_DURATION_MS)
+        // 第 0 帧即有 0.45 可见亮度，避免首帧全透明多等一帧
+        assertEquals(0.45f, initialPlayVeilEnvelope(0f), 1e-4f)
+        // 渐起阶段中点 (2.5% -> u = 0.5, 0.45 + 0.55 * 0.75 = 0.8625)
+        assertEquals(0.8625f, initialPlayVeilEnvelope(0.025f), 1e-4f)
+        // 5% 处达到峰值 1.0
+        assertEquals(1f, initialPlayVeilEnvelope(0.05f), 1e-4f)
+        // 随后单调缓出衰减至 0
+        assertEquals(0.125f, initialPlayVeilEnvelope(0.525f), 1e-4f)
+        assertEquals(0f, initialPlayVeilEnvelope(1f), 1e-5f)
+
+        // 初始 loading 与首帧待播阶段均禁用双击检测（跳过 300ms doubleTapTimeoutMillis 等待）
+        assertFalse(
+            shouldEnableDoubleTapGesture(
+                hasStartedPlayback = false,
+                playing = false,
+                initialPlayPromptReady = false,
+                playbackState = PlayerState.State.BUFFERING,
+            )
+        )
+        assertFalse(
+            shouldEnableDoubleTapGesture(
+                hasStartedPlayback = false,
+                playing = false,
+                initialPlayPromptReady = true,
+                playbackState = PlayerState.State.READY,
+            )
+        )
+        // 一旦开始播放及后续中途暂停，正常开启双击暂停/播放
+        assertTrue(
+            shouldEnableDoubleTapGesture(
+                hasStartedPlayback = true,
+                playing = true,
+                initialPlayPromptReady = false,
+                playbackState = PlayerState.State.READY,
+            )
+        )
+        assertTrue(
+            shouldEnableDoubleTapGesture(
+                hasStartedPlayback = true,
+                playing = false,
+                initialPlayPromptReady = false,
+                playbackState = PlayerState.State.READY,
+            )
+        )
+    }
 }

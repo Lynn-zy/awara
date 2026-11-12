@@ -10,6 +10,10 @@ data class File(
     val path: String,
     val type: String,
     val duration: Int? = null,
+    /** 媒体文件像素宽度（若服务端返回则用于详情页提前感知横竖屏比例） */
+    val width: Int? = null,
+    /** 媒体文件像素高度（若服务端返回则用于详情页提前感知横竖屏比例） */
+    val height: Int? = null,
 )
 
 fun File?.toHeaderUrl(): String {

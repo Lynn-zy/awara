@@ -56,6 +56,8 @@ import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
 import me.rerere.awara.ui.hooks.rememberWindowSizeClass
 import me.rerere.awara.ui.page.video.layout.VideoPagePhoneLayout
 import me.rerere.awara.ui.page.video.layout.VideoPageTabletLayout
+import me.rerere.awara.ui.page.video.layout.isPortraitVideo
+import me.rerere.awara.ui.page.video.layout.resolveEffectiveVideoSize
 import me.rerere.awara.ui.theme.DynamicColorTheme
 import me.rerere.awara.ui.theme.rememberDynamicColorSchemeState
 import org.koin.androidx.compose.koinViewModel
@@ -112,9 +114,11 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     // Full Screen
     var fullscreen by remember { mutableStateOf(false) }
     fun enterFullScreen() {
-        if (state.videoSize == PlayerState.VideoSize.UNKNOWN) return
-        state.controllerState.hideTitle()
-        if (state.videoSize.width > state.videoSize.height) {
+        val effectiveSize = resolveEffectiveVideoSize(state.videoSize, vm.state.video)
+        if (effectiveSize == PlayerState.VideoSize.UNKNOWN) return
+        // 单击全屏按钮进入全屏时，立即收起顶部标题与底部进度条等全部控件
+        state.controllerState.hide()
+        if (effectiveSize.width > effectiveSize.height) {
             fullscreen = true
             requestOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         } else {
@@ -458,9 +462,20 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                 )
             },
         ) { player ->
+            val portraitVideo = isPortraitVideo(state.videoSize, vm.state.video)
             when (windowSize.widthSizeClass) {
-                WindowWidthSizeClass.Compact -> VideoPagePhoneLayout(vm, player)
-                else -> VideoPageTabletLayout(vm, player)
+                WindowWidthSizeClass.Compact ->
+                    VideoPagePhoneLayout(
+                        vm = vm,
+                        isPortraitVideo = portraitVideo,
+                        player = player,
+                    )
+                else ->
+                    VideoPageTabletLayout(
+                        vm = vm,
+                        isPortraitVideo = portraitVideo,
+                        player = player,
+                    )
             }
         }
     }

@@ -1,5 +1,13 @@
 package me.rerere.awara.ui.component.player
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -61,14 +69,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
@@ -83,8 +96,11 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
@@ -98,8 +114,16 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player as MediaPlayer
 import androidx.media3.common.util.UnstableApi
 import java.net.URI
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sign
+import kotlin.math.sin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.ui.component.common.CdnConnectionDebugText
@@ -129,6 +153,69 @@ internal fun playerBufferedProgressFraction(
     return if (scheme == "file" || scheme == "content") 1f
     else playerProgressFraction(bufferedPositionMs, durationMs)
 }
+
+/**
+ * 判断播放器当前是否处于「初始缓冲已完成、首帧已显示、等待用户首次单击播放」的引导状态。
+ *
+ * 仅当底层播放器进入就绪态（[PlayerState.State.READY]）、中心 loading 已停止（`!showLoading`）、
+ * 视频首帧已实际渲染上屏，且当前尚未开始播放或自动起播时，才展示右下角播放按钮并响应首次单击播放。
+ * 在初始 loading 转圈期间（如 [PlayerState.State.IDLE] 或 [PlayerState.State.BUFFERING]），
+ * 即使首帧画面已经提前解码显示在播放器区域中，也不展示播放按钮。
+ */
+internal fun shouldShowInitialPlayPrompt(
+    renderedFirstFrame: Boolean,
+    playing: Boolean,
+    playWhenReady: Boolean,
+    hasStartedPlayback: Boolean,
+    showLoading: Boolean,
+    playbackState: PlayerState.State,
+): Boolean =
+    renderedFirstFrame &&
+        playbackState == PlayerState.State.READY &&
+        !showLoading &&
+        !playing &&
+        !playWhenReady &&
+        !hasStartedPlayback
+
+/**
+ * 判断当前是否处于进入视频页后的「初始加载未就绪阶段」。
+ *
+ * 在视频尚未实际开始过播放（`!hasStartedPlayback`）、尚未满足首帧就绪待播条件（`!initialPlayPromptReady`）、
+ * 且未处于播放结束态（`playbackState != ENDED`）时，说明仍在请求资源或初始缓存 loading 中；
+ * 此时点击、双击或拖动播放器区域均不应呼出底部进度条控件，也不应提前触发无效播放。
+ */
+internal fun shouldBlockInitialLoadingInteraction(
+    hasStartedPlayback: Boolean,
+    playing: Boolean,
+    initialPlayPromptReady: Boolean,
+    playbackState: PlayerState.State,
+): Boolean =
+    !hasStartedPlayback &&
+        !playing &&
+        !initialPlayPromptReady &&
+        playbackState != PlayerState.State.ENDED
+
+/**
+ * 判断当前是否应挂载双击暂停/播放手势回调。
+ *
+ * Compose 的 `detectTapGestures` 在传入非空 `onDoubleTap` 时，手指抬起后必须等待系统双击超时窗口
+ * （`ViewConfiguration.doubleTapTimeoutMillis`，约 300ms）才能确认不是双击并回调 `onTap`。
+ * 在「初始加载阶段」与「首帧就绪待单击起播阶段」下返回 `false`（将 `onDoubleTap` 置为 `null`），
+ * 使手指抬起瞬间（0ms 等待）即可立刻触发蒙层动效并开始播放；进入正常播放阶段后再启用双击暂停/播放。
+ */
+internal fun shouldEnableDoubleTapGesture(
+    hasStartedPlayback: Boolean,
+    playing: Boolean,
+    initialPlayPromptReady: Boolean,
+    playbackState: PlayerState.State,
+): Boolean =
+    !initialPlayPromptReady &&
+        !shouldBlockInitialLoadingInteraction(
+            hasStartedPlayback = hasStartedPlayback,
+            playing = playing,
+            initialPlayPromptReady = initialPlayPromptReady,
+            playbackState = playbackState,
+        )
 
 @Composable
 fun Player(
@@ -328,9 +415,10 @@ internal fun PlayerController(
     val controller = state.controllerState
     var speedMenuExpanded by remember(state) { mutableStateOf(false) }
     var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(fullscreen) { if (fullscreen) controller.hideTitle() }
+    // 进入全屏时立即收起顶部标题与底部进度条等全部控件
+    LaunchedEffect(fullscreen) { if (fullscreen) controller.hide() }
     LaunchedEffect(
-        controller.bottomVisible,
+        controller.anyVisible,
         state.playing,
         previewState.isActive,
         controls.feedback,
@@ -338,7 +426,7 @@ internal fun PlayerController(
         lastInteract,
     ) {
         if (
-            controller.bottomVisible &&
+            controller.anyVisible &&
                 state.playing &&
                 !previewState.isActive &&
                 controls.feedback == null &&
@@ -352,6 +440,35 @@ internal fun PlayerController(
     // 手势防误触门控（竖向滑动拒绝后抑制单击切换控制栏）
     var suppressTap by remember { mutableStateOf(false) }
 
+    // 首次单击播放器区域起播时的 M4 轻微柔白蒙层动效状态（时长 300ms）
+    val coroutineScope = rememberCoroutineScope()
+    val tapVeilProgress = remember { Animatable(0f) }
+    var tapVeilActive by remember { mutableStateOf(false) }
+    var tapVeilCenter by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(mediaItem, mediaGeneration) {
+        tapVeilActive = false
+        tapVeilProgress.snapTo(0f)
+    }
+    fun triggerInitialPlayTapVeil(tapOffset: Offset) {
+        tapVeilCenter = tapOffset
+        tapVeilActive = true
+        coroutineScope.launch {
+            try {
+                tapVeilProgress.snapTo(0f)
+                tapVeilProgress.animateTo(
+                    targetValue = 1f,
+                    animationSpec =
+                        tween(
+                            durationMillis = INITIAL_PLAY_VEIL_DURATION_MS,
+                            easing = LinearEasing,
+                        ),
+                )
+            } finally {
+                tapVeilActive = false
+            }
+        }
+    }
+
     // 中心 loading 延迟 350ms 显示，避免瞬时微弱缓冲导致视觉闪烁
     var delayedLoading by remember { mutableStateOf(false) }
     LaunchedEffect(state.showLoading, previewState.isActive, mediaGeneration) {
@@ -361,6 +478,23 @@ internal fun PlayerController(
             delayedLoading = true
         }
     }
+
+    val awaitingInitialPlay =
+        shouldShowInitialPlayPrompt(
+            renderedFirstFrame = state.renderedFirstFrame,
+            playing = state.playing,
+            playWhenReady = state.playWhenReady,
+            hasStartedPlayback = state.hasStartedPlayback,
+            showLoading = state.showLoading,
+            playbackState = state.state,
+        )
+    val doubleTapEnabled =
+        shouldEnableDoubleTapGesture(
+            hasStartedPlayback = state.hasStartedPlayback,
+            playing = state.playing,
+            initialPlayPromptReady = awaitingInitialPlay,
+            playbackState = state.state,
+        )
 
     val systemBars = WindowInsets.systemBarsIgnoringVisibility
     val systemGestures = WindowInsets.systemGestures
@@ -383,23 +517,61 @@ internal fun PlayerController(
                     fullscreen,
                     playerSize,
                     inputEnabled,
+                    doubleTapEnabled,
                 ) {
                     if (!inputEnabled) return@pointerInput
                     detectTapGestures(
                         onPress = { suppressTap = false },
-                        onDoubleTap = {
-                            if (!suppressTap) {
-                                lastInteract = System.currentTimeMillis()
-                                if (state.playing) state.pause() else state.play()
-                            }
-                        },
-                        onTap = {
+                        onDoubleTap =
+                            if (doubleTapEnabled) {
+                                {
+                                    if (!suppressTap) {
+                                        lastInteract = System.currentTimeMillis()
+                                        if (state.playing) {
+                                            state.pause()
+                                        } else {
+                                            state.play()
+                                        }
+                                    }
+                                }
+                            } else {
+                                // 首帧待播与初始加载期传 null，跳过 300ms 双击判定等待，手指抬起 0ms 立即触发 onTap
+                                null
+                            },
+                        onTap = { tapOffset ->
                             if (suppressTap) {
                                 suppressTap = false
                                 return@detectTapGestures
                             }
+                            val initialPrompt =
+                                shouldShowInitialPlayPrompt(
+                                    renderedFirstFrame = state.renderedFirstFrame,
+                                    playing = state.playing,
+                                    playWhenReady = state.playWhenReady,
+                                    hasStartedPlayback = state.hasStartedPlayback,
+                                    showLoading = state.showLoading,
+                                    playbackState = state.state,
+                                )
+                            if (
+                                shouldBlockInitialLoadingInteraction(
+                                    hasStartedPlayback = state.hasStartedPlayback,
+                                    playing = state.playing,
+                                    initialPlayPromptReady = initialPrompt,
+                                    playbackState = state.state,
+                                )
+                            ) {
+                                // 初始 loading 转圈期间（即使首帧已提前显示）点击播放器区域不显示底部进度条
+                                return@detectTapGestures
+                            }
                             lastInteract = System.currentTimeMillis()
-                            controller.toggle()
+                            if (initialPrompt) {
+                                // 初始缓冲已停止且首帧就绪：触发轻微柔白蒙层反馈，立即开始播放并收起全部控件
+                                triggerInitialPlayTapVeil(tapOffset)
+                                state.play()
+                                controller.hide()
+                            } else {
+                                controller.toggle()
+                            }
                         },
                     )
                 }
@@ -409,18 +581,35 @@ internal fun PlayerController(
                     gestureKey =
                         listOf(mediaItem, mediaGeneration, fullscreen, playerSize, inputEnabled),
                     canInteract = {
+                        val initialPrompt =
+                            shouldShowInitialPlayPrompt(
+                                renderedFirstFrame = state.renderedFirstFrame,
+                                playing = state.playing,
+                                playWhenReady = state.playWhenReady,
+                                hasStartedPlayback = state.hasStartedPlayback,
+                                showLoading = state.showLoading,
+                                playbackState = state.state,
+                            )
                         foreground &&
                             windowInfo.isWindowFocused &&
-                            mediaGeneration == renderedGeneration
+                            mediaGeneration == renderedGeneration &&
+                            !shouldBlockInitialLoadingInteraction(
+                                hasStartedPlayback = state.hasStartedPlayback,
+                                playing = state.playing,
+                                initialPlayPromptReady = initialPrompt,
+                                playbackState = state.state,
+                            )
                     },
                     canBoost = {
-                        state.player.playWhenReady &&
+                        (state.playing || state.hasStartedPlayback) &&
+                            state.player.playWhenReady &&
                             state.state != PlayerState.State.ENDED &&
                             state.state != PlayerState.State.IDLE
                     },
                     canSeek = {
                         inputEnabled &&
                             mediaGeneration == renderedGeneration &&
+                            state.hasStartedPlayback &&
                             state.player.isCurrentMediaItemSeekable
                     },
                     canStartAt = { position ->
@@ -498,7 +687,7 @@ internal fun PlayerController(
                                     ),
                                 onExpandedChange = { expanded ->
                                     speedMenuExpanded = expanded
-                                    if (expanded) controller.show()
+                                    if (expanded && state.hasStartedPlayback) controller.show()
                                     lastInteract = System.currentTimeMillis()
                                 },
                                 onSpeedSelected = { speed ->
@@ -550,6 +739,7 @@ internal fun PlayerController(
                             deltaTime = previewState.deltaTimeText,
                             thumbnail = thumbnail,
                             fraction = progressFraction,
+                            videoSize = state.videoSize,
                             position = previewPosition,
                             trackLeft = sliderBoundsInWindow.left - previewOriginInWindow.x,
                             trackWidth = sliderBoundsInWindow.width,
@@ -638,7 +828,12 @@ internal fun PlayerController(
             }
         }
 
-        if (!controller.bottomVisible && minimalProgressEnabled && state.duration > 0L) {
+        if (
+            !controller.bottomVisible &&
+                minimalProgressEnabled &&
+                state.duration > 0L &&
+                (state.hasStartedPlayback || state.playing)
+        ) {
             PlayerProgressTrack(
                 playedFraction = progressFraction,
                 bufferedFraction = bufferedFraction,
@@ -654,13 +849,69 @@ internal fun PlayerController(
             )
         }
 
+        // 首次单击播放器区域起播时的 M4 轻微柔白羽化光环蒙层反馈
+        if (tapVeilActive) {
+            Canvas(
+                modifier =
+                    Modifier.fillMaxSize().testTag("player_initial_play_veil"),
+            ) {
+                drawInitialPlayTapVeil(
+                    progress = tapVeilProgress.value,
+                    tapCenter = tapVeilCenter,
+                )
+            }
+        }
+
+        // 初始缓冲已完成且首帧就绪时，在右下角展示方案 B 白色半透明圆润矩形播放按钮
+        AnimatedVisibility(
+            visible =
+                awaitingInitialPlay &&
+                    !controller.bottomVisible &&
+                    !previewState.isActive &&
+                    controls.feedback == null,
+            enter = fadeIn(tween(180)) + scaleIn(initialScale = 0.9f, animationSpec = tween(180)),
+            exit = fadeOut(tween(130)) + scaleOut(targetScale = 0.9f, animationSpec = tween(130)),
+            modifier =
+                Modifier.align(Alignment.BottomEnd)
+                    .then(
+                        if (fullscreen) {
+                            Modifier.windowInsetsPadding(
+                                WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .padding(end = 18.dp, bottom = 16.dp),
+        ) {
+            PlayerInitialPlayBadge(
+                onTriggerPlay = {
+                    lastInteract = System.currentTimeMillis()
+                    val fallbackCenter =
+                        if (playerSize.width > 0 && playerSize.height > 0) {
+                            Offset(playerSize.width * 0.85f, playerSize.height * 0.82f)
+                        } else {
+                            Offset.Zero
+                        }
+                    triggerInitialPlayTapVeil(fallbackCenter)
+                    state.play()
+                    controller.hide()
+                }
+            )
+        }
+
         Column(
             modifier = Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // 延迟 350ms 后显示缓冲指示，且手势预览期间不遮盖提示
-            if (delayedLoading && !previewState.isActive && controls.feedback == null) {
+            // 延迟 350ms 后显示缓冲指示；一旦底层脱离 loading 态立即移除，且手势预览期间不遮盖提示
+            if (
+                state.showLoading &&
+                    delayedLoading &&
+                    !previewState.isActive &&
+                    controls.feedback == null
+            ) {
                 CircularProgressIndicator(color = Color.White)
             }
 
@@ -680,6 +931,242 @@ internal fun PlayerController(
                 }
             }
         }
+    }
+}
+
+/** 首次单击起播蒙层动效固定参数（M4 · 柔白 · 浓度 5% · 时长 300ms · 范围 30% · 渐起 5%）。 */
+internal const val INITIAL_PLAY_VEIL_DURATION_MS = 300
+private const val INITIAL_PLAY_VEIL_PEAK_ALPHA = 0.05f
+private const val INITIAL_PLAY_VEIL_SPREAD = 0.30f
+private const val INITIAL_PLAY_VEIL_ATTACK_RATIO = 0.05f
+
+/**
+ * 计算起播蒙层的时间包络：
+ * 第 0 帧即以 `0.45` 初始亮度即时点亮以消除单帧冷启动空白，前 [attackRatio]（15ms）平滑推至峰值 `1.0`，
+ * 随后按三次缓出曲线自然消散至 `0`。
+ */
+internal fun initialPlayVeilEnvelope(
+    progress: Float,
+    attackRatio: Float = INITIAL_PLAY_VEIL_ATTACK_RATIO,
+): Float {
+    val p = progress.coerceIn(0f, 1f)
+    val a = attackRatio.coerceIn(0.03f, 0.8f)
+    return if (p < a) {
+        val u = p / a
+        0.45f + 0.55f * u * (2f - u)
+    } else {
+        val decayProgress = (p - a) / (1f - a)
+        (1f - decayProgress).pow(3)
+    }
+}
+
+/**
+ * 在播放器画布上绘制 M4 单击起播轻微蒙层反馈（触点宽羽化柔白光环 + 极淡全画幅底雾）。
+ */
+private fun DrawScope.drawInitialPlayTapVeil(
+    progress: Float,
+    tapCenter: Offset,
+) {
+    val env = initialPlayVeilEnvelope(progress)
+    if (env <= 0.001f) return
+    val peakAlpha = INITIAL_PLAY_VEIL_PEAK_ALPHA * env
+    val p = progress.coerceIn(0f, 1f)
+    val easeOutCubic = 1f - (1f - p).pow(3)
+    val diag = hypot(size.width, size.height)
+    val outerRadius =
+        maxOf(
+            8f,
+            diag * (0.08f + INITIAL_PLAY_VEIL_SPREAD * 0.72f * easeOutCubic),
+        )
+    val center =
+        Offset(
+            x = tapCenter.x.coerceIn(0f, size.width),
+            y = tapCenter.y.coerceIn(0f, size.height),
+        )
+
+    // 1. 极淡全屏柔白底雾
+    drawRect(color = Color.White.copy(alpha = (peakAlpha * 0.22f).coerceIn(0f, 1f)))
+
+    // 2. 触点向外舒展的宽羽化无硬边柔白光环
+    drawRect(
+        brush =
+            Brush.radialGradient(
+                0.00f to Color.White.copy(alpha = (peakAlpha * 0.25f).coerceIn(0f, 1f)),
+                0.58f to Color.White.copy(alpha = (peakAlpha * 0.92f).coerceIn(0f, 1f)),
+                1.00f to Color.Transparent,
+                center = center,
+                radius = outerRadius,
+            )
+    )
+}
+
+/**
+ * 构建锚定四角、四边微鼓弧度为 40% 的超椭圆连续曲率圆润横置矩形路径（方案 B 轮廓）。
+ *
+ * 参数对齐原型定稿：`bulge = 40%` 对应超椭圆指数 `4.36`，四边带克制圆润弧度且无任何转角折痕。
+ */
+internal fun buildYoutubeStylePillPath(
+    centerX: Float,
+    centerY: Float,
+    cornerAnchorX: Float,
+    cornerAnchorY: Float,
+    bulgeFraction: Float = 0.40f,
+): Path {
+    val b = bulgeFraction.coerceIn(0f, 1f)
+    val exponent =
+        if (b <= 0.5f) {
+            8.0 - ((8.0 - 3.45) * b.toDouble()) / 0.5
+        } else {
+            3.45 - ((3.45 - 2.25) * (b.toDouble() - 0.5)) / 0.5
+        }
+    val diagScale = 0.5.pow(1.0 / exponent).toFloat()
+    val rx = cornerAnchorX / diagScale
+    val ry = cornerAnchorY / diagScale
+    val power = 2.0 / exponent
+    val steps = 120
+    return Path().apply {
+        for (i in 0 until steps) {
+            val theta = (i.toDouble() / steps) * PI * 2.0
+            val cosVal = cos(theta)
+            val sinVal = sin(theta)
+            val x = (centerX + rx * sign(cosVal) * abs(cosVal).pow(power)).toFloat()
+            val y = (centerY + ry * sign(sinVal) * abs(sinVal).pow(power)).toFloat()
+            if (i == 0) moveTo(x, y) else lineTo(x, y)
+        }
+        close()
+    }
+}
+
+/**
+ * 构建二次贝塞尔圆角等腰播放三角形路径，与 HTML 原型几何完全一致。
+ */
+private fun buildRoundedPlayTrianglePath(
+    centerX: Float,
+    centerY: Float,
+    width: Float,
+    height: Float,
+    cornerRadius: Float,
+    opticalShiftX: Float,
+): Path {
+    val vertices =
+        arrayOf(
+            Offset(centerX - width * 0.5f + opticalShiftX, centerY - height * 0.5f),
+            Offset(centerX - width * 0.5f + opticalShiftX, centerY + height * 0.5f),
+            Offset(centerX + width * 0.5f + opticalShiftX, centerY),
+        )
+    return Path().apply {
+        for (i in 0 until 3) {
+            val prev = vertices[(i + 2) % 3]
+            val curr = vertices[i]
+            val next = vertices[(i + 1) % 3]
+
+            val v1x = prev.x - curr.x
+            val v1y = prev.y - curr.y
+            val len1 = hypot(v1x, v1y).coerceAtLeast(1e-4f)
+
+            val v2x = next.x - curr.x
+            val v2y = next.y - curr.y
+            val len2 = hypot(v2x, v2y).coerceAtLeast(1e-4f)
+
+            val r = minOf(cornerRadius, len1 * 0.32f, len2 * 0.32f)
+            val startX = curr.x + (v1x / len1) * r
+            val startY = curr.y + (v1y / len1) * r
+            val endX = curr.x + (v2x / len2) * r
+            val endY = curr.y + (v2y / len2) * r
+
+            if (i == 0) moveTo(startX, startY) else lineTo(startX, startY)
+            quadraticBezierTo(curr.x, curr.y, endX, endY)
+        }
+        close()
+    }
+}
+
+/**
+ * 初始缓冲停止且首帧就绪后，悬浮在播放器右下角的朴素白色半透明播放按钮（方案 B 定稿参数）：
+ * - 四边微鼓弧度 = `40%`，外投影 = `0%`，主体不透明度 = `40%`，微凸边缘 = `0%`；
+ * - 内部居中绘制柔和深灰半透明（`rgba(22, 25, 31, 0.74)`）圆角播放三角；
+ * - 触摸事件直接透传至父级 `player_seek_surface`，支持单击画面任意位置起播。
+ */
+@Composable
+internal fun PlayerInitialPlayBadge(
+    onTriggerPlay: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(
+        modifier =
+            modifier
+                .width(50.dp)
+                .height(36.dp)
+                .testTag("player_initial_play_badge")
+                .semantics {
+                    contentDescription = "Play"
+                    role = Role.Button
+                    onClick {
+                        onTriggerPlay()
+                        true
+                    }
+                },
+    ) {
+        val cx = size.width * 0.5f
+        val cy = size.height * 0.5f
+        val cornerAnchorX = 20.4.dp.toPx()
+        val cornerAnchorY = 14.3.dp.toPx()
+        // bulge = 40% 时 exponent = 4.36，用于精确对齐渐变上下边界
+        val diagScale = 0.5.pow(1.0 / 4.36).toFloat()
+        val ry = cornerAnchorY / diagScale
+        val pillTop = cy - ry
+        val pillBottom = cy + ry
+
+        val pillPath =
+            buildYoutubeStylePillPath(
+                centerX = cx,
+                centerY = cy,
+                cornerAnchorX = cornerAnchorX,
+                cornerAnchorY = cornerAnchorY,
+                bulgeFraction = 0.40f,
+            )
+
+        // 1. 40% 不透明度的朴素白色半透明圆润矩形主体（外投影=0%，微凸边缘=0%）
+        drawPath(
+            path = pillPath,
+            brush =
+                Brush.verticalGradient(
+                    0.00f to Color.White.copy(alpha = 0.40f),
+                    0.55f to Color(0xFFF6F8FB).copy(alpha = 0.40f),
+                    1.00f to Color.White.copy(alpha = 0.40f),
+                    startY = pillTop,
+                    endY = pillBottom,
+                ),
+        )
+
+        // 2. 极轻柔边缘收敛描边（对应 bevel=0% 时的微弱抗锯齿过渡边）
+        drawPath(
+            path = pillPath,
+            brush =
+                Brush.verticalGradient(
+                    0.00f to Color.White.copy(alpha = 0.12f),
+                    0.50f to Color.White.copy(alpha = 0.00f),
+                    1.00f to Color(0xFF484F5E).copy(alpha = 0.04f),
+                    startY = pillTop,
+                    endY = pillBottom,
+                ),
+            style = Stroke(width = 1.dp.toPx()),
+        )
+
+        // 3. 柔和深灰半透明圆角播放三角（rgba(22, 25, 31, 0.74)）
+        val trianglePath =
+            buildRoundedPlayTrianglePath(
+                centerX = cx,
+                centerY = cy,
+                width = 12.6.dp.toPx(),
+                height = 14.4.dp.toPx(),
+                cornerRadius = 2.1.dp.toPx(),
+                opticalShiftX = 1.15.dp.toPx(),
+            )
+        drawPath(
+            path = trianglePath,
+            color = Color(0xFF16191F).copy(alpha = 0.74f),
+        )
     }
 }
 

@@ -60,6 +60,8 @@ import java.lang.reflect.Proxy
 import kotlinx.coroutines.runBlocking
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
+import me.rerere.awara.ui.page.video.layout.VideoAdaptivePlayerLayoutBox
+import me.rerere.awara.ui.page.video.layout.videoAdaptivePlayerHeight
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -115,7 +117,10 @@ class PlayerSeekInteractionTest {
         var bufferedPositionMs = 45_000L
         var durationMs = 60_000L
         var seekCount = 0
+        var playCount = 0
         var pauseCount = 0
+        var playWhenReady = true
+        var playing = true
         var rejectSpeedChange = false
         var mediaItem: MediaItem? = null
         val listeners = mutableSetOf<Player.Listener>()
@@ -142,9 +147,16 @@ class PlayerSeekInteractionTest {
                 "getBufferedPosition" -> return bufferedPositionMs
                 "getDuration" -> return durationMs
                 "isCurrentMediaItemSeekable",
-                "isCommandAvailable",
-                "getPlayWhenReady",
-                "isPlaying" -> return true
+                "isCommandAvailable" -> return true
+                "getPlayWhenReady" -> return playWhenReady
+                "isPlaying" -> return playing
+                "play" -> {
+                    playCount++
+                    playWhenReady = true
+                    playing = true
+                    listeners.toList().forEach { it.onIsPlayingChanged(true) }
+                    return null
+                }
                 "seekTo" -> {
                     if (args?.size == 1) {
                         positionMs = args[0] as Long
@@ -193,8 +205,12 @@ class PlayerSeekInteractionTest {
         fullscreenState: MutableState<Boolean> = mutableStateOf(fullscreen),
         cdnDebugEnabled: MutableState<Boolean> = mutableStateOf(false),
         connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
+        initialPlaying: Boolean = true,
+        initialControlsShown: Boolean = true,
     ): Fixture {
         val handler = RecordingPlayer()
+        handler.playing = initialPlaying
+        handler.playWhenReady = initialPlaying
         handler.mediaItem = sourceUri?.let { MediaItem.fromUri(it) }
         val player =
             Proxy.newProxyInstance(
@@ -212,8 +228,11 @@ class PlayerSeekInteractionTest {
                 connectionTracker = connectionTracker,
             )
         state.duration = 60_000L
-        state.playing = true
-        state.state = PlayerState.State.READY
+        state.playing = initialPlaying
+        state.state = if (initialPlaying) PlayerState.State.READY else PlayerState.State.BUFFERING
+        if (initialControlsShown) {
+            state.controllerState.show()
+        }
         val preview = SeekPreviewState()
         val target = RecordingControls()
         val controls = PlayerGestureControlState(target)
@@ -245,7 +264,7 @@ class PlayerSeekInteractionTest {
                                 controllerTrail = {
                                     IconButton(
                                         onClick = {
-                                            state.controllerState.hideTitle()
+                                            state.controllerState.hide()
                                             fullscreenState.value = true
                                         },
                                         modifier = Modifier.testTag("test_fullscreen_button"),
@@ -422,14 +441,15 @@ class PlayerSeekInteractionTest {
         compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
     }
 
-    /** 清晰度成功选择及全屏按钮都走生产状态，避免只验证测试自建显隐值。 */
+    /** 清晰度成功选择及进入全屏均立即收起顶部与底部全部控件。 */
     @Test
-    fun qualitySelectionHidesBothRegionsAndFullscreenEntryHidesTitle() {
+    fun qualitySelectionAndFullscreenEntryHideBothControlRegions() {
         val fixture = renderController(qualityAction = true)
         compose.runOnIdle {
             fixture.state.updatePlayerItems(
                 listOf(PlayerState.PlayerItem("720p", MediaItem.fromUri("file:///quality.mp4")))
             )
+            fixture.state.controllerState.show()
         }
         compose.onNodeWithTag("test_quality_selector").performClick()
         compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
@@ -439,11 +459,91 @@ class PlayerSeekInteractionTest {
         }
         compose.onNodeWithTag("test_fullscreen_button").performClick()
         compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
-        compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
         compose.runOnIdle { fixture.mounted.value = false }
         compose.runOnIdle { fixture.mounted.value = true }
         compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+    }
+
+    /** 验证初始 loading 期间（含已出首帧但仍缓冲时）点击不弹出底栏或播放钮，loading 停止后显示宽长类 YouTube 播放钮。 */
+    @Test
+    fun initialEntryFlowBlocksLoadingTapsThenShowsYoutubeBadgeOnceReady() {
+        val fixture = renderController(initialPlaying = false, initialControlsShown = false)
+
+        // 1. 进入详情页初始 loading 阶段（尚未出首帧）：无底部进度条，无播放按钮，点击画面不呼出底栏
+        compose.onNodeWithTag("player_top_controls").assertIsDisplayed()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_initial_play_badge").assertDoesNotExist()
+        compose.onNodeWithTag("player_minimal_progress").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_initial_play_badge").assertDoesNotExist()
+
+        // 2. 视频首帧画面已解码上屏，但底层仍处于 STATE_BUFFERING 初始缓存中：
+        // 依然不显示播放按钮，此时点击播放器区域依然不显示底部进度条且不触发播放
+        compose.runOnIdle {
+            fixture.state.playbackListener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+            fixture.state.playbackListener.onRenderedFirstFrame()
+        }
+        compose.onNodeWithTag("player_initial_play_badge").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(600)
+        compose.runOnIdle { assertEquals(0, fixture.player.playCount) }
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_initial_play_badge").assertDoesNotExist()
+
+        // 3. 缓存完成 loading 停止（进入 STATE_READY）：右下角出现宽度略大于高度的类 YouTube 播放按钮
+        compose.runOnIdle {
+            fixture.state.playbackListener.onPlaybackStateChanged(Player.STATE_READY)
+        }
+        val badgeBounds =
+            compose
+                .onNodeWithTag("player_initial_play_badge")
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+                .boundsInRoot
+        assertTrue("播放按钮宽度应略大于高度（类 YouTube 胶囊矩形比例）", badgeBounds.width > badgeBounds.height)
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+
+        // 4. 单击播放器区域：不经过 300ms 双击等待，手指抬起首帧即刻开始播放并显示 M4 轻微柔白蒙层
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("player_seek_surface").performTouchInput {
+                click(Offset(center.x, center.y * 0.7f))
+            }
+            compose.mainClock.advanceTimeByFrame()
+            assertEquals("手指抬起首帧应立即触发 play，不得等待 300ms 双击超时", 1, fixture.player.playCount)
+            compose.onNodeWithTag("player_initial_play_veil").assertIsDisplayed()
+            compose.mainClock.advanceTimeBy(500)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.runOnIdle { assertEquals(1, fixture.player.playCount) }
+        compose.onNodeWithTag("player_initial_play_veil").assertDoesNotExist()
+        compose.onNodeWithTag("player_initial_play_badge").assertDoesNotExist()
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
+
+        // 5. 再次单击视频画面：呼出顶部标题与底部进度条控件（不再触发首次起播蒙层）
+        compose.onNodeWithTag("player_seek_surface").performTouchInput {
+            click(Offset(center.x, center.y * 0.7f))
+        }
+        compose.mainClock.advanceTimeBy(600)
+        compose.onNodeWithTag("player_initial_play_veil").assertDoesNotExist()
+        compose.onNodeWithTag("player_top_controls").assertIsDisplayed()
         compose.onNodeWithTag("player_bottom_controls").assertIsDisplayed()
+
+        // 6. 单击全屏按钮进入全屏：立即收起顶部和底部的所有控件
+        compose.onNodeWithTag("test_fullscreen_button").performClick()
+        compose.onNodeWithTag("player_top_controls").assertDoesNotExist()
+        compose.onNodeWithTag("player_bottom_controls").assertDoesNotExist()
     }
 
     /** 标题使用紧凑单行正文层级；全屏不另行放大字号。 */
@@ -1391,35 +1491,180 @@ class PlayerSeekInteractionTest {
                     factory,
                 )
             assertNotNull(frame)
-            assertTrue(frame!!.width in 1..320)
-            assertTrue(frame.height in 1..180)
+            assertTrue(frame!!.width in 1..480)
+            assertTrue(frame.height in 1..480)
             frame.recycle()
         }
 
-    /** 真正使用平台解码器取测试视频帧，验证尺寸有上限；无设备时此测试只能编译。 */
+    /** 竖屏视频预览框自适应竖屏宽高比，且加载圈遵守 150ms 延迟门控。 */
+    @Test
+    fun portraitVideoPreviewUsesPortraitAspectRatioAndDelaysLoadingSpinner() {
+        val stateHolder =
+            mutableStateOf(
+                SeekThumbnailState<Bitmap>(
+                    request = SeekThumbnailRequest("content://media/video/portrait", 1000L),
+                    frame = null,
+                    loading = true,
+                )
+            )
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.setContent {
+                MaterialTheme {
+                    Box(Modifier.size(320.dp, 420.dp)) {
+                        PlayerSeekPreview(
+                            targetTime = "00:10",
+                            deltaTime = "+00:05",
+                            thumbnail = stateHolder.value,
+                            fraction = 0.5f,
+                            videoSize = PlayerState.VideoSize(1080, 1920),
+                        )
+                    }
+                }
+            }
+            compose.mainClock.advanceTimeByFrame()
+            val previewBox =
+                compose
+                    .onNodeWithTag("player_seek_thumbnail")
+                    .assertIsDisplayed()
+                    .fetchSemanticsNode()
+                    .boundsInRoot
+            assertTrue("竖屏视频预览框高度应大于宽度", previewBox.height > previewBox.width)
+            assertEquals(9f / 16f, previewBox.width / previewBox.height, 0.03f)
+
+            // 150ms 门控前不展示转圈指示器
+            compose.onNodeWithTag("player_seek_thumbnail_loading").assertDoesNotExist()
+            compose.mainClock.advanceTimeBy(100L)
+            compose.onNodeWithTag("player_seek_thumbnail_loading").assertDoesNotExist()
+
+            // 超过 150ms 仍未出帧时才展示转圈指示器
+            compose.mainClock.advanceTimeBy(100L)
+            compose.onNodeWithTag("player_seek_thumbnail_loading").assertIsDisplayed()
+
+            // 新帧到达后立即移除转圈并展示画面
+            val portraitBitmap = Bitmap.createBitmap(180, 320, Bitmap.Config.ARGB_8888)
+            stateHolder.value =
+                SeekThumbnailState(
+                    request = SeekThumbnailRequest("content://media/video/portrait", 1000L),
+                    frame = portraitBitmap,
+                    loading = false,
+                )
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithTag("player_seek_thumbnail_loading").assertDoesNotExist()
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /** 详情页竖屏布局为底部卡片与标签行留出预留空间，且支持向下浏览收起至横屏高度、回滑到顶拉高恢复。 */
+    @Test
+    fun portraitAdaptiveLayoutReservesBottomSpaceAndCollapsesSmoothlyOnScroll() {
+        val isPortrait = mutableStateOf(false)
+        val expanded = mutableStateOf(false)
+        compose.setContent {
+            MaterialTheme {
+                VideoAdaptivePlayerLayoutBox(
+                    isPortraitVideo = isPortrait.value,
+                    includeTabBar = true,
+                    deductStatusBar = false,
+                    modifier = Modifier.size(392.dp, 852.dp).testTag("detail_root"),
+                ) { collapseState ->
+                    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+                        Box(
+                            Modifier.size(width = 392.dp, height = 0.dp)
+                                .videoAdaptivePlayerHeight(collapseState)
+                                .testTag("adaptive_player_box")
+                        ) {
+                            Box(
+                                Modifier.size(48.dp)
+                                    .align(androidx.compose.ui.Alignment.BottomEnd)
+                                    .testTag("adaptive_fullscreen_btn")
+                            )
+                        }
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier.weight(1f).fillMaxSize().testTag("detail_scroll_list")
+                        ) {
+                            if (expanded.value) {
+                                item { Text("展开后的长简介内容\n第二行\n第三行") }
+                            }
+                            items(30) { idx ->
+                                Box(Modifier.size(392.dp, 56.dp)) { Text("Item $idx") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        val landscapeBounds =
+            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
+        assertEquals(9f / 16f, landscapeBounds.height / landscapeBounds.width, 0.02f)
+
+        // 切换为竖屏视频：播放器变为竖屏高度，且不铺满屏幕以留出底部标题卡片、作者卡片与标签行空间
+        compose.runOnIdle { isPortrait.value = true }
+        val portraitBounds =
+            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
+        val fullscreenBtnBefore =
+            compose.onNodeWithTag("adaptive_fullscreen_btn").fetchSemanticsNode().boundsInRoot
+        val rootBounds = compose.onNodeWithTag("detail_root").fetchSemanticsNode().boundsInRoot
+        assertTrue(portraitBounds.height > portraitBounds.width)
+        assertTrue(portraitBounds.height < rootBounds.height * 0.78f)
+
+        // 展开下方简介后，初始未滑动时播放器高度保持恒定不变
+        compose.runOnIdle { expanded.value = true }
+        val fullscreenBtnAfter =
+            compose.onNodeWithTag("adaptive_fullscreen_btn").fetchSemanticsNode().boundsInRoot
+        assertEquals(fullscreenBtnBefore.top, fullscreenBtnAfter.top, 0.5f)
+        assertEquals(fullscreenBtnBefore.bottom, fullscreenBtnAfter.bottom, 0.5f)
+
+        // 往下浏览内容（手指向上滑）：竖屏播放器平滑收起直至初始横屏 16:9 高度
+        compose.onNodeWithTag("detail_scroll_list").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -portraitBounds.height))
+            up()
+        }
+        compose.waitForIdle()
+        val collapsedBounds =
+            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
+        assertEquals(landscapeBounds.height, collapsedBounds.height, 2f)
+
+        // 从下方往上回滑到顶并继续下拉：竖屏播放器平滑拉高恢复初始竖屏高度
+        compose.onNodeWithTag("detail_scroll_list").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, portraitBounds.height * 1.5f))
+            up()
+        }
+        compose.waitForIdle()
+        val reExpandedBounds =
+            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
+        assertEquals(portraitBounds.height, reExpandedBounds.height, 2f)
+    }
+
+    /** 真正使用平台解码器会话复用取测试视频帧，验证尺寸有上限且切源关闭正常释放；无设备时此测试编译校验。 */
     @Test
     fun localFixtureProducesScaledFrameAndNetworkIsRejected() =
         runBlocking<Unit> {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val context = instrumentation.targetContext
             val video = File.createTempFile("seek-preview-", ".mp4", context.cacheDir)
+            val session = LocalSeekThumbnailSession.createAndroid(context)
             try {
                 instrumentation.context.assets.open("media/resume-fixture.mp4").use { input ->
                     video.outputStream().use { output -> input.copyTo(output) }
                 }
                 val request = seekThumbnailRequest(video.toURI().toString(), 0L, 1000L)!!
-                val frame = loadLocalSeekThumbnail(context, request)
+                val frame = session.loadFrame(request)
                 assertNotNull(frame)
-                assertTrue(frame!!.width in 1..320)
-                assertTrue(frame.height in 1..180)
+                assertTrue(frame!!.width in 1..LOCAL_THUMBNAIL_MAX_LONG_SIDE_PX)
+                assertTrue(frame.height in 1..LOCAL_THUMBNAIL_MAX_LONG_SIDE_PX)
                 frame.recycle()
                 assertNull(
-                    loadLocalSeekThumbnail(
-                        context,
-                        SeekThumbnailRequest("https://example.com/video.mp4", 0L),
+                    session.loadFrame(
+                        SeekThumbnailRequest("https://example.com/video.mp4", 0L)
                     )
                 )
             } finally {
+                session.close()
                 video.delete()
             }
         }

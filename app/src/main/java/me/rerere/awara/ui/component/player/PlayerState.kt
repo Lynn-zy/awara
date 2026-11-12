@@ -143,6 +143,10 @@ fun rememberPlayerState(
     }
     DisposableEffect(context) {
         state.playing = state.player.isPlaying
+        state.playWhenReady = state.player.playWhenReady
+        if (state.player.isPlaying) {
+            state.markPlaybackStarted()
+        }
         state.isLoading = state.player.isLoading
         state.state =
             when (state.player.playbackState) {
@@ -199,6 +203,8 @@ class PlayerState(
     val cdnConnections = connectionTracker.snapshot
 
     var playing by mutableStateOf(false)
+    var playWhenReady by mutableStateOf(player.playWhenReady)
+        internal set
     var state by mutableStateOf(State.IDLE)
     var isLoading by mutableStateOf(false)
 
@@ -206,7 +212,11 @@ class PlayerState(
     var renderedFirstFrame by mutableStateOf(false)
         private set
 
-    /** 跟随播放器而非界面实例保存，进入全屏时不恢复已隐藏的控制区。 */
+    /** 当前视频会话是否已经实际启动过播放（用于区分「初始加载/首帧待播阶段」与「正常播放阶段」）。 */
+    var hasStartedPlayback by mutableStateOf(player.isPlaying)
+        private set
+
+    /** 跟随播放器而非界面实例保存，进入全屏时收起所有控制区。 */
     internal val controllerState = PlayerControllerState()
 
     /** 当前播放倍速状态（只读，私有 set，仅通过 [updatePlaybackSpeed] 显式变更并持久化） */
@@ -220,10 +230,26 @@ class PlayerState(
         object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 connectionTracker.updateAvailableHosts(emptyList())
+                val previousId = currentMediaItem?.mediaId
+                val nextId = mediaItem?.mediaId
+                val isSameLogicalVideo =
+                    mediaItem != null &&
+                        currentMediaItem != null &&
+                        ((!previousId.isNullOrEmpty() && previousId == nextId) ||
+                            mediaItem === currentMediaItem)
+                if (!isSameLogicalVideo && mediaItem != null) {
+                    renderedFirstFrame = false
+                    hasStartedPlayback = player.isPlaying
+                }
             }
 
             override fun onRenderedFirstFrame() {
                 renderedFirstFrame = true
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                super.onPlayWhenReadyChanged(playWhenReady, reason)
+                this@PlayerState.playWhenReady = playWhenReady
             }
 
             override fun onPositionDiscontinuity(
@@ -253,6 +279,9 @@ class PlayerState(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 super.onIsPlayingChanged(isPlaying)
                 this@PlayerState.playing = isPlaying
+                if (isPlaying) {
+                    hasStartedPlayback = true
+                }
                 duration = player.duration
             }
 
@@ -263,7 +292,11 @@ class PlayerState(
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 super.onVideoSizeChanged(videoSize)
-                this@PlayerState.videoSize = VideoSize.from(videoSize)
+                val resolved = VideoSize.from(videoSize)
+                // 同视频切换清晰度准备期间内核可能短暂上报 0x0，保留已知尺寸防止播放器区域与全屏按钮跳变
+                if (resolved != VideoSize.UNKNOWN || currentMediaItem == null) {
+                    this@PlayerState.videoSize = resolved
+                }
                 duration = player.duration
             }
 
@@ -315,6 +348,9 @@ class PlayerState(
             player.clearMediaItems()
             currentMediaItem = null
             currentQuality = ""
+            videoSize = VideoSize.UNKNOWN
+            hasStartedPlayback = false
+            controllerState.resetForNewMedia()
             return
         }
         if (playerItems.isNotEmpty()) {
@@ -322,10 +358,17 @@ class PlayerState(
             if (targetItem != null) {
                 currentQuality = targetItem.quality
                 val sameVideo = currentMediaItem?.mediaId == targetItem.mediaItem.mediaId
+                val currentPlayWhenReady = player.playWhenReady
+                if (!sameVideo) {
+                    // 切换到不同视频时清空上一视频尺寸与已播标记，并恢复仅展示顶部栏（隐藏底部进度条）
+                    videoSize = VideoSize.UNKNOWN
+                    hasStartedPlayback = false
+                    controllerState.resetForNewMedia()
+                }
                 val position = if (sameVideo) player.currentPosition.coerceAtLeast(0L) else 0L
-                val playWhenReady = player.playWhenReady
                 player.setMediaItem(targetItem.mediaItem, position)
-                player.playWhenReady = playWhenReady
+                player.playWhenReady = currentPlayWhenReady
+                this.playWhenReady = currentPlayWhenReady
                 currentMediaItem = targetItem.mediaItem
                 // 准备不等于播放，暂停也可以下载缓冲并显示解码后的第一帧。
                 player.prepare()
@@ -342,15 +385,18 @@ class PlayerState(
 
         // 切换清晰度保留当前进度与播控状态，不强制开始播放
         val currentPosition = player.currentPosition.coerceAtLeast(0L)
-        val playWhenReady = player.playWhenReady
+        val currentPlayWhenReady = player.playWhenReady
         renderedFirstFrame = false
         onBufferDiscontinuity()
         player.setMediaItem(item.mediaItem, currentPosition)
-        player.playWhenReady = playWhenReady
+        player.playWhenReady = currentPlayWhenReady
+        this.playWhenReady = currentPlayWhenReady
         player.prepare()
 
         currentMediaItem = item.mediaItem
-        controllerState.hide()
+        if (hasStartedPlayback) {
+            controllerState.hide()
+        }
     }
 
     /**
@@ -385,11 +431,18 @@ class PlayerState(
         }
     }
 
+    internal fun markPlaybackStarted() {
+        hasStartedPlayback = true
+    }
+
     fun pause() {
+        playWhenReady = false
         player.pause()
     }
 
     fun play() {
+        hasStartedPlayback = true
+        playWhenReady = true
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
         player.play()
     }
