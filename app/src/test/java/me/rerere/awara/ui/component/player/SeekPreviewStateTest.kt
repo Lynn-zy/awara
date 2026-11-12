@@ -429,4 +429,52 @@ class SeekPreviewStateTest {
             calculateSeekPreviewLeft(80, 160, 0f, 10f, false, SeekPreviewPosition.Center),
         )
     }
+
+    /** 拖动预览框宽高比自适应横屏、竖屏与方形视频，并在矮空间内等比缩放。 */
+    @Test
+    fun seekPreviewAspectRatioAndFrameSizeAdaptToPortraitAndLandscapeVideos() {
+        // 1. 宽高比优先级：PlayerState.VideoSize > 已解码帧宽高 > 默认 16:9
+        assertEquals(
+            9f / 16f,
+            resolveSeekPreviewAspectRatio(PlayerState.VideoSize(1080, 1920), 320, 180),
+            0.0001f,
+        )
+        assertEquals(
+            9f / 16f,
+            resolveSeekPreviewAspectRatio(PlayerState.VideoSize.UNKNOWN, 180, 320),
+            0.0001f,
+        )
+        assertEquals(
+            16f / 9f,
+            resolveSeekPreviewAspectRatio(PlayerState.VideoSize.UNKNOWN, 0, 0),
+            0.0001f,
+        )
+
+        // 2. 横屏 16:9 在充足空间内为 160x90
+        val landscape = calculateSeekPreviewFrameSize(16f / 9f, maxWidthDp = 240f, maxHeightDp = 240f)
+        assertNotNull(landscape)
+        assertEquals(160f, landscape!!.first, 0.01f)
+        assertEquals(90f, landscape.second, 0.01f)
+
+        // 3. 竖屏 9:16 在充足空间内自适应为 90x160（高大于宽，不再嵌在横屏框中变小）
+        val portrait = calculateSeekPreviewFrameSize(9f / 16f, maxWidthDp = 240f, maxHeightDp = 240f)
+        assertNotNull(portrait)
+        assertEquals(90f, portrait!!.first, 0.01f)
+        assertEquals(160f, portrait.second, 0.01f)
+        assertTrue(portrait.second > portrait.first)
+
+        // 4. 方形 1:1 限制在 120x120
+        val square = calculateSeekPreviewFrameSize(1f, maxWidthDp = 240f, maxHeightDp = 240f)
+        assertNotNull(square)
+        assertEquals(120f, square!!.first, 0.01f)
+        assertEquals(120f, square.second, 0.01f)
+
+        // 5. 受限高度（如仅剩 80dp 高）下竖屏仍保持 9:16 比例等比缩小为 45x80，低于最小阈值则返回 null
+        val constrainedPortrait =
+            calculateSeekPreviewFrameSize(9f / 16f, maxWidthDp = 200f, maxHeightDp = 80f)
+        assertNotNull(constrainedPortrait)
+        assertEquals(45f, constrainedPortrait!!.first, 0.01f)
+        assertEquals(80f, constrainedPortrait.second, 0.01f)
+        assertNull(calculateSeekPreviewFrameSize(9f / 16f, maxWidthDp = 200f, maxHeightDp = 20f))
+    }
 }

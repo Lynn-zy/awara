@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.job
@@ -111,34 +112,44 @@ internal suspend fun extractSeekThumbnailFrame(
                             .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(0))
                     )
                     .setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                    .setEffects(
-                        listOf(
-                            Presentation.createForWidthAndHeight(
-                                320,
-                                180,
-                                Presentation.LAYOUT_SCALE_TO_FIT,
-                            )
-                        )
-                    )
+                    // 按短边 180px 等比缩放并保留竖屏原始方向（如横屏 320x180、竖屏 180x320），避免固定 16:9 画布产生左右黑边
+                    .setEffects(listOf(Presentation.createForShortSide(180)))
                     .build()
             try {
                 val future = extractor.getFrame(request.positionMs)
-                suspendCancellableCoroutine<Bitmap> { continuation ->
-                    continuation.invokeOnCancellation { future.cancel(true) }
-                    future.addListener(
-                        {
-                            if (continuation.isActive) {
-                                try {
-                                    continuation.resume(future.get().bitmap)
-                                } catch (failure: ExecutionException) {
-                                    continuation.resumeWithException(failure.cause ?: failure)
-                                } catch (failure: Exception) {
-                                    continuation.resumeWithException(failure)
+                val extracted =
+                    suspendCancellableCoroutine<Bitmap> { continuation ->
+                        continuation.invokeOnCancellation { future.cancel(true) }
+                        future.addListener(
+                            {
+                                if (continuation.isActive) {
+                                    try {
+                                        continuation.resume(future.get().bitmap)
+                                    } catch (failure: ExecutionException) {
+                                        continuation.resumeWithException(failure.cause ?: failure)
+                                    } catch (failure: Exception) {
+                                        continuation.resumeWithException(failure)
+                                    }
                                 }
-                            }
-                        },
-                        { action -> action.run() },
-                    )
+                            },
+                            { action -> action.run() },
+                        )
+                    }
+                // 极端细长比例视频限制长边不超过 480px，避免单帧图像过大挤占缩略图缓存
+                val maxSide = maxOf(extracted.width, extracted.height)
+                if (maxSide > 480) {
+                    val scale = 480f / maxSide.toFloat()
+                    val scaled =
+                        Bitmap.createScaledBitmap(
+                            extracted,
+                            (extracted.width * scale).roundToInt().coerceAtLeast(1),
+                            (extracted.height * scale).roundToInt().coerceAtLeast(1),
+                            true,
+                        )
+                    if (scaled !== extracted) extracted.recycle()
+                    scaled
+                } else {
+                    extracted
                 }
             } finally {
                 extractor.close()

@@ -60,54 +60,101 @@ internal data class SeekThumbnailState<Frame : Any>(
 /**
  * 在调用方作用域内串行取帧，只保留最新待处理目标，并限制缓存字节数与条目数。
  *
- * request/close 与状态发布均在调用方主线程执行；loadFrame 负责把平台阻塞调用移到 IO。 取消立即隐藏结果，但不假定协程能打断 native
- * 解码；代次检查阻止迟到结果污染界面。
+ * 本地来源零前置延迟启动，且同源连续拖动时允许几十毫秒级的当前帧收尾写入缓存，避免频繁取消造成全程转圈；
+ * 网络来源保留防抖延迟并在目标变化时立即取消旧请求以节约流量。
  */
 internal class SeekThumbnailLoader<Frame : Any>(
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     private val frameBytes: (Frame) -> Int,
     private val loadFrame: suspend (SeekThumbnailRequest) -> Frame?,
-    private val intervalMs: Long = 100L,
-    private val maxCacheBytes: Long = 4L * 1024L * 1024L,
-    private val maxCacheEntries: Int = 12,
+    private val intervalMs: Long = 0L,
+    private val maxCacheBytes: Long = 6L * 1024L * 1024L,
+    private val maxCacheEntries: Int = 48,
     private val networkIntervalMs: Long = 350L,
+    private val localGraceCancelMs: Long = 120L,
+    private val onResetSource: () -> Unit = {},
 ) {
     private val updates = Channel<Unit>(Channel.CONFLATED)
     private val mutableState = MutableStateFlow(SeekThumbnailState<Frame>())
     val state = mutableState.asStateFlow()
 
-    private val cache = LinkedHashMap<SeekThumbnailRequest, Frame>(16, 0.75f, true)
+    private val cache = LinkedHashMap<SeekThumbnailRequest, Frame>(64, 0.75f, true)
     private var cacheBytes = 0L
     private var currentRequest: SeekThumbnailRequest? = null
     private var generation = 0L
     private var closed = false
     private var activeLoad: Job? = null
+    private var activeLoadingRequest: SeekThumbnailRequest? = null
+    private var graceCancelJob: Job? = null
 
     private val worker =
         scope.launch {
             for (ignored in updates) {
-                delay(if (currentRequest?.isNetwork == true) networkIntervalMs else intervalMs)
+                val pendingRequest = currentRequest ?: continue
+                val waitMs = if (pendingRequest.isNetwork) networkIntervalMs else intervalMs
+                if (waitMs > 0L) {
+                    delay(waitMs)
+                }
                 val request = currentRequest ?: continue
                 val requestGeneration = generation
                 if (!mutableState.value.loading) continue
                 val frame = loadCurrent(request)
-                if (closed || generation != requestGeneration) continue
-                if (frame != null) cache(request, frame)
+                if (closed) continue
+                // 只要仍属同一视频源，即便滑动期间目标已跨到下一秒，也将刚解码出的帧存入缓存供回拖瞬时命中
+                val knownSourceUri =
+                    currentRequest?.sourceUri ?: cache.keys.firstOrNull()?.sourceUri
+                if (frame != null && (knownSourceUri == null || knownSourceUri == request.sourceUri)) {
+                    cache(request, frame)
+                }
+                if (generation != requestGeneration) {
+                    // 目标时间在解码期间已变更：不将旧秒画面标注到新秒，若新目标仍在等待则立即进入下一轮提取
+                    if (currentRequest != null && mutableState.value.loading) {
+                        updates.trySend(Unit)
+                    }
+                    continue
+                }
                 mutableState.value = SeekThumbnailState(request, frame)
             }
         }
 
-    /** 更新目标或隐藏预览；缓存命中立即呈现，切源时丢弃前一媒体的内存缓存。 */
+    /** 更新目标或隐藏预览；缓存命中立即呈现，切源时丢弃前一媒体的内存缓存与解码会话。 */
     fun request(request: SeekThumbnailRequest?) {
         if (closed || currentRequest == request) return
-        if (request != null && cache.keys.firstOrNull()?.sourceUri != request.sourceUri) {
+        val existingSourceUri = currentRequest?.sourceUri ?: cache.keys.firstOrNull()?.sourceUri
+        if (request != null && existingSourceUri != null && existingSourceUri != request.sourceUri) {
             clearCache()
+            onResetSource()
         }
         generation++
         currentRequest = request
-        val cached = cache[request]
+        val cached = if (request != null) cache[request] else null
         mutableState.value = SeekThumbnailState(request, cached, request != null && cached == null)
-        activeLoad?.cancel()
+        val runningJob = activeLoad
+        val runningRequest = activeLoadingRequest
+        if (runningJob != null && runningJob.isActive) {
+            val allowLocalFrameToFinish =
+                request != null &&
+                    !request.isNetwork &&
+                    runningRequest != null &&
+                    !runningRequest.isNetwork &&
+                    runningRequest.sourceUri == request.sourceUri
+            if (allowLocalFrameToFinish) {
+                // 同源本地解码允许短暂收尾进缓存；若底层异常阻塞超过宽限期仍自动取消防死锁
+                if (graceCancelJob?.isActive != true) {
+                    graceCancelJob =
+                        scope.launch {
+                            delay(localGraceCancelMs)
+                            if (activeLoad === runningJob) {
+                                runningJob.cancel()
+                            }
+                        }
+                }
+            } else {
+                graceCancelJob?.cancel()
+                graceCancelJob = null
+                runningJob.cancel()
+            }
+        }
         updates.trySend(Unit)
     }
 
@@ -115,6 +162,7 @@ internal class SeekThumbnailLoader<Frame : Any>(
     private suspend fun loadCurrent(request: SeekThumbnailRequest): Frame? = supervisorScope {
         val task = async { loadFrame(request) }
         activeLoad = task
+        activeLoadingRequest = request
         try {
             task.await()
         } catch (cancelled: CancellationException) {
@@ -123,14 +171,20 @@ internal class SeekThumbnailLoader<Frame : Any>(
         } catch (_: Exception) {
             null
         } finally {
+            graceCancelJob?.cancel()
+            graceCancelJob = null
             activeLoad = null
+            activeLoadingRequest = null
         }
     }
 
-    /** 媒体重新加载时清理同 URI 的旧缓存，避免文件被替换后仍显示前一代内容。 */
+    /** 媒体重新加载时清理同 URI 的旧缓存与本地提取器，避免文件被替换后仍显示前一代内容。 */
     fun reset() {
+        graceCancelJob?.cancel()
+        graceCancelJob = null
         request(null)
         clearCache()
+        onResetSource()
     }
 
     /** 退出组件时取消后台协程；平台实现仍须在 finally 中释放 native 资源。 */

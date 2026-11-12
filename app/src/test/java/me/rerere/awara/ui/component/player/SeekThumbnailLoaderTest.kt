@@ -417,6 +417,125 @@ class SeekThumbnailLoaderTest {
         assertThrows(IOException::class.java) { next.consume(1) }
     }
 
+    /** 生产默认配置下，本地来源首帧不应被前置 100ms 防抖阻塞，且快速连续拖动不应因反复取消而零产出。 */
+    @Test
+    fun defaultLocalRequestsDeliverWithoutArtificialDebounceOrCancelStarvation() =
+        runBlocking<Unit> {
+            val completedFrames = mutableListOf<Long>()
+            // 不传 intervalMs，直接检验生产环境真实默认行为
+            val loader =
+                SeekThumbnailLoader(
+                    scope = this,
+                    frameBytes = { _: String -> 1 },
+                    loadFrame = { request ->
+                        kotlinx.coroutines.delay(25)
+                        completedFrames += request.positionMs
+                        "frame_${request.positionMs}"
+                    },
+                )
+            try {
+                // 模拟手指每隔 15ms 连续划过 4 个秒级分桶（单帧本地解码需 25ms）
+                for (sec in 1..4) {
+                    loader.request(local(sec * 1000L))
+                    if (sec < 4) kotlinx.coroutines.delay(15)
+                }
+                // 停在 4000ms 后应在 80ms 内拿到目标帧（旧实现因 100ms 前置延迟 + 反复 cancel 必然超时失败）
+                val ready =
+                    withTimeout(80) {
+                        loader.state.first {
+                            it.request?.positionMs == 4000L && it.frame == "frame_4000"
+                        }
+                    }
+                assertEquals("frame_4000", ready.frame)
+                // 首帧在滑动途中已完成解码并进入缓存，回拖到 1000ms 应立即同步命中缓存（loading == false）
+                loader.request(local(1000L))
+                assertEquals("frame_1000", loader.state.value.frame)
+                assertFalse(loader.state.value.loading)
+            } finally {
+                loader.close()
+            }
+        }
+
+    /** 本地解码会话对同一 URI 复用提取器且按旋转后竖屏/横屏等比计算目标尺寸，切源与异常时安全释放。 */
+    @Test
+    fun localSessionReusesRetrieverForSameSourceAndReleasesOnSwitchOrFailure() =
+        runBlocking<Unit> {
+            val openedUris = mutableListOf<String>()
+            var releaseCount = 0
+            val requestedTargetSizes = mutableListOf<Pair<Int, Int>>()
+            var dimensions: Pair<Int, Int>? = 1080 to 1920
+            var failNext = false
+
+            val session =
+                LocalSeekThumbnailSession<String>(
+                    backendFactory = {
+                        object : LocalFrameRetrieverBackend<String> {
+                            override fun setDataSource(sourceUri: String) {
+                                openedUris += sourceUri
+                            }
+
+                            override fun extractDisplayDimensions(): Pair<Int, Int>? = dimensions
+
+                            override fun getFrameAt(
+                                timeUs: Long,
+                                targetWidth: Int,
+                                targetHeight: Int,
+                            ): String {
+                                if (failNext) {
+                                    failNext = false
+                                    throw IOException("解码器瞬时错误")
+                                }
+                                requestedTargetSizes += targetWidth to targetHeight
+                                return "${timeUs}_${targetWidth}x${targetHeight}"
+                            }
+
+                            override fun release() {
+                                releaseCount++
+                            }
+                        }
+                    }
+                )
+
+            try {
+                // 同一竖屏视频连续取 3 个不同时间点：仅打开 1 次数据源，目标尺寸为竖屏 180x320
+                val f1 = session.loadFrame(SeekThumbnailRequest("content://media/video/1", 1000L))
+                val f2 = session.loadFrame(SeekThumbnailRequest("content://media/video/1", 2000L))
+                val f3 = session.loadFrame(SeekThumbnailRequest("content://media/video/1", 3000L))
+                assertEquals("1000000_180x320", f1)
+                assertEquals("2000000_180x320", f2)
+                assertEquals("3000000_180x320", f3)
+                assertEquals(listOf("content://media/video/1"), openedUris)
+                assertEquals(0, releaseCount)
+
+                // 切换到第二个横屏视频：先释放旧提取器，再以 320x180 打开新提取器
+                dimensions = 1920 to 1080
+                val f4 = session.loadFrame(SeekThumbnailRequest("content://media/video/2", 4000L))
+                assertEquals("4000000_320x180", f4)
+                assertEquals(
+                    listOf("content://media/video/1", "content://media/video/2"),
+                    openedUris,
+                )
+                assertEquals(1, releaseCount)
+
+                // 单次解码异常后自动释放坏实例，后续同源请求可重新建立提取器恢复工作
+                failNext = true
+                assertThrows(IOException::class.java) {
+                    runBlocking {
+                        session.loadFrame(SeekThumbnailRequest("content://media/video/2", 5000L))
+                    }
+                }
+                assertEquals(2, releaseCount)
+                val recovered =
+                    session.loadFrame(SeekThumbnailRequest("content://media/video/2", 6000L))
+                assertEquals("6000000_320x180", recovered)
+                assertEquals(3, openedUris.size)
+            } finally {
+                session.close()
+            }
+            assertEquals(3, releaseCount)
+            assertNull(session.loadFrame(SeekThumbnailRequest("content://media/video/2", 7000L)))
+        }
+
     /** 本地状态测试使用相同来源键，仅切换目标时间。 */
     private fun local(positionMs: Long) =
         SeekThumbnailRequest("content://media/video/1", positionMs)
