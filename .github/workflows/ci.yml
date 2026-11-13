@@ -37,4 +37,4 @@ jobs:
       - name: 执行单元测试、仪器测试编译与 Release Lint 校验
         run: |
           chmod +x ./gradlew
-          ./gradlew testDebugUnitTest compileDebugAndroidTestKotlin lintVitalRelease --no-daemon
+          ./gradlew testDebugUnitTest compileDebugAndroidTestKotlin lintVitalRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"

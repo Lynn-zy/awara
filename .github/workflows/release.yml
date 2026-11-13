@@ -62,7 +62,7 @@ jobs:
       - name: 执行发版前单测与 Release Lint 门禁
         run: |
           chmod +x ./gradlew
-          ./gradlew testDebugUnitTest lintVitalRelease --no-daemon
+          ./gradlew testDebugUnitTest lintVitalRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"
 
       - name: 构建正式签名通用 Release APK
         env:
@@ -71,7 +71,7 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"
 
       - name: 核验 APK 正式证书签名、版本号并生成 SHA-256 校验文件
         run: |
@@ -81,7 +81,8 @@ jobs:
             exit 1
           fi
 
-          BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"* | sort -V | tail -n 1)
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          BUILD_TOOLS_DIR=$(ls -d "${SDK_DIR}/build-tools/"* | sort -V | tail -n 1)
           CERT_INFO=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$RAW_APK")
           echo "$CERT_INFO"
 
