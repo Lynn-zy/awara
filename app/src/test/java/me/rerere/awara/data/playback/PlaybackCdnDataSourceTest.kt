@@ -248,6 +248,12 @@ class PlaybackCdnDataSourceTest {
             assertTrue(nextByte in 1 until content.size)
             assertEquals("\"stable\"", resumed.getHeader("If-Range"))
             assertEquals(2, server.requestCount)
+        } catch (t: Throwable) {
+            val sup = t.suppressed.joinToString(" | ") { "${it.javaClass.name}: ${it.message}" }
+            throw AssertionError(
+                "DIAG pos=${source.currentPosition}, reqCount=${server.requestCount}, err=${t.javaClass.name}:${t.message}, suppressed=[$sup]",
+                t,
+            )
         } finally {
             source.close()
         }
