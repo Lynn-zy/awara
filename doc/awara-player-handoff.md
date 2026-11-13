@@ -1,5 +1,17 @@
 # Awara 播放器后续工作
 
+## 2026-11-13 版本 1.3.0/30：正式签名发布、关于版本卡片、GitHub 更新与 CI/CD 流水线
+
+用户实机确认关于弹窗视觉效果并生成专属正式签名证书后，授权进入 `versionName=1.3.0`、`versionCode=30` 正式发布状态：启用正式 Release 签名、单通用四架构 APK 策略、接入 GitHub Releases 自动检查更新，并配置 GitHub Actions CI/CD 自动质检与标签发版流水线。
+
+- 设置页关于重构与版本信息卡片弹窗（`55f04fb`）：移除底部旧“开发者主页”与旧“源代码”项，替换为“版本信息”入口并展示格式化版本号；点击弹出 Material 3 卡片弹窗，居中呈现矢量应用图标、应用名称与等宽数字版本胶囊，下方以双仓库分组呈现原作者已删库项（`re-ovo / awara` 删除线划掉、置灰无点击）与当前维护仓库项（`Lynn-zy / awara` 点击跳转外部浏览器，不裸露原始 URL）。同步将简中、繁中、日语与英文的“CDN 连接调试（临时）”统一改为“实验”标签。
+- GitHub Releases 自动更新检查（`5ff9c88`）：彻底移除原作者已失效的 AWS Lambda 接口与 `awara-app` 旧下载链接，迁移至 `https://api.github.com/repos/Lynn-zy/awara/releases/latest`；过滤草稿与预发布版本，按语义化版本号数字段逐位比对，仅允许跳转受信任仓库域名路径，并通过单次缓冲通道投递更新弹窗事件。
+- 正式证书签名与 GitHub Actions 流水线（`e4a4075`）：`.gitignore` 排除本地 `*.jks`、`*.keystore` 与 `keystore.properties`；`app/build.gradle.kts` 支持从本地私有 `keystore.properties` 或 CI 环境变量加载正式证书签名（无证书克隆环境自动回退 Debug 签名以保持开源可构建性）。新增 `.github/workflows/ci.yml`（推送与 PR 自动运行单测、仪器测试编译及 `lintVitalRelease`）与 `.github/workflows/release.yml`（推送 `v*` 标签时解码 GitHub Secrets 正式签名打包、强制拦截 Debug 证书与版本不一致、生成 SHA-256 校验文件并自动发布 GitHub Release）。
+
+最终验证：`VersionInfoTest`、`UpdateAPITest`、`compileDebugAndroidTestKotlin`、`lintVitalRelease` 与完整 R8 `assembleRelease` 通过；`apksigner verify` 与 `aapt2 dump badging` 确认正式证书签名有效且包元数据为 `1.3.0/30`。
+
+本地导出正式包：`apk/Awara-1.3.0-release.apk`，7,580,918 字节，SHA-256：`9e7c11dbc256c0d00af34b64ee1402941664b8c2716029f861d5c163381d77db`。采用正式证书（`CN=Lynn-zy, O=Awara, C=CN`，证书 SHA-256 指纹：`c2bd86c27519ada4308ff797c68d568d141fa6db7f9dc0174bc58b083ad6f3c0`）与 v2 签名，非 debuggable、全四 ABI（`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`）；首次从旧 Debug 签名测试版升级需先卸载旧测试包，后续正式版本可直接覆盖升级。
+
 ## 2026-11-12 版本 1.2.9/29：有界播放预读、预览自适应与首帧起播交互
 
 用户实机验证通过后，授权将上一发布 `1.2.8/28`（`090c079`）之后的累计改动发布为 `versionName=1.2.9`、`versionCode=29`，按关注点分别提交功能与配置后再单独提交版本号与发布记录，并普通推送至 `origin/main`；不创建标签或 GitHub Release，APK 不纳入 Git。

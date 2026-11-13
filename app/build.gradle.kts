@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     kotlin("android")
@@ -5,6 +7,30 @@ plugins {
     kotlin("plugin.compose")
     id("com.google.devtools.ksp")
 }
+
+// 读取本地私有 keystore.properties（已被 .gitignore 忽略）或 CI 注入的签名环境变量
+val keystoreProperties =
+    Properties().apply {
+        val propertiesFile = rootProject.file("keystore.properties")
+        if (propertiesFile.isFile) {
+            propertiesFile.inputStream().use { load(it) }
+        }
+    }
+
+fun resolveSigningValue(propertyKey: String, envKey: String): String? =
+    keystoreProperties.getProperty(propertyKey)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: System.getenv(envKey)?.trim()?.takeIf { it.isNotEmpty() }
+
+val releaseStorePath = resolveSigningValue("storeFile", "SIGNING_STORE_FILE")
+val releaseStorePassword = resolveSigningValue("storePassword", "SIGNING_STORE_PASSWORD")
+val releaseKeyAlias = resolveSigningValue("keyAlias", "SIGNING_KEY_ALIAS")
+val releaseKeyPassword = resolveSigningValue("keyPassword", "SIGNING_KEY_PASSWORD")
+val releaseKeystoreFile = releaseStorePath?.let { rootProject.file(it) }
+val hasFormalReleaseSigning =
+    releaseKeystoreFile?.isFile == true &&
+        releaseStorePassword != null &&
+        releaseKeyAlias != null &&
+        releaseKeyPassword != null
 
 android {
     namespace = "me.rerere.awara"
@@ -14,18 +40,36 @@ android {
         applicationId = "me.rerere.awara"
         minSdk = 26
         targetSdk = 33
-        versionCode = 29
-        versionName = "1.2.9"
+        versionCode = 30
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")) }
     }
 
+    signingConfigs {
+        if (hasFormalReleaseSigning) {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // 本次测试包经用户确认使用调试证书，不能用于正式发布。
-            signingConfig = signingConfigs.getByName("debug")
+            // 检测到正式签名证书配置时使用 release 签名，未配置证书的开发克隆环境自动回退至 debug 签名
+            signingConfig =
+                if (hasFormalReleaseSigning) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
