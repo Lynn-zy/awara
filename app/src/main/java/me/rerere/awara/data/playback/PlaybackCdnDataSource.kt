@@ -790,6 +790,7 @@ internal class PlaybackCdnDataSource(
                 true
             } catch (e: Exception) {
                 if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
+                if (cause != null && cause !== e) cause.addSuppressed(e)
                 false
             }
         }
@@ -839,6 +840,7 @@ internal class PlaybackCdnDataSource(
             true
         } catch (e: Exception) {
             if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
+            if (cause != null && cause !== e) cause.addSuppressed(e)
             false
         }
     }

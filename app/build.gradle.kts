@@ -88,6 +88,17 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        unitTests.all {
+            it.testLogging {
+                events("failed")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showExceptions = true
+                showCauses = true
+                showStackTraces = true
+            }
+        }
+    }
     // 仪器测试复用 JVM 的合成视频素材，不复制文件，也不打入正式应用。
     sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
