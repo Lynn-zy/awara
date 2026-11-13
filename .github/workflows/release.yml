@@ -1,0 +1,119 @@
+# 正式版本自动签名与发布流水线：推送 v* 标签（如 v1.3.0）时自动构建正式签名 APK 并发布至 GitHub Releases
+name: Android Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "要发布的版本标签（例如 v1.3.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 正式签名打包并发布 GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出完整源码与标签历史
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 解析目标版本标签
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_NAME="${{ inputs.tag_name }}"
+          else
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+          VERSION_CLEAN="${TAG_NAME#v}"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION_CLEAN}" >> "$GITHUB_OUTPUT"
+
+      - name: 配置 JDK 17 (Temurin)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 配置 Gradle 与依赖缓存
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: 解码并校验正式签名证书配置
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "::error::缺少正式签名所需的 GitHub Secrets（SIGNING_KEYSTORE_BASE64 / SIGNING_STORE_PASSWORD / SIGNING_KEY_ALIAS / SIGNING_KEY_PASSWORD），已中止发版以防误用 Debug 证书。"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \t\r\n' | base64 -d > "${RUNNER_TEMP}/awara-release.jks"
+
+      - name: 执行发版前单测与 Release Lint 门禁
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest lintVitalRelease --no-daemon
+
+      - name: 构建正式签名通用 Release APK
+        env:
+          SIGNING_STORE_FILE: ${{ runner.temp }}/awara-release.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 核验 APK 正式证书签名、版本号并生成 SHA-256 校验文件
+        run: |
+          RAW_APK="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$RAW_APK" ]]; then
+            echo "::error::未找到构建产物 $RAW_APK"
+            exit 1
+          fi
+
+          BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"* | sort -V | tail -n 1)
+          CERT_INFO=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$RAW_APK")
+          echo "$CERT_INFO"
+
+          if echo "$CERT_INFO" | grep -qi "CN=Android Debug"; then
+            echo "::error::检测到 APK 使用了 Android Debug 调试证书，正式发布必须使用正式证书签名！"
+            exit 1
+          fi
+
+          BADGING=$("${BUILD_TOOLS_DIR}/aapt2" dump badging "$RAW_APK" | head -n 5)
+          echo "$BADGING"
+          EXPECTED_VERSION="${{ steps.meta.outputs.version }}"
+          if ! echo "$BADGING" | grep -Fq "versionName='${EXPECTED_VERSION}'"; then
+            echo "::error::标签版本 (${EXPECTED_VERSION}) 与 APK 内置 versionName 不一致，请先同步更新 app/build.gradle.kts！"
+            exit 1
+          fi
+
+          mkdir -p dist
+          TARGET_APK="dist/Awara-${EXPECTED_VERSION}-release.apk"
+          cp "$RAW_APK" "$TARGET_APK"
+          (cd dist && sha256sum "$(basename "$TARGET_APK")" > "$(basename "$TARGET_APK").sha256")
+          cat "${TARGET_APK}.sha256"
+
+      - name: 自动创建 GitHub Release 并上传安装包
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name: Awara ${{ steps.meta.outputs.tag_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.apk
+            dist/*.sha256
+
+      - name: 销毁临时签名证书文件
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/awara-release.jks"

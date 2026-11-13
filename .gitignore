@@ -12,3 +12,6 @@ local.properties
 /app/release
 /apk/
 /.codegraph/
+*.jks
+*.keystore
+/keystore.properties
