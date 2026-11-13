@@ -6,6 +6,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -48,7 +49,8 @@ class PlaybackCdnDataSourceTest {
     @Before
     fun setUp() {
         server = MockWebServer()
-        server.start()
+        // 显式绑定 IPv4 回环地址，避免双栈环境下 localhost 断流后切换至未监听的 IPv6 [::1]
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
     }
 
     @After

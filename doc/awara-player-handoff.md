@@ -10,7 +10,7 @@
 
 最终验证：`VersionInfoTest`、`UpdateAPITest`、`compileDebugAndroidTestKotlin`、`lintVitalRelease` 与完整 R8 `assembleRelease` 通过；`apksigner verify` 与 `aapt2 dump badging` 确认正式证书签名有效且包元数据为 `1.3.0/30`。
 
-本地导出正式包：`apk/Awara-1.3.0-release.apk`，7,580,918 字节，SHA-256：`9e7c11dbc256c0d00af34b64ee1402941664b8c2716029f861d5c163381d77db`。采用正式证书（`CN=Lynn-zy, O=Awara, C=CN`，证书 SHA-256 指纹：`c2bd86c27519ada4308ff797c68d568d141fa6db7f9dc0174bc58b083ad6f3c0`）与 v2 签名，非 debuggable、全四 ABI（`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`）；首次从旧 Debug 签名测试版升级需先卸载旧测试包，后续正式版本可直接覆盖升级。
+本地导出正式包：`apk/Awara-1.3.0-release.apk`，7,580,909 字节，SHA-256：`84ae59618cdf6538b5c564ae2fed457348e4dd3d772a9a0fb1c0a06e22b86eec`。采用正式证书（`CN=Lynn-zy, O=Awara, C=CN`，证书 SHA-256 指纹：`c2bd86c27519ada4308ff797c68d568d141fa6db7f9dc0174bc58b083ad6f3c0`）与 v2 签名，非 debuggable、全四 ABI（`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`）；首次从旧 Debug 签名测试版升级需先卸载旧测试包，后续正式版本可直接覆盖升级。
 
 ## 2026-11-12 版本 1.2.9/29：有界播放预读、预览自适应与首帧起播交互
 
