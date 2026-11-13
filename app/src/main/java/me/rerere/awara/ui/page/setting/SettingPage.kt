@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.ColorLens
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Layers
@@ -67,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.data.download.DownloadLaunchPolicy
@@ -74,8 +76,6 @@ import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.data.playback.PlaybackSettings
-import me.rerere.awara.ui.LocalRouterProvider
-import me.rerere.awara.ui.component.common.Avatar
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
@@ -174,7 +174,13 @@ internal fun PlayerMultiCdnSetting(enabled: MutableState<Boolean>, modifier: Mod
     )
 }
 
-/** 临时调试入口集中保留，后续移除时不影响下载和播放的业务设置。 */
+/**
+ * CDN 连接调试（实验）设置项。
+ *
+ * 开启后展示下载与在线播放中已验证的可用 CDN 节点数及当前连接节点。
+ *
+ * @param enabled 实验性 CDN 连接调试开关状态
+ */
 @Composable
 internal fun CdnConnectionDebugSetting(enabled: MutableState<Boolean>) {
     SettingBooleanItem(
@@ -183,6 +189,36 @@ internal fun CdnConnectionDebugSetting(enabled: MutableState<Boolean>) {
         text = { Text(stringResource(R.string.setting_cdn_connection_debug_text)) },
         icon = { Icon(Icons.Outlined.Source, null) },
     )
+}
+
+/**
+ * 设置页底部“关于”分组组件。
+ *
+ * 仅展示“版本信息”入口项，副标题呈现当前版本号，点击后打开版本信息卡片弹窗。
+ *
+ * @param versionName 当前应用版本名
+ * @param versionCode 当前应用构建版本号
+ * @param onVersionInfoClick 点击版本信息行时的回调
+ * @param modifier 外部修饰符
+ */
+@Composable
+internal fun SettingAboutSection(
+    versionName: String,
+    versionCode: Int,
+    onVersionInfoClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SettingItemCategory(
+        modifier = modifier,
+        title = { Text(stringResource(R.string.setting_about)) },
+    ) {
+        SettingLinkItem(
+            title = { Text(stringResource(R.string.setting_about_version_title)) },
+            text = { Text(formatAppVersionDisplay(versionName = versionName, versionCode = versionCode)) },
+            icon = { Icon(Icons.Outlined.Info, null) },
+            onClick = onVersionInfoClick,
+        )
+    }
 }
 
 /**
@@ -421,9 +457,10 @@ fun SettingPage() {
     val context = LocalContext.current
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-    val router = LocalRouterProvider.current
     val downloadStorage: DownloadStorage = koinInject()
     var showDownloadDirectoryDialog by remember { mutableStateOf(false) }
+    // 控制底部“关于 -> 版本信息”卡片弹窗的显隐状态
+    var showVersionInfoDialog by remember { mutableStateOf(false) }
     var directoryUri by
         rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = "")
     val directoryLabel by
@@ -444,6 +481,14 @@ fun SettingPage() {
             },
             downloadStorage = downloadStorage,
             onDirectoryChanged = { directoryUri = it },
+        )
+    }
+    if (showVersionInfoDialog) {
+        VersionInfoDialog(
+            versionName = BuildConfig.VERSION_NAME,
+            versionCode = BuildConfig.VERSION_CODE,
+            onOpenCurrentRepo = { context.openUrl(CURRENT_REPO_URL) },
+            onDismiss = { showVersionInfoDialog = false },
         )
     }
     Scaffold(
@@ -679,27 +724,11 @@ fun SettingPage() {
             }
 
             item {
-                SettingItemCategory(title = { Text(stringResource(R.string.setting_about)) }) {
-                    SettingLinkItem(
-                        title = { Text(stringResource(R.string.author_profile)) },
-                        text = { Text(stringResource(R.string.click_to_view_my_iwara_profile)) },
-                        icon = {
-                            Avatar(
-                                model =
-                                    "https://i.iwara.tv/image/avatar/a90cf846-fb84-4965-adbd-131c411abc93/picture-294150-1628430683.jpg",
-                                modifier = Modifier.size(32.dp),
-                            )
-                        },
-                        onClick = { router.navigate("user/user294150") },
-                    )
-
-                    SettingLinkItem(
-                        title = { Text(stringResource(R.string.setting_about_source_title)) },
-                        text = { Text(stringResource(R.string.setting_about_source_text)) },
-                        icon = { Icon(Icons.Outlined.Source, null) },
-                        onClick = { context.openUrl("https://github.com/re-ovo/awara") },
-                    )
-                }
+                SettingAboutSection(
+                    versionName = BuildConfig.VERSION_NAME,
+                    versionCode = BuildConfig.VERSION_CODE,
+                    onVersionInfoClick = { showVersionInfoDialog = true },
+                )
             }
         }
     }

@@ -16,6 +16,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -34,6 +36,7 @@ import me.rerere.awara.ui.component.player.SeekPreviewPosition
 import me.rerere.compose_setting.preference.mmkvPreference
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -43,7 +46,7 @@ import org.junit.runner.RunWith
 class SettingPageLayoutTest {
     @get:Rule val compose = createComposeRule()
 
-    /** 临时诊断开关默认关闭，整行切换后持久化，重新创建设置组件仍保留选择。 */
+    /** 实验性 CDN 连接调试开关默认关闭，标题不含“临时”字样，整行切换后持久化。 */
     @Test
     fun cdnDebugPreferenceDefaultsOffAndPersists() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -67,6 +70,8 @@ class SettingPageLayoutTest {
                 }
             }
             val title = context.getString(R.string.setting_cdn_connection_debug_title)
+            assertFalse(title.contains("临时"))
+            assertFalse(title.contains("temporary", ignoreCase = true))
             compose.runOnIdle {
                 assertEquals(
                     false,
@@ -323,5 +328,67 @@ class SettingPageLayoutTest {
         assertTrue(
             labelBounds.left >= containerBounds.left && labelBounds.right <= containerBounds.right
         )
+    }
+
+    /**
+     * 测试“关于 -> 版本信息”分组与版本信息卡片弹窗：
+     * 1. 验证旧的“开发者主页”与“源代码”入口不再展示，仅展示“版本信息”
+     * 2. 点击“版本信息”打开卡片弹窗，展示应用名、版本号及两个仓库项
+     * 3. 验证原作者仓库无点击动作，当前维护仓库可点击并触发跳转回调
+     * 4. 验证卡片在 320dp 窄屏与 1.3 倍字体下不溢出容器边界
+     */
+    @Test
+    fun aboutSectionOpensVersionInfoDialogAndRendersWithinNarrowBounds() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        var openRepoClicks = 0
+        val showDialog = mutableStateOf(false)
+
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 1.3f)
+            ) {
+                MaterialTheme {
+                    Column(Modifier.width(320.dp).testTag("about_container")) {
+                        SettingAboutSection(
+                            versionName = "1.2.9",
+                            versionCode = 29,
+                            onVersionInfoClick = { showDialog.value = true },
+                        )
+                        if (showDialog.value) {
+                            VersionInfoCard(
+                                versionName = "1.2.9",
+                                versionCode = 29,
+                                onOpenCurrentRepo = { openRepoClicks++ },
+                                onDismiss = { showDialog.value = false },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        val versionTitle = context.getString(R.string.setting_about_version_title)
+        val closeLabel = context.getString(R.string.close)
+
+        // 验证旧项不存在，新项正常显示
+        compose.onNodeWithText("开发者主页").assertDoesNotExist()
+        compose.onNodeWithText("Author Profile").assertDoesNotExist()
+        compose.onNodeWithText(versionTitle).assertIsDisplayed().performClick()
+
+        // 验证卡片展示软件名称、版本号与双仓库条目
+        compose.onNodeWithText(context.getString(R.string.app_name)).assertIsDisplayed()
+        compose.onNodeWithTag(TEST_TAG_ORIGINAL_REPO_ITEM).assertIsDisplayed().assertHasNoClickAction()
+        compose.onNodeWithTag(TEST_TAG_CURRENT_REPO_ITEM).assertIsDisplayed().assertHasClickAction().performClick()
+        compose.runOnIdle { assertEquals(1, openRepoClicks) }
+
+        // 验证 320dp 窄屏与 1.3x 字体下卡片内容不越界
+        val containerBounds = compose.onNodeWithTag("about_container").getUnclippedBoundsInRoot()
+        val cardBounds = compose.onNodeWithTag(TEST_TAG_VERSION_INFO_CARD).getUnclippedBoundsInRoot()
+        assertTrue(cardBounds.left >= containerBounds.left && cardBounds.right <= containerBounds.right)
+
+        // 点击关闭收起卡片
+        compose.onNodeWithText(closeLabel).performClick()
+        compose.onNodeWithTag(TEST_TAG_VERSION_INFO_CARD).assertDoesNotExist()
     }
 }
