@@ -17,14 +17,6 @@ import me.rerere.awara.R
 private const val TAG = "ContextUtil"
 
 /**
- * 获取当前应用程序的版本代码。
- *
- * @return 当前应用程序的版本代码。
- */
-val Context.versionCode: Int
-    get() = packageManager.getPackageInfo(packageName, 0).versionCode
-
-/**
  * Open the url in browser
  *
  * @param url String

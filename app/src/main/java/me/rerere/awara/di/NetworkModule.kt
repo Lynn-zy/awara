@@ -108,10 +108,11 @@ val networkModule = module {
             .create(IwaraAPI::class.java)
     }
 
+    // 使用 GitHub 官方 REST API 检查 Lynn-zy/awara 仓库的最新正式版 Release
     single {
         Retrofit.Builder()
             .client(get())
-            .baseUrl("https://33jltt4ir7m3j2jst7g3kurrbu0qfqrt.lambda-url.ap-southeast-2.on.aws")
+            .baseUrl("https://api.github.com/")
             .addConverterFactory(SerializationConverterFactory.create())
             .build()
             .create(UpdateAPI::class.java)

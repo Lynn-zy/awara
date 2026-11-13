@@ -20,7 +20,6 @@ import me.rerere.awara.ui.hooks.rememberWindowSizeClass
 import me.rerere.awara.ui.page.index.layout.IndexPagePhoneLayout
 import me.rerere.awara.ui.page.index.layout.IndexPageTabletLayout
 import me.rerere.awara.util.openUrl
-import me.rerere.awara.util.versionCode
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -41,35 +40,35 @@ fun IndexPage(
     UpdateCheck(vm)
 }
 
-private const val DOWNLOAD_LINK = "https://github.com/awara-app/awara/releases"
-
+/**
+ * 监听首页版本更新事件，展示 GitHub Release 更新说明并引导打开对应发布页下载。
+ */
 @Composable
 private fun UpdateCheck(vm: IndexVM) {
     val dialog = LocalDialogProvider.current
     val context = LocalContext.current
     LaunchedEffect(Unit) {
-        vm.events.collectLatest {
-            when (it) {
+        vm.events.collectLatest { event ->
+            when (event) {
                 is IndexVM.IndexEvent.ShowUpdateDialog -> {
-                    if (it.code > context.versionCode) {
-                        dialog.show(
-                            title = {
-                                Text(stringResource(R.string.update_title, it.version))
-                            },
-                            content = {
-                                RichText(
-                                    text = it.changes,
-                                    onLinkClick = { context.openUrl(it) }
-                                )
-                            },
-                            positiveAction = {
-                                context.openUrl(DOWNLOAD_LINK)
-                            },
-                            positiveText = {
-                                Text(stringResource(R.string.update_confirm))
-                            }
-                        )
-                    }
+                    val updateInfo = event.updateInfo
+                    dialog.show(
+                        title = {
+                            Text(stringResource(R.string.update_title, updateInfo.version))
+                        },
+                        content = {
+                            RichText(
+                                text = updateInfo.changes,
+                                onLinkClick = { link -> context.openUrl(link) }
+                            )
+                        },
+                        positiveAction = {
+                            context.openUrl(updateInfo.downloadUrl)
+                        },
+                        positiveText = {
+                            Text(stringResource(R.string.update_confirm))
+                        }
+                    )
                 }
             }
         }

@@ -12,17 +12,21 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.NotificationCounts
 import me.rerere.awara.data.entity.Media
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
+import me.rerere.awara.data.source.AppUpdateInfo
 import me.rerere.awara.data.source.UpdateAPI
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
+import me.rerere.awara.data.source.resolveAvailableUpdate
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.ui.component.common.UiState
@@ -46,7 +50,9 @@ class IndexVM(
     var imageSort: String = MediaSortOptions.first().name
     val imageFilters: MutableList<FilterValue> = mutableStateListOf()
 
-    val events = MutableSharedFlow<IndexEvent>()
+    // 采用缓冲单次通道发送更新提示事件，既避免启动初期 UI 未订阅时丢失，又防止返回首页重复弹窗
+    private val eventChannel = Channel<IndexEvent>(Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
 
     private var subscriptionJob: Job? = null
     private var videoJob: Job? = null
@@ -59,15 +65,25 @@ class IndexVM(
         checkUpdate()
     }
 
+    /**
+     * 启动时异步查询 GitHub Releases 最新正式版本，仅当远端语义化版本高于当前版本时发送弹窗事件。
+     */
     private fun checkUpdate() {
         viewModelScope.launch {
             kotlin
                 .runCatching {
-                    val (code, name, changes) = updateChecker.checkUpdate()
-                    events.emit(IndexEvent.ShowUpdateDialog(code, name, changes))
-                    Log.i(TAG, "checkUpdate: $code $name $changes")
+                    val latestRelease = updateChecker.getLatestRelease()
+                    val updateInfo =
+                        resolveAvailableUpdate(
+                            currentVersion = BuildConfig.VERSION_NAME,
+                            release = latestRelease,
+                        )
+                    if (updateInfo != null) {
+                        eventChannel.send(IndexEvent.ShowUpdateDialog(updateInfo))
+                        Log.i(TAG, "checkUpdate: new version found ${updateInfo.version}")
+                    }
                 }
-                .onFailure { Log.e(TAG, "checkUpdate: ", it) }
+                .onFailure { Log.w(TAG, "checkUpdate: ", it) }
         }
     }
 
@@ -421,7 +437,6 @@ class IndexVM(
     }
 
     sealed class IndexEvent {
-        data class ShowUpdateDialog(val code: Int, val version: String, val changes: String) :
-            IndexEvent()
+        data class ShowUpdateDialog(val updateInfo: AppUpdateInfo) : IndexEvent()
     }
 }
