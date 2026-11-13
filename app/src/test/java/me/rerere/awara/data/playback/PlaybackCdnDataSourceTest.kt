@@ -841,7 +841,10 @@ class PlaybackCdnDataSourceTest {
         session: PlaybackCdnSession? = null,
         scope: CoroutineScope = CoroutineScope(Dispatchers.IO + Job().apply { cancel() }),
         directory: DownloadCdnDirectory = DownloadCdnDirectory(client = client),
-        urlResolver: (HttpUrl) -> HttpUrl = { server.url(it.encodedPath + "?" + it.encodedQuery) },
+        // MockWebServer.url() 会通过 canonicalHostName 反向解析为 localhost，显式固定为 127.0.0.1 防止双栈环境切入 [::1]
+        urlResolver: (HttpUrl) -> HttpUrl = {
+            server.url(it.encodedPath + "?" + it.encodedQuery).newBuilder().host("127.0.0.1").build()
+        },
         connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
         refresh: suspend (String) -> String? = { null },
     ): PlaybackCdnDataSource {
