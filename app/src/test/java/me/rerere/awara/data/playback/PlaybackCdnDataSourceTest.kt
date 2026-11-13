@@ -9,6 +9,7 @@ import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -214,6 +215,7 @@ class PlaybackCdnDataSourceTest {
     @Test(timeout = 30_000)
     fun disconnectedBodyResumesAtNextDeliveredByte() {
         val content = ByteArray(64 * 1024) { (it % 251).toByte() }
+        val disconnectOnce = AtomicBoolean(true)
         server.dispatcher =
             object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
@@ -224,9 +226,14 @@ class PlaybackCdnDataSourceTest {
                             .substringBefore('-')
                             .toInt()
                     val response = rangeResponse(content, start, content.lastIndex)
-                    return if (start == 0)
-                        response.setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
-                    else response
+                    // 分块节流保证在 Linux 高速 loopback 关闭连接前，客户端应用层已实际读取首段字节
+                    return if (disconnectOnce.compareAndSet(true, false)) {
+                        response
+                            .throttleBody(16 * 1024, 50, TimeUnit.MILLISECONDS)
+                            .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
+                    } else {
+                        response
+                    }
                 }
             }
         val source = createSource()
