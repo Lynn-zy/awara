@@ -2,7 +2,7 @@ package me.rerere.awara.data.playback
 
 import android.net.Uri
 import java.util.Locale
-import me.rerere.awara.data.download.DownloadCdnPolicy
+import me.rerere.awara.data.cdn.CdnPolicy
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
@@ -18,7 +18,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 internal object PlaybackResourceKey {
 
     /** 默认的可信主机判定逻辑，复用系统级 CDN 安全规范。 */
-    fun defaultTrustedHost(host: String): Boolean = DownloadCdnPolicy.trustedHost(host)
+    fun defaultTrustedHost(host: String): Boolean = CdnPolicy.trustedHost(host)
 
     /**
      * 校验 HttpUrl 是否为可信的 HTTPS Iwara 单层 /view 播放地址。
@@ -31,15 +31,8 @@ internal object PlaybackResourceKey {
         url: HttpUrl,
         trustedHostPredicate: (String) -> Boolean = ::defaultTrustedHost,
     ): Boolean {
-        // 1. 必须是标准 HTTPS 协议且使用默认 443 端口
-        if (url.scheme != "https" || url.port != 443) return false
-        // 2. 禁止携带 HTTP 基本身份认证凭证
-        if (url.username.isNotEmpty() || url.password.isNotEmpty()) return false
-        // 3. 严格限制为单层 "/view" 路径，严禁跨路径或前缀篡改
-        if (url.encodedPath != "/view") return false
-        // 4. 主机名必须通过安全校验
-        if (!trustedHostPredicate(url.host)) return false
-        // 5. 必须具备有效的文件定位参数 filename 与 path，杜绝空参数引发资源键虚假冲突
+        if (!CdnPolicy.isTrustedEntryUrl(url, "/view", trustedHostPredicate)) return false
+        // 必须具备有效的文件定位参数 filename 与 path，杜绝空参数引发资源键虚假冲突
         val filename = url.queryParameter("filename")
         val path = url.queryParameter("path")
         if (filename.isNullOrBlank() || path.isNullOrBlank()) return false

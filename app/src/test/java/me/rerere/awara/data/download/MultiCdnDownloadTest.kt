@@ -10,6 +10,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.rerere.awara.data.cdn.CdnDirectory
+import me.rerere.awara.data.cdn.CdnPolicy
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.Call
 import okhttp3.OkHttpClient
@@ -92,7 +94,7 @@ class MultiCdnDownloadTest {
                 }
                 val probe = start == 0 && end == 0
                 val sample =
-                    DownloadCdnPolicy.sampleRanges(payload.size.toLong()).any {
+                    CdnPolicy.sampleRanges(payload.size.toLong()).any {
                         it.first == start.toLong() && it.last == end.toLong()
                     }
                 val actualChunk = !probe && !sample
@@ -119,7 +121,11 @@ class MultiCdnDownloadTest {
         DownloadSourcePool(
             url,
             client,
-            DownloadCdnDirectory(client, directoryUrl = catalog.loopbackUrl("/distribution")),
+            CdnDirectory(
+                client = client,
+                directoryUrl = catalog.loopbackUrl("/distribution"),
+                withNetworkPermit = { block -> DownloadCdnBudget.withPermit(block) },
+            ),
             onBind = ::bound,
             onUnbind = ::unbound,
             resolve = { original, host ->
@@ -243,7 +249,7 @@ class MultiCdnDownloadTest {
                         )
                 )
                 assertTrue(mirrorChunks.get() > 0)
-                assertTrue(mirrorChunks.get() <= DownloadCdnPolicy.MAX_FAILURES)
+                assertTrue(mirrorChunks.get() <= CdnPolicy.MAX_FAILURES)
                 assertArrayEquals(payload, file.readBytes())
                 assertTrue(DownloadRangeStore.verifiedState(file)!!.isComplete)
                 assertTrue(maximum.get() <= 2)

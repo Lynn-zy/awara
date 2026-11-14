@@ -1,20 +1,26 @@
-package me.rerere.awara.data.download
+package me.rerere.awara.data.cdn
 
 import java.io.File
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.rerere.awara.data.download.DownloadCdnBudget
 import okhttp3.Call
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -28,10 +34,10 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 /**
- * [DownloadCdnDirectory] 单元测试。
+ * [CdnDirectory] 单元测试。
  *
  * 覆盖场景：
- * 1. [DownloadCdnDirectory.parse] 针对真实 HTML 结构的过滤逻辑（26 个 fast、2 个 slow、排除 preview/push-rin/不可信主机，不按
+ * 1. [CdnDirectory.parse] 针对真实 HTML 结构的过滤逻辑（26 个 fast、2 个 slow、排除 preview/push-rin/不可信主机，不按
  *    task Error/Queuing 认离线）；
  * 2. 候选选择策略：origin 同组优先、origin 排除、最多 6 个；
  * 3. 24 小时 TTL 内存缓存与条件刷新；
@@ -41,7 +47,7 @@ import org.junit.rules.TemporaryFolder
  * 7. Header Content-Length 与流式读取超过 256KiB 硬拒绝；
  * 8. 所有异步测试具备有界等待超时。
  */
-class DownloadCdnDirectoryTest {
+class CdnDirectoryTest {
 
     @get:Rule val tempFolder = TemporaryFolder()
 
@@ -132,7 +138,7 @@ class DownloadCdnDirectoryTest {
      */
     @Test
     fun parseExtractsFastAndSlowNodesAndFiltersPreviewPushAndUntrusted() {
-        val nodes = DownloadCdnDirectory.parse(sampleDistributionHtml)
+        val nodes = CdnDirectory.parse(sampleDistributionHtml)
 
         // 验证总可用节点数为 28 个 (26 fast + 2 slow)
         assertEquals(28, nodes.size)
@@ -187,7 +193,7 @@ class DownloadCdnDirectoryTest {
             """
                 .trimIndent()
 
-        val nodes = DownloadCdnDirectory.parse(html)
+        val nodes = CdnDirectory.parse(html)
 
         assertEquals(listOf("kafka.iwara.tv"), nodes.map { it.host })
         assertEquals("fast", nodes.single().group)
@@ -205,7 +211,7 @@ class DownloadCdnDirectoryTest {
             server.enqueue(MockResponse().setResponseCode(200).setBody(sampleDistributionHtml))
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
@@ -213,7 +219,7 @@ class DownloadCdnDirectoryTest {
             val origin = "kafka.iwara.tv"
             val candidates = directory.candidates(origin)
 
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidates.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidates.size)
             assertFalse("Candidates must not contain origin", candidates.contains(origin))
 
             // 内置或解析得到的 slow 节点不应出现在前 6 个 fast 候选列表中（同组 fast 足够多）
@@ -234,7 +240,7 @@ class DownloadCdnDirectoryTest {
             server.enqueue(MockResponse().setResponseCode(200).setBody(sampleDistributionHtml))
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
@@ -242,7 +248,7 @@ class DownloadCdnDirectoryTest {
             val origin = "mikoto.iwara.tv"
             val candidates = directory.candidates(origin)
 
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidates.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidates.size)
             assertFalse("Candidates must not contain origin", candidates.contains(origin))
 
             // 首位必须是同组仅存的 slow 节点 hime.iwara.tv
@@ -269,7 +275,7 @@ class DownloadCdnDirectoryTest {
 
             val clock = AtomicLong(1_000_000_000L)
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                     now = { clock.get() },
@@ -277,19 +283,19 @@ class DownloadCdnDirectoryTest {
 
             // 第一次调用，触发第 1 次网络请求
             val result1 = directory.candidates("acheron.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, result1.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, result1.size)
             assertEquals(1, server.requestCount)
 
             // 推进 12 小时（处于 24h TTL 内），应直接命中内存缓存
             clock.addAndGet(12 * 60 * 60 * 1000L)
             val result2 = directory.candidates("acheron.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, result2.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, result2.size)
             assertEquals(1, server.requestCount)
 
             // 推进到 25 小时（超过 24h TTL），应触发网络刷新
             clock.addAndGet(13 * 60 * 60 * 1000L)
             val result3 = directory.candidates("acheron.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, result3.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, result3.size)
             assertEquals(2, server.requestCount)
         }
     }
@@ -309,7 +315,7 @@ class DownloadCdnDirectoryTest {
 
             val fixedTime = 2_000_000_000L
             val directory1 =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     cacheFile = cacheFile,
                     directoryUrl = server.loopbackUrl("/distribution"),
@@ -325,7 +331,7 @@ class DownloadCdnDirectoryTest {
 
             // 创建第二个无内存缓存的实例，验证从文件读取而不发起新网络请求
             val directory2 =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     cacheFile = cacheFile,
                     directoryUrl = server.loopbackUrl("/distribution"),
@@ -333,7 +339,7 @@ class DownloadCdnDirectoryTest {
                 )
 
             val candidatesFromDisk = directory2.candidates("topaz.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidatesFromDisk.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidatesFromDisk.size)
             // 请求计数仍为 1，说明未发起网络拉取
             assertEquals(1, server.requestCount)
         }
@@ -350,14 +356,14 @@ class DownloadCdnDirectoryTest {
             server.enqueue(MockResponse().setResponseCode(500).setBody("Internal Server Error"))
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             // 网络失败时不应抛出异常
             val candidates = directory.candidates("mikoto.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidates.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidates.size)
             // 内置兜底中 mikoto 对应的 slow 节点为 hime
             assertEquals("hime.iwara.tv", candidates.first())
         }
@@ -381,7 +387,7 @@ class DownloadCdnDirectoryTest {
             )
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
@@ -433,19 +439,19 @@ class DownloadCdnDirectoryTest {
                     .setResponseCode(200)
                     .setHeader(
                         "Content-Length",
-                        (DownloadCdnPolicy.DIRECTORY_MAX_BYTES + 1024).toString(),
+                        (CdnPolicy.DIRECTORY_MAX_BYTES + 1024).toString(),
                     )
                     .setBody("too large header declared")
             )
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val candidates = directory.candidates("sparkle.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidates.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidates.size)
             // 超限拒绝后降级为内置 fallback
             assertFalse(candidates.contains("sparkle.iwara.tv"))
         }
@@ -466,13 +472,13 @@ class DownloadCdnDirectoryTest {
             )
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val candidates = directory.candidates("topaz.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidates.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidates.size)
             assertFalse(candidates.contains("topaz.iwara.tv"))
         }
     }
@@ -488,15 +494,118 @@ class DownloadCdnDirectoryTest {
             server.enqueue(MockResponse().setResponseCode(200).setBody(sampleDistributionHtml))
 
             val directory =
-                DownloadCdnDirectory(
+                CdnDirectory(
                     client = okHttpClient,
                     cacheFile = impossibleCacheFile,
                     directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val candidates = directory.candidates("swan.iwara.tv")
-            assertEquals(DownloadCdnPolicy.MAX_CANDIDATES, candidates.size)
+            assertEquals(CdnPolicy.MAX_CANDIDATES, candidates.size)
             assertFalse(candidates.contains("swan.iwara.tv"))
+        }
+    }
+
+    /** 验证不同持久化缓存文件使用独立刷新互斥锁，播放目录刷新不被正在阻塞的下载目录刷新锁住。 */
+    @Test
+    fun independentCacheFilesDoNotBlockEachOtherDuringConcurrentRefresh() = runBlocking {
+        withTimeout(5000) {
+            val slowDirEntered = CountDownLatch(1)
+            val allowSlowDirFinish = CountDownLatch(1)
+            server.dispatcher =
+                object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        if (request.path == "/slow-dir") {
+                            slowDirEntered.countDown()
+                            assertTrue(
+                                "快目录必须在慢目录返回前完成刷新，否则存在全局锁互相阻塞",
+                                allowSlowDirFinish.await(3, TimeUnit.SECONDS),
+                            )
+                        }
+                        return MockResponse().setResponseCode(200).setBody(sampleDistributionHtml)
+                    }
+                }
+
+            val downloadDir =
+                CdnDirectory(
+                    client = okHttpClient,
+                    cacheFile = File(tempFolder.root, "download_cdn_directory.json"),
+                    directoryUrl = server.loopbackUrl("/slow-dir"),
+                )
+            val playbackDir =
+                CdnDirectory(
+                    client = okHttpClient,
+                    cacheFile = File(tempFolder.root, "playback-cdn-directory.json"),
+                    directoryUrl = server.loopbackUrl("/fast-dir"),
+                )
+
+            val slowTask = async(Dispatchers.IO) { downloadDir.candidates("kafka.iwara.tv") }
+            assertTrue(slowDirEntered.await(2, TimeUnit.SECONDS))
+
+            val fastCandidates = playbackDir.candidates("acheron.iwara.tv")
+            assertEquals(CdnPolicy.MAX_CANDIDATES, fastCandidates.size)
+            allowSlowDirFinish.countDown()
+
+            val slowCandidates = slowTask.await()
+            assertEquals(CdnPolicy.MAX_CANDIDATES, slowCandidates.size)
+        }
+    }
+
+    /** 验证未注入下载并发预算的目录实例（如播放侧）不会被占满的 [DownloadCdnBudget] 阻塞，而注入预算的下载实例遵循许可控制。 */
+    @Test
+    fun decoupledDefaultPermitIsNotBlockedWhenDownloadBudgetIsSaturated() = runBlocking {
+        withTimeout(5000) {
+            server.enqueue(MockResponse().setResponseCode(200).setBody(sampleDistributionHtml))
+            server.enqueue(MockResponse().setResponseCode(200).setBody(sampleDistributionHtml))
+
+            val heldReady = CompletableDeferred<Unit>()
+            val releaseHeld = CompletableDeferred<Unit>()
+            var activeHeld = 0
+            val holder1 = launch {
+                DownloadCdnBudget.withPermit {
+                    activeHeld++
+                    if (activeHeld == 2) heldReady.complete(Unit)
+                    releaseHeld.await()
+                }
+            }
+            val holder2 = launch {
+                DownloadCdnBudget.withPermit {
+                    activeHeld++
+                    if (activeHeld == 2) heldReady.complete(Unit)
+                    releaseHeld.await()
+                }
+            }
+            heldReady.await()
+
+            val unbudgetedPlaybackDir =
+                CdnDirectory(
+                    client = okHttpClient,
+                    directoryUrl = server.loopbackUrl("/distribution"),
+                )
+            val playbackCandidates = unbudgetedPlaybackDir.candidates("acheron.iwara.tv")
+            assertEquals(CdnPolicy.MAX_CANDIDATES, playbackCandidates.size)
+            assertEquals(1, server.requestCount)
+
+            val budgetedDownloadDir =
+                CdnDirectory(
+                    client = okHttpClient,
+                    directoryUrl = server.loopbackUrl("/distribution"),
+                    withNetworkPermit = { block -> DownloadCdnBudget.withPermit { block() } },
+                )
+            val downloadCompleted = AtomicBoolean(false)
+            val downloadTask = async {
+                budgetedDownloadDir.candidates("kafka.iwara.tv").also {
+                    downloadCompleted.set(true)
+                }
+            }
+            kotlinx.coroutines.delay(100)
+            assertFalse("下载预算占满时，注入预算的目录拉取应等待许可", downloadCompleted.get())
+
+            releaseHeld.complete(Unit)
+            holder1.join()
+            holder2.join()
+            assertEquals(CdnPolicy.MAX_CANDIDATES, downloadTask.await().size)
+            assertEquals(2, server.requestCount)
         }
     }
 }

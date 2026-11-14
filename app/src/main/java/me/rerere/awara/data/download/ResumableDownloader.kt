@@ -14,6 +14,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.rerere.awara.data.cdn.CdnDirectory
+import me.rerere.awara.data.cdn.CdnPolicy
+import me.rerere.awara.data.cdn.parseContentRange
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.util.await
 import okhttp3.Call
@@ -27,7 +30,7 @@ class ResumableDownloader
 internal constructor(
     private val okHttpClient: OkHttpClient,
     private val transferSettings: DownloadTransferSettings = DownloadTransferSettings(),
-    private val cdnDirectory: DownloadCdnDirectory? = null,
+    private val cdnDirectory: CdnDirectory? = null,
     private val refreshLink: (suspend () -> String)? = null,
     private val networkIdentity: () -> String = { "" },
     private val connectionTracker: CdnConnectionTracker? = null,
@@ -50,12 +53,18 @@ internal constructor(
                     transferSettings.multiCdnEnabled &&
                         original.scheme == "https" &&
                         original.encodedPath == "/download" &&
-                        DownloadCdnPolicy.trustedHost(original.host)
+                        CdnPolicy.trustedHost(original.host)
                 ) {
                     DownloadSourcePool(
                         url,
                         okHttpClient,
-                        cdnDirectory ?: DownloadCdnDirectory(okHttpClient),
+                        cdnDirectory
+                            ?: CdnDirectory(
+                                client = okHttpClient,
+                                withNetworkPermit = { block ->
+                                    DownloadCdnBudget.withPermit { block() }
+                                },
+                            ),
                         refreshLink,
                         onBindCall,
                         onUnbindCall,
@@ -283,9 +292,9 @@ internal constructor(
 
                                 val contentRange = response.header("Content-Range").orEmpty()
                                 val parsed = parseContentRange(contentRange)
-                                val start = parsed?.first
-                                val end = parsed?.second
-                                val total = parsed?.third ?: -1L
+                                val start = parsed?.start
+                                val end = parsed?.end
+                                val total = parsed?.total ?: -1L
                                 val bodyLen = response.body?.contentLength() ?: -1L
 
                                 // 元数据已知时，206 total 必须严格相等，否则直接报错保留原文件，不得追加或重试清空
@@ -416,15 +425,7 @@ internal constructor(
 
     private fun extractValidator(response: Response): String? {
         // 无法证明 CDN 的修改时间是强校验器，此时改用大小和重叠字节验证。
-        return response.header("ETag")?.trim()?.takeIf { it.startsWith('"') && it.endsWith('"') }
-    }
-
-    private fun parseContentRange(header: String): Triple<Long, Long, Long?>? {
-        val match = CONTENT_RANGE_REGEX.matchEntire(header.trim()) ?: return null
-        val start = match.groupValues[1].toLongOrNull() ?: return null
-        val end = match.groupValues[2].toLongOrNull() ?: return null
-        val total = match.groupValues[3].takeIf { it.isNotEmpty() }?.toLongOrNull()
-        return Triple(start, end, total)
+        return response.header("ETag")?.trim()?.takeIf { CdnPolicy.isStrongValidator(it) }
     }
 
     // 逐字节比对重叠区间，保障内容一致性且不修改本地文件
@@ -525,7 +526,5 @@ internal constructor(
 
     companion object {
         private const val OVERLAP_SIZE = 65536L
-        private val CONTENT_RANGE_REGEX =
-            Regex("""bytes\s+(\d+)-(\d+)/(?:(\d+)|\*)""", RegexOption.IGNORE_CASE)
     }
 }

@@ -11,7 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import me.rerere.awara.data.download.DownloadCdnDirectory
+import me.rerere.awara.data.cdn.CdnDirectory
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -34,7 +34,7 @@ import okhttp3.OkHttpClient
  */
 internal class PlaybackCdnController(
     private val client: OkHttpClient,
-    private val directory: DownloadCdnDirectory,
+    private val directory: CdnDirectory,
     private val refreshSource: suspend (String) -> String?,
     private val fallbackFactory: DataSource.Factory = DefaultHttpDataSource.Factory(),
     private val now: () -> Long = { System.nanoTime() / 1_000_000 },

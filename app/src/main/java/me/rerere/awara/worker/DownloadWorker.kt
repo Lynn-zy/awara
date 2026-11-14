@@ -26,7 +26,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
-import me.rerere.awara.data.download.DownloadCdnDirectory
+import me.rerere.awara.data.cdn.CdnDirectory
+import me.rerere.awara.data.download.DownloadCdnBudget
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
@@ -53,7 +54,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
     private val downloadStorage by inject<DownloadStorage>()
     private val downloadManager by inject<DownloadManager>()
     private val cdnDirectory by lazy {
-        DownloadCdnDirectory(okHttpClient, File(appContext.cacheDir, "download_cdn_directory.json"))
+        CdnDirectory(
+            client = okHttpClient,
+            cacheFile = File(appContext.cacheDir, "download_cdn_directory.json"),
+            withNetworkPermit = { block -> DownloadCdnBudget.withPermit { block() } },
+        )
     }
 
     override suspend fun doWork(): Result {

@@ -23,7 +23,10 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
-import me.rerere.awara.data.download.DownloadCdnDirectory
+import me.rerere.awara.data.cdn.CdnDirectory
+import me.rerere.awara.data.cdn.CdnFailureAction
+import me.rerere.awara.data.cdn.CdnPolicy
+import me.rerere.awara.data.cdn.parseContentRange
 import okhttp3.Call
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -56,7 +59,7 @@ import okhttp3.Response
  */
 internal class PlaybackCdnDataSource(
     private val client: OkHttpClient,
-    private val directory: DownloadCdnDirectory,
+    private val directory: CdnDirectory,
     private val sessionProvider: (HttpUrl) -> PlaybackCdnSession,
     private val refreshSource: suspend (String) -> String?,
     private val defaultHttpDataSourceFactory: DataSource.Factory,
@@ -384,7 +387,7 @@ internal class PlaybackCdnDataSource(
             }
         }
 
-        val targetUrl = PlaybackCdnPolicy.candidateUrl(session.currentUrl, targetHost)
+        val targetUrl = CdnPolicy.candidateUrl(session.currentUrl, targetHost, "/view")
         val networkUrl = urlResolver(targetUrl)
         val requestBuilder = Request.Builder().url(networkUrl).get()
 
@@ -402,7 +405,7 @@ internal class PlaybackCdnDataSource(
 
         // 仅当该 host 自己此前已记录过强 ETag 时，才允许携带 If-Range；跨源新节点严禁携带旧主机的 ETag
         val hostRecordedEtag = session.etagByHost[targetHost]
-        if (hostRecordedEtag != null && PlaybackCdnPolicy.isStrongValidator(hostRecordedEtag)) {
+        if (hostRecordedEtag != null && CdnPolicy.isStrongValidator(hostRecordedEtag)) {
             requestBuilder.header("If-Range", hostRecordedEtag)
         }
 
@@ -436,9 +439,9 @@ internal class PlaybackCdnDataSource(
         try {
             val code = response.code
             if (code == 401 || code == 403) {
-                val action = PlaybackCdnPolicy.failureAction(code)
+                val action = CdnPolicy.failureAction(code)
                 if (
-                    action == PlaybackCdnAction.REFRESH_SIGNATURE && !session.hasRefreshedSignature
+                    action == CdnFailureAction.REFRESH_SIGNATURE && !session.hasRefreshedSignature
                 ) {
                     response.close()
                     val refreshedUrl = runBlockingCatching { refreshSignature(session) }
@@ -554,16 +557,16 @@ internal class PlaybackCdnDataSource(
                 }
 
                 // 2. 总长度必须确切已知（total > 0L）
-                if (parsedRange.total <= 0L) {
-                    throw IOException("Content-Range 总长度未知或非法: $contentRange")
-                }
+                val parsedTotal =
+                    parsedRange.total?.takeIf { it > 0L }
+                        ?: throw IOException("Content-Range 总长度未知或非法: $contentRange")
 
                 // 3. 严格核对 end 为 min(requestEnd, total - 1)
                 val expectedEnd =
                     if (length != C.LENGTH_UNSET.toLong()) {
-                        minOf(position + length - 1, parsedRange.total - 1)
+                        minOf(position + length - 1, parsedTotal - 1)
                     } else {
-                        parsedRange.total - 1
+                        parsedTotal - 1
                     }
                 if (parsedRange.end != expectedEnd) {
                     throw IOException(
@@ -574,10 +577,10 @@ internal class PlaybackCdnDataSource(
                 // 4. 严格校验 total 与 session.totalBytes
                 val sessionTotal = session.totalBytes
                 if (sessionTotal == null) {
-                    session.totalBytes = parsedRange.total
-                } else if (parsedRange.total != sessionTotal) {
+                    session.totalBytes = parsedTotal
+                } else if (parsedTotal != sessionTotal) {
                     throw IOException(
-                        "节点 $targetHost 返回的文件总大小与主源不一致: ${parsedRange.total} != $sessionTotal"
+                        "节点 $targetHost 返回的文件总大小与主源不一致: $parsedTotal != $sessionTotal"
                     )
                 }
 
@@ -601,7 +604,7 @@ internal class PlaybackCdnDataSource(
 
                 // 7. 强 ETag 核对：强 ETag 变更拒绝，不可覆盖旧 ETag 无校验
                 val rawEtag = response.header("ETag")
-                val isStrong = PlaybackCdnPolicy.isStrongValidator(rawEtag)
+                val isStrong = CdnPolicy.isStrongValidator(rawEtag)
                 val recordedEtag = session.etagByHost[targetHost]
 
                 if (recordedEtag != null) {
@@ -691,7 +694,7 @@ internal class PlaybackCdnDataSource(
                     throw e
                 }
 
-                if (session.failureCount.incrementAndGet() > PlaybackCdnPolicy.MAX_FAILURES) {
+                if (session.failureCount.incrementAndGet() > CdnPolicy.MAX_FAILURES) {
                     throw (e as? IOException ?: IOException("会话级累计错误超限", e))
                 }
 
@@ -737,7 +740,7 @@ internal class PlaybackCdnDataSource(
 
         // 1. 预算与换源上限检查
         if (!isProactiveSwitch) {
-            if (session.failureCount.incrementAndGet() > PlaybackCdnPolicy.MAX_FAILURES) {
+            if (session.failureCount.incrementAndGet() > CdnPolicy.MAX_FAILURES) {
                 return false
             }
             if (++segmentRetryCount > PlaybackCdnPolicy.MAX_READ_SEGMENT_RETRIES) {
@@ -913,14 +916,14 @@ internal class PlaybackCdnDataSource(
                 coroutineScope.launch(Dispatchers.IO) {
                     try {
                         val total = session.totalBytes ?: return@launch
-                        val sampleRanges = PlaybackCdnPolicy.sampleRanges(total)
+                        val sampleRanges = CdnPolicy.sampleRanges(total)
 
                         // 1. 若主源样本指纹尚未就绪，首先对主源采样开中尾指纹
                         if (!session.isFingerprintReady.get()) {
                             val initialHostEtag = session.etagByHost[session.initialHost]
                             if (
                                 initialHostEtag == null ||
-                                    !PlaybackCdnPolicy.isStrongValidator(initialHostEtag)
+                                    !CdnPolicy.isStrongValidator(initialHostEtag)
                             ) {
                                 return@launch
                             }
@@ -955,7 +958,7 @@ internal class PlaybackCdnDataSource(
 
                         // 2. 从目录获取最多 6 个候选主机并逐个验证，已验证满 2 个时立即停止
                         val candidates = directory.candidates(session.initialHost)
-                        for (candidateHost in candidates.take(PlaybackCdnPolicy.MAX_CANDIDATES)) {
+                        for (candidateHost in candidates.take(CdnPolicy.MAX_CANDIDATES)) {
                             if (session.backupNodes.size >= PlaybackCdnPolicy.MAX_BACKUP_NODES)
                                 break
                             if (
@@ -1000,7 +1003,7 @@ internal class PlaybackCdnDataSource(
         expectedTotal: Long,
         generation: Int,
     ): Boolean {
-        val candidateUrl = PlaybackCdnPolicy.candidateUrl(session.currentUrl, candidateHost)
+        val candidateUrl = CdnPolicy.candidateUrl(session.currentUrl, candidateHost, "/view")
         var observedEtag: String? = null
 
         for ((index, range) in sampleRanges.withIndex()) {
@@ -1103,7 +1106,7 @@ internal class PlaybackCdnDataSource(
                 }
 
                 val etag = res.header("ETag")
-                if (!PlaybackCdnPolicy.isStrongValidator(etag) || etag == null) {
+                if (!CdnPolicy.isStrongValidator(etag) || etag == null) {
                     return@coroutineScope null
                 }
 
@@ -1149,31 +1152,6 @@ internal class PlaybackCdnDataSource(
             return true
         }
         return false
-    }
-
-    private data class ParsedContentRange(val start: Long, val end: Long, val total: Long)
-
-    private fun parseContentRange(header: String?): ParsedContentRange? {
-        if (header.isNullOrBlank()) return null
-        // 格式形如: bytes 0-1023/155532867 或 bytes 0-1023/*
-        val trimmed = header.trim()
-        if (!trimmed.startsWith("bytes ", ignoreCase = true)) return null
-        val parts = trimmed.substring(6).trim().split('/')
-        if (parts.size != 2) return null
-
-        val rangePart = parts[0].trim()
-        val totalPart = parts[1].trim()
-
-        val dashIndex = rangePart.indexOf('-')
-        if (dashIndex == -1) return null
-
-        val start = rangePart.substring(0, dashIndex).trim().toLongOrNull() ?: return null
-        val end = rangePart.substring(dashIndex + 1).trim().toLongOrNull() ?: return null
-        val total = if (totalPart == "*") -1L else (totalPart.toLongOrNull() ?: return null)
-
-        if (start < 0L || end < start || total <= end) return null
-
-        return ParsedContentRange(start, end, total)
     }
 
     /** 同步执行挂起操作（如签名刷新）；遇到协程取消时显式重抛，其余非致命异常返回 null。 */

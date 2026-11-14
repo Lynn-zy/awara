@@ -36,15 +36,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import me.rerere.awara.data.cdn.CdnDirectory
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.diagnostics.CdnTrackingDataSourceFactory
-import me.rerere.awara.data.download.DownloadCdnDirectory
 import me.rerere.awara.data.playback.PlaybackBufferSample
 import me.rerere.awara.data.playback.PlaybackCdnController
 import me.rerere.awara.data.playback.PlaybackReadAheadDataSource
 import me.rerere.awara.data.playback.PlaybackSettings
+import me.rerere.awara.data.playback.PlayerCache
 import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.OkHttpClient
+import org.koin.core.context.GlobalContext
 
 private const val TAG = "PlayerState"
 
@@ -79,15 +81,26 @@ fun rememberPlayerState(
             connectionTracker,
         )
     }
+    // 优先复用 Koin 单例 OkHttpClient（继承其连接池与线程池，清除应用层拦截器），仅在无 Koin 的预览/测试场景回退兜底实例
+    val sharedHttpClient = remember {
+        GlobalContext.getOrNull()?.getOrNull<OkHttpClient>()
+    }
     val cdnController = remember {
         if (builder == null && settings.multiCdnEnabled) {
-            val client = OkHttpClient()
+            val client =
+                (sharedHttpClient ?: OkHttpClient())
+                    .newBuilder()
+                    .apply {
+                        interceptors().clear()
+                        networkInterceptors().clear()
+                    }
+                    .build()
             PlaybackCdnController(
                 client = client,
                 directory =
-                    DownloadCdnDirectory(
-                        client,
-                        File(context.cacheDir, "playback-cdn-directory.json"),
+                    CdnDirectory(
+                        client = client,
+                        cacheFile = File(context.cacheDir, "playback-cdn-directory.json"),
                     ),
                 refreshSource = { refreshSource(it) },
                 fallbackFactory = httpFactory,

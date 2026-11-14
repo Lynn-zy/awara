@@ -22,6 +22,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import me.rerere.awara.data.cdn.CdnPolicy
+import me.rerere.awara.data.cdn.parseContentRange
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.util.await
@@ -114,7 +116,7 @@ internal constructor(
             // 发起小 Range bytes=0-0 探测
             val probeValidator =
                 existingState?.strongETag
-                    ?: validator?.trim()?.takeIf { DownloadRangeStore.isStrongETag(it) }
+                    ?: validator?.trim()?.takeIf { CdnPolicy.isStrongValidator(it) }
 
             val probeResult =
                 probeWithRecovery(
@@ -580,7 +582,7 @@ internal constructor(
                         }
 
                         val etag = response.header("ETag")?.trim()
-                        if (!DownloadRangeStore.isStrongETag(etag)) {
+                        if (!CdnPolicy.isStrongValidator(etag)) {
                             return@use ProbeResult.NoStrongETag(total)
                         }
 
@@ -819,14 +821,6 @@ internal constructor(
      * @param header Content-Range 头部字符串
      * @return Triple(起始偏移, 结束偏移, 文件总大小)；若格式不符返回 null
      */
-    private fun parseContentRange(header: String): Triple<Long, Long, Long?>? {
-        val match = CONTENT_RANGE_REGEX.matchEntire(header.trim()) ?: return null
-        val start = match.groupValues[1].toLongOrNull() ?: return null
-        val end = match.groupValues[2].toLongOrNull() ?: return null
-        val total = match.groupValues[3].takeIf { it.isNotEmpty() }?.toLongOrNull()
-        return Triple(start, end, total)
-    }
-
     private sealed interface ProbeResult {
         data class Success(val total: Long, val strongETag: String) : ProbeResult
 
@@ -835,10 +829,5 @@ internal constructor(
         data class NoStrongETag(val total: Long?) : ProbeResult
 
         data class UnsupportedRange(val total: Long?) : ProbeResult
-    }
-
-    companion object {
-        private val CONTENT_RANGE_REGEX =
-            Regex("""bytes\s+(\d+)-(\d+)/(?:(\d+)|\*)""", RegexOption.IGNORE_CASE)
     }
 }

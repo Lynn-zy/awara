@@ -20,7 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import me.rerere.awara.data.download.DownloadCdnDirectory
+import me.rerere.awara.data.cdn.CdnDirectory
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -70,7 +70,7 @@ class PlaybackCdnDataSourceTest {
         val uri = Uri.parse(rawUrl)
 
         val cancelledScope = CoroutineScope(Dispatchers.IO + Job().apply { cancel() })
-        val directory = DownloadCdnDirectory(client = client)
+        val directory = CdnDirectory(client = client)
 
         val resourceKey = PlaybackResourceKey.normalizeKey(httpUrl)
         val session =
@@ -422,7 +422,7 @@ class PlaybackCdnDataSourceTest {
             )
 
         val directory =
-            DownloadCdnDirectory(client = client, directoryUrl = server.url("/directory"))
+            CdnDirectory(client = client, directoryUrl = server.url("/directory"))
 
         val snapshots =
             CopyOnWriteArrayList<me.rerere.awara.data.diagnostics.CdnConnectionSnapshot>()
@@ -792,7 +792,7 @@ class PlaybackCdnDataSourceTest {
                 session = session,
                 scope = scope,
                 directory =
-                    DownloadCdnDirectory(client = client, directoryUrl = server.url("/directory")),
+                    CdnDirectory(client = client, directoryUrl = server.url("/directory")),
                 connectionTracker = tracker,
                 urlResolver = { original ->
                     server.url(
@@ -901,7 +901,7 @@ class PlaybackCdnDataSourceTest {
     private fun createSource(
         session: PlaybackCdnSession? = null,
         scope: CoroutineScope = CoroutineScope(Dispatchers.IO + Job().apply { cancel() }),
-        directory: DownloadCdnDirectory = DownloadCdnDirectory(client = client),
+        directory: CdnDirectory = CdnDirectory(client = client),
         // MockWebServer.url() 会通过 canonicalHostName 反向解析为 localhost，显式固定为 127.0.0.1 防止双栈环境切入 [::1]
         urlResolver: (HttpUrl) -> HttpUrl = {
             server.url(it.encodedPath + "?" + it.encodedQuery).newBuilder().host("127.0.0.1").build()

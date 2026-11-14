@@ -7,7 +7,7 @@ import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import me.rerere.awara.data.download.DownloadCdnDirectory
+import me.rerere.awara.data.cdn.CdnDirectory
 import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.HttpUrl
@@ -59,7 +59,7 @@ class PlaybackCdnControllerTest {
         controller =
             PlaybackCdnController(
                 client = client,
-                directory = DownloadCdnDirectory(client),
+                directory = CdnDirectory(client),
                 refreshSource = { null },
                 urlResolver = ::resolveLoopbackUrl,
             )
@@ -170,7 +170,7 @@ class PlaybackCdnControllerTest {
         controller =
             PlaybackCdnController(
                 client = client,
-                directory = DownloadCdnDirectory(client, directoryUrl = loopbackUrl("/directory")),
+                directory = CdnDirectory(client, directoryUrl = loopbackUrl("/directory")),
                 refreshSource = { null },
                 urlResolver = ::resolveLoopbackUrl,
             )

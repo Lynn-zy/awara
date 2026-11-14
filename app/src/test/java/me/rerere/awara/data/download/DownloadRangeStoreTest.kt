@@ -225,14 +225,26 @@ class DownloadRangeStoreTest {
         assertEquals(Pair(44L, 49L), blocks[2])
     }
 
-    /** 校验强 ETag 正则与验证规则 */
+    /** 校验弱 ETag 与非法格式 ETag 无法写入侧车状态。 */
     @Test
-    fun validateStrongETag() {
-        assertTrue(DownloadRangeStore.isStrongETag("\"6adf1a78-9453e43\""))
-        assertTrue(DownloadRangeStore.isStrongETag("\"\""))
-        assertFalse(DownloadRangeStore.isStrongETag("W/\"6adf1a78-9453e43\""))
-        assertFalse(DownloadRangeStore.isStrongETag("6adf1a78-9453e43"))
-        assertFalse(DownloadRangeStore.isStrongETag(null))
-        assertFalse(DownloadRangeStore.isStrongETag(""))
+    fun writeStateRejectsWeakOrMalformedETag() {
+        val targetFile = tempFolder.newFile("invalid_etag.mp4.part")
+        for (invalidETag in listOf("W/\"6adf1a78-9453e43\"", "6adf1a78-9453e43", "")) {
+            var threw = false
+            try {
+                DownloadRangeStore.writeState(
+                    targetFile,
+                    DownloadRangeState(
+                        resourceKey = "https://www.iwara.tv/?filename=video.mp4&path=%2Ffile",
+                        total = 1024L,
+                        strongETag = invalidETag,
+                        ranges = emptyList(),
+                    ),
+                )
+            } catch (_: IllegalArgumentException) {
+                threw = true
+            }
+            assertTrue("应拒绝非法或弱校验器: $invalidETag", threw)
+        }
     }
 }

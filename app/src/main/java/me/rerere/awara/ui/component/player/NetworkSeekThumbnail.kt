@@ -26,6 +26,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import me.rerere.awara.data.playback.PlayerCache
 
 /** 单次取帧的网络正文预算，跨连接累计；取消或超额后不自动重试。 */
 internal class SeekThumbnailReadBudget(maxBytes: Long = 2L * 1024L * 1024L) {

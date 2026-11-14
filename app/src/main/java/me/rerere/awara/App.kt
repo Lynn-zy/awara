@@ -8,15 +8,16 @@ import coil.ImageLoaderFactory
 import coil.decode.SvgDecoder
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import me.rerere.awara.data.playback.PlayerCache
+import me.rerere.awara.data.playback.PlayerCacheLifecycleCallbacks
 import me.rerere.awara.di.databaseModule
 import me.rerere.awara.di.networkModule
 import me.rerere.awara.di.repoModule
 import me.rerere.awara.di.tagI18NModule
 import me.rerere.awara.di.viewModelModule
-import me.rerere.awara.ui.component.player.PlayerCache
-import me.rerere.awara.ui.component.player.PlayerCacheLifecycleCallbacks
 import me.rerere.awara.ui.registerErrorHandler
 import me.rerere.compose_setting.preference.initComposeSetting
+import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.OkHttpClient
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -31,6 +32,8 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
         PlayerCache.purgeOnStartup(this)
         registerErrorHandler()
         initComposeSetting()
+        // 彻底清除历史版本遗留的明文密码键，防止存量已登录设备长期残留凭据
+        mmkvPreference.remove("login.password")
         registerNotificationChannel()
         startKoin {
             androidLogger()

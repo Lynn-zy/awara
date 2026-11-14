@@ -15,6 +15,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import me.rerere.awara.data.cdn.CdnDirectory
+import me.rerere.awara.data.cdn.CdnPolicy
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
@@ -66,7 +68,7 @@ class DownloadSourcePoolTest {
     private lateinit var okHttpClient: OkHttpClient
 
     /** CDN 目录管理器实例 */
-    private lateinit var cdnDirectory: DownloadCdnDirectory
+    private lateinit var cdnDirectory: CdnDirectory
 
     /** 64KiB 大小的测试源数据样本，足以满足三点抽样算法 (0..16383, 24576..40959, 49152..65535) */
     private val fixturePayload = ByteArray(64 * 1024) { index -> ((index % 251) + 1).toByte() }
@@ -150,12 +152,13 @@ class DownloadSourcePoolTest {
         // 初始化禁用连接重试的 OkHttpClient
         okHttpClient = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
 
-        // 构建指向本地目录服务的 DownloadCdnDirectory
+        // 构建指向本地目录服务的 CdnDirectory，接入下载并发预算
         cdnDirectory =
-            DownloadCdnDirectory(
+            CdnDirectory(
                 client = okHttpClient,
                 cacheFile = null,
                 directoryUrl = directoryServer.loopbackUrl("/?page=distribution"),
+                withNetworkPermit = { block -> DownloadCdnBudget.withPermit(block) },
             )
     }
 
@@ -388,7 +391,7 @@ class DownloadSourcePoolTest {
                 assertNotEquals("下一次 lease 应选择未失效的另一节点", initialLease.host, nextLease.host)
 
                 // 持续累积故障次数直到达到上限（当前 failures 计数已为 1）
-                repeat(DownloadCdnPolicy.MAX_FAILURES - 1) {
+                repeat(CdnPolicy.MAX_FAILURES - 1) {
                     pool.recover(nextLease, DownloadCdnHttpException(500))
                 }
 
@@ -558,10 +561,11 @@ class DownloadSourcePoolTest {
                     }
 
                     val customDirectory =
-                        DownloadCdnDirectory(
+                        CdnDirectory(
                             client = okHttpClient,
                             cacheFile = null,
                             directoryUrl = multiMirrorDirectoryServer.loopbackUrl("/?page=distribution"),
+                            withNetworkPermit = { block -> DownloadCdnBudget.withPermit(block) },
                         )
 
                     var currentNetwork = "WIFI"

@@ -1,5 +1,6 @@
 package me.rerere.awara.data.playback
 
+import me.rerere.awara.data.cdn.CdnPolicy
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,28 +16,29 @@ class PlaybackResourceKeyTest {
         val original =
             "https://acheron.iwara.tv/view?filename=test.mp4&path=video&hash=secret".toHttpUrl()
         assertThrows(IllegalArgumentException::class.java) {
-            PlaybackCdnPolicy.candidateUrl(original, "example.com")
+            CdnPolicy.candidateUrl(original, "example.com", "/view")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            PlaybackCdnPolicy.candidateUrl(original, "api.iwara.tv")
+            CdnPolicy.candidateUrl(original, "api.iwara.tv", "/view")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            PlaybackCdnPolicy.candidateUrl(
+            CdnPolicy.candidateUrl(
                 original.newBuilder().encodedPath("/download").build(),
                 "silverwolf.iwara.tv",
+                "/view",
             )
         }
-        val candidate = PlaybackCdnPolicy.candidateUrl(original, "silverwolf.iwara.tv")
+        val candidate = CdnPolicy.candidateUrl(original, "silverwolf.iwara.tv", "/view")
         assertEquals(original.encodedQuery, candidate.encodedQuery)
         assertEquals("silverwolf.iwara.tv", candidate.host)
     }
 
     @Test
     fun strongValidatorRejectsEmbeddedQuotesAndControlCharacters() {
-        assertTrue(PlaybackCdnPolicy.isStrongValidator("\"valid\""))
-        assertFalse(PlaybackCdnPolicy.isStrongValidator("W/\"weak\""))
-        assertFalse(PlaybackCdnPolicy.isStrongValidator("\"two\"tags\""))
-        assertFalse(PlaybackCdnPolicy.isStrongValidator("\"line\nfeed\""))
+        assertTrue(CdnPolicy.isStrongValidator("\"valid\""))
+        assertFalse(CdnPolicy.isStrongValidator("W/\"weak\""))
+        assertFalse(CdnPolicy.isStrongValidator("\"two\"tags\""))
+        assertFalse(CdnPolicy.isStrongValidator("\"line\nfeed\""))
     }
 
     @Test

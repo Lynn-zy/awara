@@ -1,4 +1,4 @@
-package me.rerere.awara.ui.component.player
+package me.rerere.awara.data.playback
 
 import android.content.Context
 import android.net.Uri
@@ -19,7 +19,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import me.rerere.awara.data.playback.playbackResourceKey
 
 /**
  * 播放器缓存工厂与生命周期管理器，基于 AndroidX Media3 数据源体系。
@@ -288,9 +287,7 @@ object PlayerCache {
         }
     }
 
-    /**
-     * 统计当前在线播放缓存占用的媒体数据字节数（忽略空索引文件，确保清理后准确显示 0 B）。
-     */
+    /** 统计当前在线播放缓存占用的媒体数据字节数（忽略空索引文件，确保清理后准确显示 0 B）。 */
     internal fun getCachedBytes(context: Context): Long {
         synchronized(lock) {
             val current = cacheInstance

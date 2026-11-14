@@ -17,6 +17,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import me.rerere.awara.data.cdn.CdnDirectory
+import me.rerere.awara.data.cdn.CdnFailureAction
+import me.rerere.awara.data.cdn.CdnPolicy
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.util.await
@@ -52,12 +55,14 @@ internal class DownloadCdnSource(
 internal class DownloadSourcePool(
     originalUrl: String,
     private val client: OkHttpClient,
-    private val directory: DownloadCdnDirectory,
+    private val directory: CdnDirectory,
     private val refreshLink: (suspend () -> String)? = null,
     private val onBind: ((Call) -> Unit)? = null,
     private val onUnbind: ((Call) -> Unit)? = null,
     private val networkIdentity: () -> String = { "" },
-    private val resolve: (HttpUrl, String) -> HttpUrl = DownloadCdnPolicy::candidateUrl,
+    private val resolve: (HttpUrl, String) -> HttpUrl = { url, host ->
+        CdnPolicy.candidateUrl(url, host, "/download")
+    },
     private val now: () -> Long = System::currentTimeMillis,
     private val connectionTracker: CdnConnectionTracker? = null,
 ) {
@@ -125,9 +130,9 @@ internal class DownloadSourcePool(
 
     /** 原始节点尚未成功时，只从可信目录尝试有限替代，不拼接未经验证的旧数据。 */
     suspend fun recoverPrimary(error: IOException): Boolean {
-        if (failures.incrementAndGet() > DownloadCdnPolicy.MAX_FAILURES) return false
+        if (failures.incrementAndGet() > CdnPolicy.MAX_FAILURES) return false
         val action =
-            (error as? DownloadCdnHttpException)?.let { DownloadCdnPolicy.failureAction(it.status) }
+            (error as? DownloadCdnHttpException)?.let { CdnPolicy.failureAction(it.status) }
                 ?: if (error is DownloadCdnIntegrityException) CdnFailureAction.FAIL
                 else CdnFailureAction.TRY_ANOTHER
         if (action == CdnFailureAction.REFRESH_SIGNATURE) return refreshSignature(null)
@@ -193,7 +198,7 @@ internal class DownloadSourcePool(
                             }
                             fingerprint = primarySamples.second
                         }
-                        for (host in candidates.take(DownloadCdnPolicy.MAX_CANDIDATES)) {
+                        for (host in candidates.take(CdnPolicy.MAX_CANDIDATES)) {
                             currentCoroutineContext().ensureActive()
                             if (networkAtStart != network) break
                             if (unavailableForFile(host)) continue
@@ -296,9 +301,9 @@ internal class DownloadSourcePool(
 
     /** 只重派失败区间，任务级与区块级预算共同限制失败风暴。 */
     suspend fun recover(source: DownloadCdnSource, error: IOException): Boolean {
-        if (failures.incrementAndGet() > DownloadCdnPolicy.MAX_FAILURES) return false
+        if (failures.incrementAndGet() > CdnPolicy.MAX_FAILURES) return false
         val action =
-            (error as? DownloadCdnHttpException)?.let { DownloadCdnPolicy.failureAction(it.status) }
+            (error as? DownloadCdnHttpException)?.let { CdnPolicy.failureAction(it.status) }
                 ?: if (error is DownloadCdnIntegrityException) CdnFailureAction.RETIRE_FILE_NODE
                 else CdnFailureAction.TRY_ANOTHER
         if (action == CdnFailureAction.REFRESH_SIGNATURE) return refreshSignature(source)
@@ -419,7 +424,7 @@ internal class DownloadSourcePool(
         ): Pair<String, String> {
             var validator = expectedValidator
             val digest = MessageDigest.getInstance("SHA-256")
-            for (range in DownloadCdnPolicy.sampleRanges(total)) {
+            for (range in CdnPolicy.sampleRanges(total)) {
                 val sampled = sampleRange(client, url, total, range, validator, onBind, onUnbind)
                 validator = sampled.first
                 digest.update(range.first.toString().toByteArray(Charsets.UTF_8))
@@ -464,7 +469,7 @@ internal class DownloadSourcePool(
                     if (
                         response.header("Content-Range") !=
                             "bytes ${range.first}-${range.last}/$total" ||
-                            !DownloadRangeStore.isStrongETag(etag) ||
+                            !CdnPolicy.isStrongValidator(etag) ||
                             (expectedValidator != null && etag != expectedValidator) ||
                             response.header("Content-Encoding", "identity")!!.lowercase() !=
                                 "identity" ||

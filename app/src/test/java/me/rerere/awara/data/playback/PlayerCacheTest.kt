@@ -1,4 +1,4 @@
-package me.rerere.awara.ui.component.player
+package me.rerere.awara.data.playback
 
 import android.app.Activity
 import android.content.Context

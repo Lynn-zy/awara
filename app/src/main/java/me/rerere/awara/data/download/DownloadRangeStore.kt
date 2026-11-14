@@ -12,6 +12,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import me.rerere.awara.data.cdn.CdnPolicy
 
 /** 已刷盘并提交的闭区间；哈希用于重建任务时识别截短或被改写的临时文件。 */
 @Serializable
@@ -114,7 +115,9 @@ class DownloadRangeStore private constructor() {
         /** 写入前后共用区间约束，不能让重叠区间或非法校验器落盘。 */
         private fun validateState(state: DownloadRangeState) {
             require(
-                state.resourceKey.isNotBlank() && state.total > 0L && isStrongETag(state.strongETag)
+                state.resourceKey.isNotBlank() &&
+                    state.total > 0L &&
+                    CdnPolicy.isStrongValidator(state.strongETag)
             )
             var lastEnd = -1L
             for (range in state.ranges) {
@@ -232,17 +235,6 @@ class DownloadRangeStore private constructor() {
                 }
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
-        }
-
-        /** HTTP 强实体标签不能带 W/ 前缀、内嵌引号或控制字符。 */
-        fun isStrongETag(etag: String?): Boolean {
-            val trimmed = etag?.trim() ?: return false
-            return trimmed.length >= 2 &&
-                trimmed.first() == '"' &&
-                trimmed.last() == '"' &&
-                trimmed.substring(1, trimmed.lastIndex).all {
-                    it.code == 0x21 || it.code in 0x23..0x7e || it.code in 0x80..0xff
-                }
         }
     }
 }

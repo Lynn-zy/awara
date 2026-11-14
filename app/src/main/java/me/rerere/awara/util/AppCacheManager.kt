@@ -4,7 +4,7 @@ import android.content.Context
 import coil.Coil
 import coil.annotation.ExperimentalCoilApi
 import java.io.File
-import me.rerere.awara.ui.component.player.PlayerCache
+import me.rerere.awara.data.playback.PlayerCache
 
 /**
  * 应用缓存统计与安全清理工具。

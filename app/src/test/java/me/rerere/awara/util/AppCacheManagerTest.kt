@@ -2,7 +2,7 @@ package me.rerere.awara.util
 
 import java.io.File
 import java.nio.file.Files
-import me.rerere.awara.ui.component.player.PlayerCache
+import me.rerere.awara.data.playback.PlayerCache
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
