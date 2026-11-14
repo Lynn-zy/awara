@@ -9,6 +9,8 @@ import androidx.room.migration.AutoMigrationSpec
 import me.rerere.awara.data.dao.DownloadDao
 import me.rerere.awara.data.dao.DownloadTaskDao
 import me.rerere.awara.data.dao.HistoryDao
+import me.rerere.awara.data.download.AndroidDownloadScanDataSource
+import me.rerere.awara.data.download.DownloadFolderScanner
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.DownloadItem
@@ -23,11 +25,23 @@ val databaseModule = module {
     single { DownloadStorage(androidContext()) }
 
     single { DownloadManager(androidContext(), get(), get(), get()) }
+
+    single {
+        DownloadFolderScanner(
+            dataSource =
+                AndroidDownloadScanDataSource(
+                    context = androidContext(),
+                    downloadStorage = get(),
+                    downloadDao = get<AppDatabase>().downloadDao(),
+                    mediaRepo = get(),
+                )
+        )
+    }
 }
 
 @Database(
     entities = [HistoryItem::class, DownloadItem::class, DownloadTask::class],
-    version = 11,
+    version = 12,
     exportSchema = true,
     autoMigrations =
         [
@@ -41,6 +55,7 @@ val databaseModule = module {
             AutoMigration(from = 8, to = 9),
             AutoMigration(from = 9, to = 10),
             AutoMigration(from = 10, to = 11),
+            AutoMigration(from = 11, to = 12),
         ],
 )
 abstract class AppDatabase : RoomDatabase() {

@@ -216,7 +216,7 @@
     <string name="download_unfinished_dialog_message">Unfinished download tasks detected. Do you want to continue downloading?</string>
     <string name="download_unfinished_dialog_resume">Resume</string>
     <string name="download_unfinished_dialog_dismiss">Not Now</string>
-    <string name="download_directory_title">Download folder</string>
+    <string name="download_directory_title">Video download folder</string>
     <string name="download_directory_choose">Choose folder</string>
     <string name="download_directory_default">Use Download/Awara</string>
     <string name="download_directory_description">This folder applies to new downloads. Existing files and queued downloads stay in their original folders.</string>
@@ -325,4 +325,25 @@
     <string name="blocklist_save_failed">Could not save the blocklist. Please retry.</string>
     <string name="blocklist_empty">No blocked users</string>
     <string name="blocklist_filtered_empty">No visible works on this page</string>
+    <string name="download_scan_confirm_title">Scan existing videos</string>
+    <string name="download_scan_confirm_message">Scan Iwara videos in this folder and import them into \"Downloaded videos\"? (Original files will not be moved or modified)</string>
+    <string name="download_scan_started_message">Found %1$d videos, fetching video metadata in the background…</string>
+    <string name="download_scan_repaired_message">Restored %1$d video records</string>
+    <string name="download_scan_all_existing_message">All %1$d videos in this folder are already in the list</string>
+    <string name="download_scan_empty_message">No importable Iwara videos found in this folder</string>
+    <string name="download_scan_failed_message">Could not scan videos: %1$s</string>
+    <string name="download_scan_notification_title">Scanning local videos</string>
+    <string name="download_scan_metadata_progress">Fetching video metadata……(%1$d/%2$d)</string>
+    <string name="download_scan_complete_notification">Finished fetching metadata for %1$d videos</string>
+    <string name="download_link_author">Link author</string>
+    <string name="download_relink_author">Change linked author</string>
+    <string name="download_link_author_batch_title">%1$s (%2$d)</string>
+    <string name="download_link_author_tab_existing">Existing group</string>
+    <string name="download_link_author_tab_input">Enter ID</string>
+    <string name="download_link_author_id_label">Author ID</string>
+    <string name="download_link_author_id_hint">@username</string>
+    <string name="download_link_author_input_hint">Fetches the author\'s name and avatar online first; if the author\'s account is deleted, uses the entered ID with the default Iwara avatar.</string>
+    <string name="download_link_author_success">Linked to author: %1$s</string>
+    <string name="download_link_author_offline_success">Linked to %1$s (online profile unavailable, using default avatar)</string>
+    <string name="download_link_author_failed">Could not link author: %1$s</string>
 </resources>

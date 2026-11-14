@@ -23,7 +23,12 @@ data class DownloadItem(
     @ColumnInfo(defaultValue = "''") val quality: String = "",
     @ColumnInfo(defaultValue = "0") val durationMs: Long = 0L,
     @ColumnInfo(defaultValue = "0") val publishedAtEpochSeconds: Long = 0L,
+    @ColumnInfo(defaultValue = "0") val manualAuthor: Boolean = false,
 )
+
+/** 是否允许用户手动关联或重新关联作者（仅未知作者或曾手动关联过的视频允许） */
+val DownloadItem.canLinkAuthor: Boolean
+    get() = authorId.isBlank() || manualAuthor
 
 enum class DownloadType {
     VIDEO

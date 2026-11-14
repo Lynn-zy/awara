@@ -220,6 +220,181 @@ class DownloadStorage(private val context: Context) {
     }
 
     /**
+     * 查找当前应用已持久化的默认 `Download/Awara` SAF 目录读取授权 URI。
+     *
+     * @return 若曾通过 SAF 授权过 `primary:Download/Awara` 且具备读取权限则返回其 Tree URI，否则返回 null
+     */
+    fun findPersistedDefaultAwaraTreeUri(): Uri? {
+        return context.contentResolver.persistedUriPermissions
+            .firstOrNull { perm ->
+                perm.isReadPermission &&
+                    runCatching { DocumentsContract.getTreeDocumentId(perm.uri) }
+                        .getOrNull()
+                        ?.trimEnd('/')
+                        ?.equals(DEFAULT_EXTERNAL_TREE_DOC_ID, ignoreCase = true) == true
+            }
+            ?.uri
+    }
+
+    /**
+     * 构建指向 `Download/Awara` 的系统文件选择器初始定位 URI，方便用户一键确认授权。
+     */
+    fun buildDefaultAwaraInitialUri(): Uri {
+        return DocumentsContract.buildDocumentUri(
+            EXTERNAL_STORAGE_PROVIDER_AUTHORITY,
+            DEFAULT_EXTERNAL_TREE_DOC_ID,
+        )
+    }
+
+    /**
+     * 为系统选择器返回的目录持久化读取权限（用于保持默认下载路径不变但授权扫描 `Download/Awara` 的场景）。
+     */
+    fun persistReadPermission(uri: Uri) {
+        require(uri.scheme == "content" && DocumentsContract.isTreeUri(uri)) { "请选择有效的文件夹" }
+        require(!isRestrictedUri(uri)) { "禁止访问 Android/data 或 Android/obb 目录" }
+        context.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        )
+    }
+
+    /**
+     * 判断当前默认目录在不额外拉起系统文件夹选择器的情况下是否可直接完整扫描。
+     */
+    fun canScanDefaultDirectoryDirectly(): Boolean {
+        if (findPersistedDefaultAwaraTreeUri() != null) return true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        return false
+    }
+
+    /**
+     * 单层枚举指定文件夹中的普通文件（不递归子文件夹）。
+     *
+     * 采用 `DocumentsContract` 单次游标投影查询替代逐个 `DocumentFile` IPC 调用，大幅降低多文件目录扫描耗时。
+     *
+     * @param treeUriString SAF 目录 Tree URI 字符串；为空时尝试使用已授权的默认目录或 Android 8-9 公共目录
+     * @return 当前层级下的文件候选列表
+     */
+    fun listSingleLevelFiles(treeUriString: String?): List<ScannedFileCandidate> {
+        val targetTreeUri =
+            treeUriString?.takeIf { it.isNotBlank() }?.let(Uri::parse)
+                ?: findPersistedDefaultAwaraTreeUri()
+        if (targetTreeUri != null) {
+            return listSafTreeSingleLevelFiles(targetTreeUri)
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return listLegacyPublicAwaraFiles()
+        }
+        return emptyList()
+    }
+
+    private fun listSafTreeSingleLevelFiles(treeUri: Uri): List<ScannedFileCandidate> {
+        if (isRestrictedUri(treeUri)) return emptyList()
+        val treeDocumentId =
+            runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+                ?: return emptyList()
+        val childrenUri =
+            DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocumentId)
+        val projection =
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            )
+        val results = mutableListOf<ScannedFileCandidate>()
+        runCatching {
+            context.contentResolver
+                .query(childrenUri, projection, null, null, null)
+                ?.use { cursor ->
+                    val idIdx =
+                        cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIdx =
+                        cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val mimeIdx =
+                        cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                    val sizeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                    val modifiedIdx =
+                        cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                    while (cursor.moveToNext()) {
+                        val mime =
+                            if (mimeIdx >= 0 && !cursor.isNull(mimeIdx)) cursor.getString(mimeIdx)
+                            else ""
+                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) continue
+                        val docId =
+                            if (idIdx >= 0 && !cursor.isNull(idIdx)) cursor.getString(idIdx)
+                            else continue
+                        val displayName =
+                            if (nameIdx >= 0 && !cursor.isNull(nameIdx)) cursor.getString(nameIdx)
+                            else continue
+                        val sizeBytes =
+                            if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx)
+                            else 0L
+                        val lastModified =
+                            if (modifiedIdx >= 0 && !cursor.isNull(modifiedIdx)) {
+                                cursor.getLong(modifiedIdx)
+                            } else {
+                                0L
+                            }
+                        val documentUri =
+                            DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        results +=
+                            ScannedFileCandidate(
+                                uriString = documentUri.toString(),
+                                displayName = displayName,
+                                sizeBytes = sizeBytes,
+                                lastModifiedMillis = lastModified,
+                            )
+                    }
+                }
+        }
+        return results
+    }
+
+    private fun listLegacyPublicAwaraFiles(): List<ScannedFileCandidate> {
+        if (
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return emptyList()
+        }
+        @Suppress("DEPRECATION")
+        val publicDownloads =
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                ?: return emptyList()
+        val awaraDir = File(publicDownloads, AWARA_FOLDER_NAME)
+        val files = awaraDir.listFiles() ?: return emptyList()
+        return files
+            .filter { it.isFile }
+            .mapNotNull { file ->
+                val uri =
+                    runCatching {
+                            FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.provider",
+                                file,
+                            )
+                        }
+                        .getOrNull()
+                        ?: return@mapNotNull null
+                ScannedFileCandidate(
+                    uriString = uri.toString(),
+                    displayName = file.name,
+                    sizeBytes = file.length(),
+                    lastModifiedMillis = file.lastModified(),
+                )
+            }
+    }
+
+    /**
      * 根据视频标题与资源 ID 创建目标下载文件的 URI。
      *
      * 若未配置自定义目录（默认公共存储）：
@@ -284,6 +459,29 @@ class DownloadStorage(private val context: Context) {
         } catch (_: FileNotFoundException) {
             false
         }
+    }
+
+    /**
+     * 为缺失或失效封面的已下载视频提取第 6 秒附近关键帧并持久化保存为本地缩略图。
+     */
+    fun generateLocalThumbnail(
+        resourceId: String,
+        videoUriString: String,
+        knownDurationMs: Long = 0L,
+    ): String? {
+        return LocalVideoThumbnailGenerator.generateAndSaveThumbnail(
+            context = context,
+            resourceId = resourceId,
+            videoUriString = videoUriString,
+            knownDurationMs = knownDurationMs,
+        )
+    }
+
+    /**
+     * 删除指定视频关联的本地持久化缩略图文件。
+     */
+    fun deleteLocalThumbnail(resourceId: String) {
+        LocalVideoThumbnailGenerator.deleteThumbnailForResource(context, resourceId)
     }
 
     private fun createDefaultPublicDestination(title: String, resourceId: String): Uri {
@@ -373,5 +571,8 @@ class DownloadStorage(private val context: Context) {
         const val DEFAULT_DIRECTORY_LABEL = "Download/Awara"
         private const val AWARA_FOLDER_NAME = "Awara"
         private const val VIDEO_MIME_TYPE = "video/mp4"
+        private const val EXTERNAL_STORAGE_PROVIDER_AUTHORITY =
+            "com.android.externalstorage.documents"
+        private const val DEFAULT_EXTERNAL_TREE_DOC_ID = "primary:Download/Awara"
     }
 }

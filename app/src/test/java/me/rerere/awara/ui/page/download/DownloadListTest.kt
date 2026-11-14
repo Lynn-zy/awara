@@ -181,15 +181,34 @@ class DownloadListTest {
             )
 
         assertEquals(2, groups.size)
-        assertTrue(groups[0].isUnknownAuthor)
-        assertEquals("", groups[0].authorId)
-        assertEquals("", groups[0].authorName)
-        assertEquals(listOf(2, 1), groups[0].items.map { it.id })
+        // 真实作者始终在前，未知作者即使最新下载时间更大也固定排在末尾
+        assertFalse(groups[0].isUnknownAuthor)
+        assertEquals("author_known", groups[0].authorId)
+        assertEquals("Creator", groups[0].authorName)
+        assertEquals(listOf(3, 4), groups[0].items.map { it.id })
 
-        assertFalse(groups[1].isUnknownAuthor)
-        assertEquals("author_known", groups[1].authorId)
-        assertEquals("Creator", groups[1].authorName)
-        assertEquals(listOf(3, 4), groups[1].items.map { it.id })
+        assertTrue(groups[1].isUnknownAuthor)
+        assertEquals("", groups[1].authorId)
+        assertEquals("", groups[1].authorName)
+        assertEquals(listOf(2, 1), groups[1].items.map { it.id })
+
+        // 验证在时间/名称/大小及升序/降序的所有组合下，未知作者始终位于最后一项
+        for (mode in DownloadSortMode.values()) {
+            for (asc in listOf(true, false)) {
+                val ordered =
+                    groupDownloadedItemsByAuthor(
+                        listOf(
+                            unknownEmpty,
+                            unknownWhitespace,
+                            knownMissingFirstName,
+                            knownWithName,
+                        ),
+                        mode,
+                        asc,
+                    )
+                assertTrue("mode=$mode asc=$asc", ordered.last().isUnknownAuthor)
+            }
+        }
     }
 
     @Test

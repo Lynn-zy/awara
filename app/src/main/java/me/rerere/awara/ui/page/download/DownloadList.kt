@@ -145,36 +145,39 @@ private fun getAuthorGroupComparator(
             .thenBy { it.authorName.trim().ifEmpty { it.authorId } }
             .thenBy { it.authorId }
 
-    return when (sortMode) {
-        DownloadSortMode.TIME -> {
-            if (ascending) {
-                compareBy<DownloadAuthorGroup> { it.latestDownloadTime }
-                    .thenBy { it.authorName.trim().ifEmpty { it.authorId } }
-                    .thenBy { it.authorId }
-            } else {
-                tieBreaker
+    val contentComparator =
+        when (sortMode) {
+            DownloadSortMode.TIME -> {
+                if (ascending) {
+                    compareBy<DownloadAuthorGroup> { it.latestDownloadTime }
+                        .thenBy { it.authorName.trim().ifEmpty { it.authorId } }
+                        .thenBy { it.authorId }
+                } else {
+                    tieBreaker
+                }
+            }
+            DownloadSortMode.NAME -> {
+                val baseComparator =
+                    Comparator<DownloadAuthorGroup> { a, b ->
+                        val nameA = a.authorName.trim().ifEmpty { a.authorId }
+                        val nameB = b.authorName.trim().ifEmpty { b.authorId }
+                        val insensitive = String.CASE_INSENSITIVE_ORDER.compare(nameA, nameB)
+                        if (insensitive != 0) insensitive else nameA.compareTo(nameB)
+                    }
+                (if (ascending) baseComparator else baseComparator.reversed()).then(tieBreaker)
+            }
+            DownloadSortMode.SIZE -> {
+                val sizeComparator =
+                    if (ascending) {
+                        compareBy<DownloadAuthorGroup> { it.totalBytes }
+                    } else {
+                        compareByDescending<DownloadAuthorGroup> { it.totalBytes }
+                    }
+                sizeComparator.then(tieBreaker)
             }
         }
-        DownloadSortMode.NAME -> {
-            val baseComparator =
-                Comparator<DownloadAuthorGroup> { a, b ->
-                    val nameA = a.authorName.trim().ifEmpty { a.authorId }
-                    val nameB = b.authorName.trim().ifEmpty { b.authorId }
-                    val insensitive = String.CASE_INSENSITIVE_ORDER.compare(nameA, nameB)
-                    if (insensitive != 0) insensitive else nameA.compareTo(nameB)
-                }
-            (if (ascending) baseComparator else baseComparator.reversed()).then(tieBreaker)
-        }
-        DownloadSortMode.SIZE -> {
-            val sizeComparator =
-                if (ascending) {
-                    compareBy<DownloadAuthorGroup> { it.totalBytes }
-                } else {
-                    compareByDescending<DownloadAuthorGroup> { it.totalBytes }
-                }
-            sizeComparator.then(tieBreaker)
-        }
-    }
+    // 无论何种排序指标与升降序，「未知作者」分组始终置于列表最末尾
+    return compareBy<DownloadAuthorGroup> { it.isUnknownAuthor }.then(contentComparator)
 }
 
 // 仅按 authorId 分组以防同名作者被错误合并；空白 authorId 统一归入未知作者分组

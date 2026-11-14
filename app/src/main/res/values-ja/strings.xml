@@ -129,7 +129,7 @@
     <string name="download_unfinished_dialog_message">未完了のダウンロードがあります。続行しますか？</string>
     <string name="download_unfinished_dialog_resume">続行</string>
     <string name="download_unfinished_dialog_dismiss">今は続行しない</string>
-    <string name="download_directory_title">保存先フォルダ</string>
+    <string name="download_directory_title">動画の保存先フォルダ</string>
     <string name="download_directory_choose">フォルダを選ぶ</string>
     <string name="download_directory_default">Download/Awara を使う</string>
     <string name="download_directory_description">新しいダウンロードにのみ適用されます。既存のファイルと待機中のタスクの保存先は変わりません。</string>
@@ -233,4 +233,25 @@
     <string name="blocklist_save_failed">ブロックリストを保存できませんでした。再試行してください。</string>
     <string name="blocklist_empty">ブロックしたユーザーはいません</string>
     <string name="blocklist_filtered_empty">このページに表示できる作品はありません</string>
+    <string name="download_scan_confirm_title">既存の動画をスキャン</string>
+    <string name="download_scan_confirm_message">このフォルダ内の Iwara 動画をスキャンして「ダウンロード済み動画」一覧に追加しますか？（元のファイルは移動・変更されません）</string>
+    <string name="download_scan_started_message">%1$d 件の動画を検出しました。バックグラウンドでメタデータを取得しています…</string>
+    <string name="download_scan_repaired_message">%1$d 件の動画記録を復元しました</string>
+    <string name="download_scan_all_existing_message">フォルダ内の %1$d 件の動画はすべて一覧に登録済みです</string>
+    <string name="download_scan_empty_message">このフォルダ内にインポート可能な Iwara 動画は見つかりませんでした</string>
+    <string name="download_scan_failed_message">動画のスキャンに失敗しました：%1$s</string>
+    <string name="download_scan_notification_title">ローカル動画のスキャン</string>
+    <string name="download_scan_metadata_progress">動画のメタデータを取得しています……（%1$d/%2$d）</string>
+    <string name="download_scan_complete_notification">%1$d 件の動画のメタデータ取得が完了しました</string>
+    <string name="download_link_author">投稿者を関連付け</string>
+    <string name="download_relink_author">関連付けた投稿者を変更</string>
+    <string name="download_link_author_batch_title">%1$s（%2$d 件選択）</string>
+    <string name="download_link_author_tab_existing">既存グループへ移動</string>
+    <string name="download_link_author_tab_input">IDを入力</string>
+    <string name="download_link_author_id_label">投稿者 ID</string>
+    <string name="download_link_author_id_hint">@username</string>
+    <string name="download_link_author_input_hint">オンラインで投稿者の表示名とアイコンを取得します。投稿者が退会済みの場合は入力した ID と Iwara のデフォルトアイコンを使用します。</string>
+    <string name="download_link_author_success">投稿者「%1$s」に関連付けました</string>
+    <string name="download_link_author_offline_success">「%1$s」に関連付けました（オンライン情報なし・デフォルトアイコンを使用）</string>
+    <string name="download_link_author_failed">投稿者の関連付けに失敗しました：%1$s</string>
 </resources>

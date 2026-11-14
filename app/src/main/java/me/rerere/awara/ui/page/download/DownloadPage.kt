@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Sort
@@ -55,6 +56,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -64,6 +66,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,6 +80,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -103,8 +107,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.awara.R
 import me.rerere.awara.data.SearchCategory
+import me.rerere.awara.data.download.DownloadFolderScanner
 import me.rerere.awara.data.download.DownloadStorage
+import me.rerere.awara.data.download.MetadataScanProgress
 import me.rerere.awara.data.entity.DownloadItem
+import me.rerere.awara.data.entity.canLinkAuthor
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
@@ -135,6 +142,8 @@ fun DownloadPage(
 ) {
     val downloadedItems = vm.state.items
     val downloadStorage: DownloadStorage = koinInject()
+    val downloadFolderScanner: DownloadFolderScanner = koinInject()
+    val metadataProgress by downloadFolderScanner.metadataProgress.collectAsState()
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
@@ -172,6 +181,7 @@ fun DownloadPage(
 
     var showSortMenu by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    var itemsPendingAuthorLink by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var searchCategory by rememberSaveable { mutableStateOf(SearchCategory.TITLE) }
@@ -193,10 +203,19 @@ fun DownloadPage(
                 emptyList()
             }
         }
+    // 汇总全量已下载视频中的已知作者分组，供平铺模式或分组模式下的“关联作者”弹窗直接选择
+    val allKnownAuthorGroups =
+        remember(downloadedItems, sortKey, sortAscending) {
+            groupDownloadedItemsByAuthor(downloadedItems, sortKey, sortAscending).filterNot {
+                it.isUnknownAuthor
+            }
+        }
     val selectedGroup =
         remember(authorGroups, selectedAuthorId) {
             authorGroups.firstOrNull { it.authorId == selectedAuthorId }
         }
+    // 仅在“按作者分类 -> 未知作者分组”内部允许长按多选批量关联作者
+    val isInsideUnknownAuthorGroup = groupByAuthors && selectedAuthorId == ""
 
     // 搜索类别变化时，若在作者分类根目录则将作者根列表回顶，否则将视频列表回顶
     LaunchedEffect(searchCategory) {
@@ -308,13 +327,80 @@ fun DownloadPage(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showBatchDeleteConfirm = false }, enabled = !isDeleting) {
-                    Text(stringResource(R.string.cancel))
+                    TextButton(
+                        onClick = { showBatchDeleteConfirm = false },
+                        enabled = !isDeleting,
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                },
+            )
+        }
+
+    if (itemsPendingAuthorLink.isNotEmpty()) {
+        val targetSnapshot = itemsPendingAuthorLink
+        val singleItem = targetSnapshot.singleOrNull()
+        LinkAuthorDialog(
+            targetCount = targetSnapshot.size,
+            isRelink = singleItem != null && singleItem.authorId.isNotBlank() && singleItem.manualAuthor,
+            existingAuthors = allKnownAuthorGroups,
+            linking = vm.state.linkingAuthor,
+            initialAuthorId = singleItem?.authorId.orEmpty(),
+            onDismiss = {
+                if (!vm.state.linkingAuthor) {
+                    itemsPendingAuthorLink = emptyList()
                 }
+            },
+            onSelectExistingGroup = { group ->
+                vm.linkItemsToExistingGroup(
+                    items = targetSnapshot,
+                    group = group,
+                    onSuccess = {
+                        itemsPendingAuthorLink = emptyList()
+                        selectedIds = emptySet()
+                        val text =
+                            context.getString(
+                                R.string.download_link_author_success,
+                                group.authorName.ifBlank { group.authorId },
+                            )
+                        message.success { Text(text) }
+                    },
+                    onError = { reason ->
+                        val text = context.getString(R.string.download_link_author_failed, reason)
+                        message.error { Text(text) }
+                    },
+                )
+            },
+            onSubmitAuthorHandle = { rawHandle ->
+                vm.linkItemsByAuthorHandle(
+                    items = targetSnapshot,
+                    rawHandle = rawHandle,
+                    existingAuthors = allKnownAuthorGroups,
+                    onSuccess = { resolved, _ ->
+                        itemsPendingAuthorLink = emptyList()
+                        selectedIds = emptySet()
+                        val text =
+                            if (resolved.resolvedOnline) {
+                                context.getString(
+                                    R.string.download_link_author_success,
+                                    resolved.authorName,
+                                )
+                            } else {
+                                context.getString(
+                                    R.string.download_link_author_offline_success,
+                                    resolved.authorName,
+                                )
+                            }
+                        message.success { Text(text) }
+                    },
+                    onError = { reason ->
+                        val text = context.getString(R.string.download_link_author_failed, reason)
+                        message.error { Text(text) }
+                    },
+                )
             },
         )
     }
-
     val state = rememberPlayerState {
         ExoPlayer.Builder(it)
             // 下载内置播放采用相同的对照策略，不向系统提交视频帧率请求。
@@ -576,6 +662,29 @@ fun DownloadPage(
                     },
                     actions = {
                         if (isSelectionMode) {
+                            if (isInsideUnknownAuthorGroup) {
+                                IconButton(
+                                    onClick = {
+                                        val targets =
+                                            visibleItems.filter {
+                                                it.id in selectedVisibleIds && it.canLinkAuthor
+                                            }
+                                        if (targets.isNotEmpty()) {
+                                            itemsPendingAuthorLink = targets
+                                        }
+                                    },
+                                    enabled =
+                                        selectedVisibleIds.isNotEmpty() &&
+                                            !isDeleting &&
+                                            !vm.state.linkingAuthor,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.PersonAdd,
+                                        contentDescription =
+                                            stringResource(R.string.download_link_author),
+                                    )
+                                }
+                            }
                             IconButton(
                                 onClick = { showBatchDeleteConfirm = true },
                                 enabled = selectedVisibleIds.isNotEmpty() && !isDeleting,
@@ -701,6 +810,15 @@ fun DownloadPage(
             }
         ) { innerPadding ->
             Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+                // 后台扫描补全视频元数据时，在页面顶部展示横向加载进度条与灰色计数提示
+                metadataProgress?.let { progress ->
+                    MetadataScanProgressBar(
+                        progress = progress,
+                        modifier =
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+
                 // 搜索框独立一行，放置在 topbar 下方，避免在 topbar title 内过窄；不在多选模式展示以防破坏选择
                 if (searchOpen && !isSelectionMode) {
                     LocalSearchInput(
@@ -839,6 +957,13 @@ fun DownloadPage(
                                         onOpenDetails = {
                                             router.navigate("video/${Uri.encode(item.resourceId)}")
                                         },
+                                        onLinkAuthor =
+                                            if (item.canLinkAuthor) {
+                                                { itemsPendingAuthorLink = listOf(item) }
+                                            } else {
+                                                null
+                                            },
+                                        onThumbnailLoadError = { vm.healBrokenThumbnail(item) },
                                     )
                                 }
                             }
@@ -881,6 +1006,8 @@ fun AuthorFolderRow(
         if (group.avatar.isNotBlank()) {
             AsyncImage(
                 model = group.avatar,
+                placeholder = painterResource(R.drawable.default_background),
+                error = painterResource(R.drawable.default_background),
                 contentDescription = null,
                 modifier = avatarModifier,
                 contentScale = ContentScale.Crop,
@@ -940,6 +1067,8 @@ fun DownloadItemRow(
     onClick: () -> Unit,
     onPlayExternal: () -> Unit,
     onOpenDetails: () -> Unit,
+    onLinkAuthor: (() -> Unit)? = null,
+    onThumbnailLoadError: () -> Unit = {},
     isHighlighted: Boolean = false,
 ) {
     val displayTitle = item.title.ifBlank { item.resourceId }
@@ -1032,10 +1161,18 @@ fun DownloadItemRow(
                         .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 AsyncImage(
-                    model = item.thumbnail,
+                    model = item.thumbnail.takeIf { it.isNotBlank() },
+                    placeholder = painterResource(R.drawable.default_background),
+                    error = painterResource(R.drawable.default_background),
+                    fallback = painterResource(R.drawable.default_background),
+                    onError = {
+                        if (item.thumbnail.isNotBlank()) {
+                            onThumbnailLoadError()
+                        }
+                    },
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
+                    contentScale = ContentScale.Crop,
                 )
 
                 val durationText = formatDurationMs(item.durationMs)
@@ -1163,6 +1300,24 @@ fun DownloadItemRow(
                                 onPlayExternal()
                             },
                         )
+                        if (onLinkAuthor != null) {
+                            val linkLabelRes =
+                                if (item.authorId.isNotBlank() && item.manualAuthor) {
+                                    R.string.download_relink_author
+                                } else {
+                                    R.string.download_link_author
+                                }
+                            DropdownMenuItem(
+                                text = { Text(stringResource(linkLabelRes)) },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.PersonAdd, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    onLinkAuthor()
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = {
                                 Text(
@@ -1201,3 +1356,50 @@ fun deselectAllVideos(selectedIds: Set<Int>, visibleIds: Set<Int>): Set<Int> =
 
 fun isAllVideosSelected(selectedIds: Set<Int>, visibleIds: Set<Int>): Boolean =
     visibleIds.isNotEmpty() && visibleIds.all { it in selectedIds }
+
+/**
+ * 「已下载视频」页顶部元数据补全进度条组件。
+ *
+ * 横向进度条样式与下载任务卡片保持一致，下方以灰色小字展示 `正在获取视频元数据……（已完成/总数）`。
+ *
+ * @param progress 当前后台元数据获取进度快照
+ * @param modifier 外部修饰符
+ */
+@Composable
+internal fun MetadataScanProgressBar(
+    progress: MetadataScanProgress,
+    modifier: Modifier = Modifier,
+) {
+    val progressTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (progress.total > 0 && progress.completed > 0) {
+            val fraction =
+                (progress.completed.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f)
+            LinearProgressIndicator(
+                progress = fraction,
+                modifier = Modifier.fillMaxWidth(),
+                trackColor = progressTrackColor,
+            )
+        } else {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                trackColor = progressTrackColor,
+            )
+        }
+        Text(
+            text =
+                stringResource(
+                    R.string.download_scan_metadata_progress,
+                    progress.completed,
+                    progress.total,
+                ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}

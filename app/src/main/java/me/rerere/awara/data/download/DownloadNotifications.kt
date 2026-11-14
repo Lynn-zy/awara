@@ -32,6 +32,10 @@ object DownloadNotifications {
     fun notificationIdForFailure(taskId: String): Int =
         0x30000000 or (taskId.hashCode() and 0x0FFFFFFF)
 
+    // 扫描导入视频元数据的进度通知与完成通知固定 ID（与下载任务高四位命名空间隔离）
+    private const val NOTIFICATION_ID_SCAN_PROGRESS = 0x40000001
+    private const val NOTIFICATION_ID_SCAN_COMPLETE = 0x40000002
+
     fun canPostNotification(context: Context): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (
@@ -146,6 +150,70 @@ object DownloadNotifications {
                     .build()
             NotificationManagerCompat.from(context)
                 .notify(taskId, notificationIdForFailure(taskId), notification)
+        }
+    }
+
+    /**
+     * 显示或更新后台扫描补全视频元数据的进度通知，点击通知直接跳转至「已下载视频」页。
+     */
+    fun showMetadataScanProgressNotification(context: Context, completed: Int, total: Int) {
+        if (!canPostNotification(context)) return
+        runCatching {
+            val manager = NotificationManagerCompat.from(context)
+            if (completed == 0) {
+                manager.cancel(NOTIFICATION_ID_SCAN_COMPLETE)
+            }
+            val safeTotal = total.coerceAtLeast(1)
+            val safeCompleted = completed.coerceIn(0, safeTotal)
+            val notification =
+                NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setContentTitle(context.getString(R.string.download_scan_notification_title))
+                    .setContentText(
+                        context.getString(
+                            R.string.download_scan_metadata_progress,
+                            safeCompleted,
+                            safeTotal,
+                        )
+                    )
+                    .setSmallIcon(R.drawable.baseline_cloud_download_24)
+                    .setOngoing(true)
+                    .setSilent(true)
+                    .setOnlyAlertOnce(true)
+                    .setContentIntent(createVideosPendingIntent(context, ""))
+                    .setProgress(safeTotal, safeCompleted, total <= 0)
+                    .build()
+            manager.notify(NOTIFICATION_ID_SCAN_PROGRESS, notification)
+        }
+    }
+
+    /**
+     * 取消后台扫描补全视频元数据的进度通知。
+     */
+    fun cancelMetadataScanProgressNotification(context: Context) {
+        runCatching {
+            NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID_SCAN_PROGRESS)
+        }
+    }
+
+    /**
+     * 显示扫描导入视频元数据全部获取完成的系统通知（点击跳转至「已下载视频」页）。
+     */
+    fun showMetadataScanCompleteNotification(context: Context, total: Int) {
+        cancelMetadataScanProgressNotification(context)
+        if (!canPostNotification(context)) return
+        runCatching {
+            val notification =
+                NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setContentTitle(context.getString(R.string.download_scan_notification_title))
+                    .setContentText(
+                        context.getString(R.string.download_scan_complete_notification, total)
+                    )
+                    .setSmallIcon(R.drawable.baseline_cloud_download_24)
+                    .setContentIntent(createVideosPendingIntent(context, ""))
+                    .setAutoCancel(true)
+                    .build()
+            NotificationManagerCompat.from(context)
+                .notify(NOTIFICATION_ID_SCAN_COMPLETE, notification)
         }
     }
 }

@@ -129,7 +129,7 @@
     <string name="download_unfinished_dialog_message">偵測到存在未完成的下載任務，是否繼續下載？</string>
     <string name="download_unfinished_dialog_resume">繼續下載</string>
     <string name="download_unfinished_dialog_dismiss">暫不繼續</string>
-    <string name="download_directory_title">下載資料夾</string>
+    <string name="download_directory_title">影片下載資料夾</string>
     <string name="download_directory_choose">選擇資料夾</string>
     <string name="download_directory_default">使用 Download/Awara</string>
     <string name="download_directory_description">僅影響新的下載任務，既有檔案和已排程任務仍儲存在原資料夾。</string>
@@ -233,4 +233,25 @@
     <string name="blocklist_save_failed">黑名單儲存失敗，請重試。</string>
     <string name="blocklist_empty">黑名單為空</string>
     <string name="blocklist_filtered_empty">本頁沒有可顯示的作品</string>
+    <string name="download_scan_confirm_title">掃描既有影片</string>
+    <string name="download_scan_confirm_message">是否掃描該資料夾內的 Iwara 影片，並將其匯入「已下載影片」清單？（不會移動或修改原始檔案）</string>
+    <string name="download_scan_started_message">掃描到 %1$d 部影片，正在背景取得影片中繼資料…</string>
+    <string name="download_scan_repaired_message">已恢復 %1$d 部影片記錄</string>
+    <string name="download_scan_all_existing_message">資料夾內的 %1$d 部影片均已在清單中</string>
+    <string name="download_scan_empty_message">未在該資料夾中發現可匯入的 Iwara 影片</string>
+    <string name="download_scan_failed_message">掃描影片失敗：%1$s</string>
+    <string name="download_scan_notification_title">掃描本機影片</string>
+    <string name="download_scan_metadata_progress">正在取得影片中繼資料……（%1$d/%2$d）</string>
+    <string name="download_scan_complete_notification">已完成 %1$d 部影片的中繼資料更新</string>
+    <string name="download_link_author">關聯作者</string>
+    <string name="download_relink_author">修改關聯作者</string>
+    <string name="download_link_author_batch_title">%1$s（已選 %2$d 項）</string>
+    <string name="download_link_author_tab_existing">移入既有分組</string>
+    <string name="download_link_author_tab_input">輸入作者 ID</string>
+    <string name="download_link_author_id_label">作者 ID</string>
+    <string name="download_link_author_id_hint">@username</string>
+    <string name="download_link_author_input_hint">優先聯網取得作者暱稱與頭像；若作者已銷號，將使用輸入的 ID 與 Iwara 預設頭像。</string>
+    <string name="download_link_author_success">已關聯至作者：%1$s</string>
+    <string name="download_link_author_offline_success">已關聯至 %1$s（線上資料不可用，已使用預設頭像）</string>
+    <string name="download_link_author_failed">關聯作者失敗：%1$s</string>
 </resources>

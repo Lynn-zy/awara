@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import java.util.Collections
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,9 +17,14 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import me.rerere.awara.data.download.DownloadStorage
+import me.rerere.awara.data.download.LocalVideoThumbnailGenerator
 import me.rerere.awara.data.entity.DownloadItem
+import me.rerere.awara.data.entity.canLinkAuthor
+import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.ui.component.common.UiState
 import org.koin.core.component.KoinComponent
@@ -26,11 +32,16 @@ import org.koin.core.component.KoinComponent
 class DownloadVM(
     private val appDatabase: AppDatabase,
     private val downloadStorage: DownloadStorage,
+    private val userRepo: UserRepo,
 ) : ViewModel(), KoinComponent {
     var state by mutableStateOf(DownloadState())
         private set
 
     private var observeJob: Job? = null
+    // 记录当前会话已尝试提取过本地封面的记录 ID，防止损坏视频重复解码死循环
+    private val attemptedThumbnailKeys: MutableSet<String> =
+        Collections.synchronizedSet(HashSet())
+    private val thumbnailSemaphore = Semaphore(2)
 
     init {
         loadDownloadedItems()
@@ -70,8 +81,142 @@ class DownloadVM(
                                 uiState = if (items.isEmpty()) UiState.Empty else UiState.Success,
                                 items = items,
                             )
+                        scheduleMissingLocalThumbnails(items)
                     }
             }
+    }
+
+    /**
+     * 自动检查列表中缺失封面或本地缩略图已丢失的记录，后台低并发截取第 6 秒画面补齐封面。
+     */
+    private fun scheduleMissingLocalThumbnails(items: List<DownloadItem>) {
+        for (item in items) {
+            val thumb = item.thumbnail.trim()
+            val needsLocalCover =
+                thumb.isEmpty() ||
+                    (thumb.startsWith("file://") &&
+                        !LocalVideoThumbnailGenerator.isExistingLocalThumbnailUri(thumb))
+            if (needsLocalCover) {
+                healBrokenThumbnail(item)
+            }
+        }
+    }
+
+    /**
+     * 当视频无封面或远程封面已失效（404）时，从本地视频截取第 6 秒关键帧并原子更新数据库封面字段。
+     */
+    fun healBrokenThumbnail(item: DownloadItem) {
+        if (item.uri.isBlank()) return
+        val attemptKey = "${item.id}:${item.thumbnail}"
+        if (!attemptedThumbnailKeys.add(attemptKey)) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            thumbnailSemaphore.withPermit {
+                val generatedUri =
+                    downloadStorage.generateLocalThumbnail(
+                        resourceId = item.resourceId,
+                        videoUriString = item.uri,
+                        knownDurationMs = item.durationMs,
+                    ) ?: return@withPermit
+                appDatabase
+                    .downloadDao()
+                    .compareAndSetThumbnail(
+                        id = item.id,
+                        expectedOldThumbnail = item.thumbnail,
+                        newThumbnail = generatedUri,
+                    )
+            }
+        }
+    }
+
+    /**
+     * 将目标视频关联至已下载列表中已有的作者分组。
+     */
+    fun linkItemsToExistingGroup(
+        items: Collection<DownloadItem>,
+        group: DownloadAuthorGroup,
+        onSuccess: (updatedCount: Int) -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        if (group.isUnknownAuthor || state.linkingAuthor) return
+        val eligibleIds = items.filter { it.canLinkAuthor }.map { it.id }.distinct()
+        if (eligibleIds.isEmpty()) return
+
+        viewModelScope.launch {
+            state = state.copy(linkingAuthor = true)
+            try {
+                val updated =
+                    withContext(Dispatchers.IO) {
+                        appDatabase
+                            .downloadDao()
+                            .updateManualAuthor(
+                                ids = eligibleIds,
+                                authorId = group.authorId,
+                                authorName = group.authorName.ifBlank { group.authorId },
+                                authorAvatar =
+                                    group.avatar.ifBlank { DEFAULT_IWARA_AVATAR_URL },
+                            )
+                    }
+                onSuccess(updated)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val reason =
+                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                onError(reason)
+            } finally {
+                state = state.copy(linkingAuthor = false)
+            }
+        }
+    }
+
+    /**
+     * 通过输入的 `@xxx` 关联视频作者：优先联网补全作者昵称与头像，若作者已销号则使用输入的 ID 与 Iwara 默认头像建组。
+     */
+    fun linkItemsByAuthorHandle(
+        items: Collection<DownloadItem>,
+        rawHandle: String,
+        existingAuthors: List<DownloadAuthorGroup>,
+        onSuccess: (resolved: ResolvedManualAuthor, updatedCount: Int) -> Unit = { _, _ -> },
+        onError: (String) -> Unit = {},
+    ) {
+        if (state.linkingAuthor) return
+        val eligibleIds = items.filter { it.canLinkAuthor }.map { it.id }.distinct()
+        if (eligibleIds.isEmpty()) return
+
+        viewModelScope.launch {
+            state = state.copy(linkingAuthor = true)
+            try {
+                val (resolved, updated) =
+                    withContext(Dispatchers.IO) {
+                        val resolvedAuthor =
+                            resolveManualAuthorByInput(
+                                rawHandle = rawHandle,
+                                existingAuthors = existingAuthors,
+                                fetchProfile = { username -> userRepo.getProfile(username) },
+                            )
+                        val count =
+                            appDatabase
+                                .downloadDao()
+                                .updateManualAuthor(
+                                    ids = eligibleIds,
+                                    authorId = resolvedAuthor.authorId,
+                                    authorName = resolvedAuthor.authorName,
+                                    authorAvatar = resolvedAuthor.authorAvatar,
+                                )
+                        resolvedAuthor to count
+                    }
+                onSuccess(resolved, updated)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val reason =
+                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                onError(reason)
+            } finally {
+                state = state.copy(linkingAuthor = false)
+            }
+        }
     }
 
     fun delete(
@@ -100,9 +245,10 @@ class DownloadVM(
                                     downloadStorage.delete(contentUri)
                                 }
                             }
-                            // 文件删除成功后，即便外部取消也必须保证清理 Room 记录
+                            // 文件删除成功后，即便外部取消也必须保证清理 Room 记录及本地缩略图文件
                             withContext(NonCancellable) {
                                 appDatabase.downloadDao().deleteDownloadItem(item)
+                                downloadStorage.deleteLocalThumbnail(item.resourceId)
                             }
                         }
                         successIds.add(item.id)
@@ -136,5 +282,6 @@ class DownloadVM(
         val items: List<DownloadItem> = emptyList(),
         val deletingIds: Set<Int> = emptySet(),
         val deleteError: String? = null,
+        val linkingAuthor: Boolean = false,
     )
 }
