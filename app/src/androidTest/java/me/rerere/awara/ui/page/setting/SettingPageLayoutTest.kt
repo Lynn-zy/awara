@@ -391,4 +391,58 @@ class SettingPageLayoutTest {
         compose.onNodeWithText(closeLabel).performClick()
         compose.onNodeWithTag(TEST_TAG_VERSION_INFO_CARD).assertDoesNotExist()
     }
+
+    /**
+     * 测试“存储 -> 清除缓存”分组与二次确认弹窗，以及已下载视频顶部元数据进度条在窄屏大字号下的布局与交互。
+     */
+    @Test
+    fun storageClearCacheSectionAndMetadataProgressBarRenderAndConfirmCorrectly() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val showConfirm = mutableStateOf(false)
+        var confirmedCount = 0
+
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 1.3f)
+            ) {
+                MaterialTheme {
+                    Column(Modifier.width(320.dp).testTag("storage_container")) {
+                        SettingStorageSection(
+                            cacheBytes = 1024L * 1024L * 12L,
+                            onClearCacheClick = { showConfirm.value = true },
+                        )
+                        me.rerere.awara.ui.page.download.MetadataScanProgressBar(
+                            progress =
+                                me.rerere.awara.data.download.MetadataScanProgress(
+                                    completed = 12,
+                                    total = 48,
+                                )
+                        )
+                        if (showConfirm.value) {
+                            ClearCacheConfirmDialog(
+                                cacheBytes = 1024L * 1024L * 12L,
+                                clearing = false,
+                                onConfirm = {
+                                    confirmedCount++
+                                    showConfirm.value = false
+                                },
+                                onDismiss = { showConfirm.value = false },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        val clearTitle = context.getString(R.string.setting_clear_cache_title)
+        val confirmAction = context.getString(R.string.setting_clear_cache_confirm_action)
+        val expectedProgressText =
+            context.getString(R.string.download_scan_metadata_progress, 12, 48)
+
+        compose.onNodeWithText(expectedProgressText).assertIsDisplayed()
+        compose.onNodeWithText(clearTitle).assertIsDisplayed().performClick()
+        compose.onNodeWithText(confirmAction).assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, confirmedCount) }
+    }
 }

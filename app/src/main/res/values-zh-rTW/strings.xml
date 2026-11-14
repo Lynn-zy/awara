@@ -243,6 +243,13 @@
     <string name="download_scan_notification_title">掃描本機影片</string>
     <string name="download_scan_metadata_progress">正在取得影片中繼資料……（%1$d/%2$d）</string>
     <string name="download_scan_complete_notification">已完成 %1$d 部影片的中繼資料更新</string>
+    <string name="setting_storage">儲存空間</string>
+    <string name="setting_clear_cache_title">清除快取</string>
+    <string name="setting_clear_cache_text">目前佔用 %1$s</string>
+    <string name="setting_clear_cache_confirm_message">清除圖片與線上播放影片等快取資料（共 %1$s）</string>
+    <string name="setting_clear_cache_confirm_action">清除</string>
+    <string name="setting_clear_cache_success">已清除快取，釋放 %1$s</string>
+    <string name="setting_clear_cache_empty">目前沒有可清理的快取</string>
     <string name="download_link_author">關聯作者</string>
     <string name="download_relink_author">修改關聯作者</string>
     <string name="download_link_author_batch_title">%1$s（已選 %2$d 項）</string>

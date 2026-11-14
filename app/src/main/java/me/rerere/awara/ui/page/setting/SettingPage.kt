@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AltRoute
 import androidx.compose.material.icons.outlined.AutoMode
 import androidx.compose.material.icons.outlined.ColorLens
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.Image
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.outlined.LinearScale
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Source
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -45,6 +47,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -54,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
@@ -76,6 +81,7 @@ import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.data.playback.PlaybackSettings
+import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
@@ -83,7 +89,9 @@ import me.rerere.awara.ui.component.player.PREFERENCE_KEY_PLAYER_MINIMAL_PROGRES
 import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_PREVIEW_POSITION
 import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED
 import me.rerere.awara.ui.component.player.SeekPreviewPosition
+import me.rerere.awara.util.AppCacheManager
 import me.rerere.awara.util.openUrl
+import me.rerere.awara.util.prettyFileSize
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberIntPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
@@ -188,6 +196,74 @@ internal fun CdnConnectionDebugSetting(enabled: MutableState<Boolean>) {
         title = { Text(stringResource(R.string.setting_cdn_connection_debug_title)) },
         text = { Text(stringResource(R.string.setting_cdn_connection_debug_text)) },
         icon = { Icon(Icons.Outlined.Source, null) },
+    )
+}
+
+/**
+ * 设置页“存储”分组组件，提供缓存体积展示与清除缓存入口。
+ *
+ * @param cacheBytes 当前应用缓存总字节数
+ * @param onClearCacheClick 点击“清除缓存”时的回调
+ * @param modifier 外部修饰符
+ */
+@Composable
+internal fun SettingStorageSection(
+    cacheBytes: Long,
+    onClearCacheClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
+    SettingItemCategory(
+        modifier = modifier,
+        title = { Text(stringResource(R.string.setting_storage)) },
+    ) {
+        SettingLinkItem(
+            title = { Text(stringResource(R.string.setting_clear_cache_title)) },
+            text = { Text(stringResource(R.string.setting_clear_cache_text, formattedSize)) },
+            icon = { Icon(Icons.Outlined.DeleteSweep, null) },
+            onClick = onClearCacheClick,
+        )
+    }
+}
+
+/**
+ * 清除缓存二次确认弹窗组件。
+ *
+ * @param cacheBytes 当前待清理的缓存总字节数
+ * @param clearing 是否正在执行清理操作
+ * @param onConfirm 点击确认清除回调
+ * @param onDismiss 点击取消或外部关闭回调
+ */
+@Composable
+internal fun ClearCacheConfirmDialog(
+    cacheBytes: Long,
+    clearing: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
+    AlertDialog(
+        onDismissRequest = { if (!clearing) onDismiss() },
+        title = { Text(text = stringResource(R.string.setting_clear_cache_title)) },
+        text = {
+            Text(
+                text = stringResource(R.string.setting_clear_cache_confirm_message, formattedSize),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = !clearing) {
+                Text(
+                    text = stringResource(R.string.setting_clear_cache_confirm_action),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !clearing) {
+                Text(text = stringResource(R.string.cancel))
+            }
+        },
     )
 }
 
@@ -455,12 +531,21 @@ internal fun SettingLinkItem(
 @Composable
 fun SettingPage() {
     val context = LocalContext.current
+    val message = LocalMessageProvider.current
+    val scope = rememberCoroutineScope()
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val downloadStorage: DownloadStorage = koinInject()
     var showDownloadDirectoryDialog by remember { mutableStateOf(false) }
+    var showClearCacheConfirmDialog by remember { mutableStateOf(false) }
+    var clearingCache by remember { mutableStateOf(false) }
+    var cacheRefreshVersion by remember { mutableStateOf(0) }
     // 控制底部“关于 -> 版本信息”卡片弹窗的显隐状态
     var showVersionInfoDialog by remember { mutableStateOf(false) }
+    val cacheBytes by
+        produceState(initialValue = 0L, key1 = context, key2 = cacheRefreshVersion) {
+            value = withContext(Dispatchers.IO) { AppCacheManager.calculateCacheBytes(context) }
+        }
     var directoryUri by
         rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = "")
     val directoryLabel by
@@ -481,6 +566,33 @@ fun SettingPage() {
             },
             downloadStorage = downloadStorage,
             onDirectoryChanged = { directoryUri = it },
+        )
+    }
+    if (showClearCacheConfirmDialog) {
+        ClearCacheConfirmDialog(
+            cacheBytes = cacheBytes,
+            clearing = clearingCache,
+            onDismiss = { showClearCacheConfirmDialog = false },
+            onConfirm = {
+                if (clearingCache) return@ClearCacheConfirmDialog
+                scope.launch {
+                    clearingCache = true
+                    try {
+                        val released =
+                            withContext(Dispatchers.IO) { AppCacheManager.clearAllCaches(context) }
+                        cacheRefreshVersion++
+                        showClearCacheConfirmDialog = false
+                        val successText =
+                            context.getString(
+                                R.string.setting_clear_cache_success,
+                                prettyFileSize(released),
+                            )
+                        message.success { Text(successText) }
+                    } finally {
+                        clearingCache = false
+                    }
+                }
+            },
         )
     }
     if (showVersionInfoDialog) {
@@ -721,6 +833,20 @@ fun SettingPage() {
                         onClick = { showDownloadDirectoryDialog = true },
                     )
                 }
+            }
+
+            item {
+                SettingStorageSection(
+                    cacheBytes = cacheBytes,
+                    onClearCacheClick = {
+                        if (cacheBytes <= 0L) {
+                            val emptyText = context.getString(R.string.setting_clear_cache_empty)
+                            message.info { Text(emptyText) }
+                        } else {
+                            showClearCacheConfirmDialog = true
+                        }
+                    },
+                )
             }
 
             item {

@@ -288,6 +288,24 @@ object PlayerCache {
         }
     }
 
+    /**
+     * 统计当前在线播放缓存占用的媒体数据字节数（忽略空索引文件，确保清理后准确显示 0 B）。
+     */
+    internal fun getCachedBytes(context: Context): Long {
+        synchronized(lock) {
+            val current = cacheInstance
+            if (current != null) {
+                return runCatching { current.cacheSpace }.getOrDefault(0L).coerceAtLeast(0L)
+            }
+            val cacheFolder = File(context.cacheDir, CACHE_DIR_NAME)
+            if (!cacheFolder.exists()) return 0L
+            return cacheFolder
+                .walkTopDown()
+                .filter { it.isFile && !it.name.endsWith(".exi", ignoreCase = true) }
+                .sumOf { it.length().coerceAtLeast(0L) }
+        }
+    }
+
     /** 供测试直接同步执行清理并等待完成。 */
     @VisibleForTesting
     internal fun cleanUpNow(context: Context) {
