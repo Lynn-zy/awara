@@ -461,29 +461,6 @@ class DownloadStorage(private val context: Context) {
         }
     }
 
-    /**
-     * 为缺失或失效封面的已下载视频提取第 6 秒附近关键帧并持久化保存为本地缩略图。
-     */
-    fun generateLocalThumbnail(
-        resourceId: String,
-        videoUriString: String,
-        knownDurationMs: Long = 0L,
-    ): String? {
-        return LocalVideoThumbnailGenerator.generateAndSaveThumbnail(
-            context = context,
-            resourceId = resourceId,
-            videoUriString = videoUriString,
-            knownDurationMs = knownDurationMs,
-        )
-    }
-
-    /**
-     * 删除指定视频关联的本地持久化缩略图文件。
-     */
-    fun deleteLocalThumbnail(resourceId: String) {
-        LocalVideoThumbnailGenerator.deleteThumbnailForResource(context, resourceId)
-    }
-
     private fun createDefaultPublicDestination(title: String, resourceId: String): Uri {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val fileName = buildDownloadFileName(title, resourceId)

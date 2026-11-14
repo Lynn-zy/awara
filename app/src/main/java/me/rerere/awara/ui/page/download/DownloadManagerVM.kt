@@ -185,7 +185,7 @@ class DownloadManagerVM(private val downloadManager: DownloadManager) : ViewMode
                 state.resumingIds.isNotEmpty()
         )
             return
-        val resumable = DownloadManager.filterResumableTasks(state.tasks)
+        val resumable = DownloadManager.filterManualResumableTasks(state.tasks)
         if (resumable.isEmpty()) return
         for (task in resumable) {
             pendingResumes[task.taskId] = DownloadResumeProgress(task.workId, task.downloadedBytes)

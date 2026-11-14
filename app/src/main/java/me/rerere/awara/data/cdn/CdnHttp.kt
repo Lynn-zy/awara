@@ -1,5 +1,66 @@
 package me.rerere.awara.data.cdn
 
+import java.io.IOException
+import java.util.Locale
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import okhttp3.Call
+import okhttp3.Response
+
+/**
+ * 将 OkHttp [Call] 的生命周期与当前协程取消信号绑定。
+ *
+ * 通过 [CoroutineStart.UNDISPATCHED] 启动守护协程监听取消并立即调用 `call.cancel()`，
+ * 避免在请求挂起前的瞬间错过取消通知；退出作用域时自动注销守护并调用 [onUnbindCall]。
+ */
+internal suspend inline fun <T> withCancellableCall(
+    call: Call,
+    noinline onBindCall: ((Call) -> Unit)? = null,
+    noinline onUnbindCall: ((Call) -> Unit)? = null,
+    crossinline block: suspend (Call) -> T,
+): T = coroutineScope {
+    val watcher =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                call.cancel()
+            }
+        }
+    try {
+        onBindCall?.invoke(call)
+        block(call)
+    } catch (exception: IOException) {
+        currentCoroutineContext().ensureActive()
+        throw exception
+    } finally {
+        watcher.cancel()
+        onUnbindCall?.invoke(call)
+    }
+}
+
+/**
+ * 校验 HTTP 响应头是否符合原始媒体字节流要求，排除意外压缩编码以及 HTML/JSON 错误拦截页。
+ *
+ * 若响应头不合法，调用 [createError] 生成对应异常并立即抛出。
+ */
+internal inline fun Response.validateMediaResponseHeaders(
+    createError: (reason: String) -> IOException = ::IOException
+) {
+    val encoding = header("Content-Encoding").orEmpty().trim().lowercase(Locale.ROOT)
+    if (encoding.isNotEmpty() && encoding != "identity") {
+        throw createError("Unsupported Content-Encoding: $encoding")
+    }
+    val contentType = header("Content-Type").orEmpty().trim().lowercase(Locale.ROOT)
+    if (contentType.contains("text/html") || contentType.contains("application/json")) {
+        throw createError("Unexpected response Content-Type: $contentType")
+    }
+}
+
 /**
  * 解析后的 HTTP `Content-Range` 头结构。
  *

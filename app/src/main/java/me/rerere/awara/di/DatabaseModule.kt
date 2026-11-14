@@ -1,10 +1,12 @@
 package me.rerere.awara.di
 
+import android.util.Log
 import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.RenameColumn
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import androidx.room.migration.AutoMigrationSpec
 import me.rerere.awara.data.dao.DownloadDao
 import me.rerere.awara.data.dao.DownloadTaskDao
@@ -12,9 +14,13 @@ import me.rerere.awara.data.dao.HistoryDao
 import me.rerere.awara.data.download.AndroidDownloadScanDataSource
 import me.rerere.awara.data.download.DownloadFolderScanner
 import me.rerere.awara.data.download.DownloadManager
+import me.rerere.awara.data.download.DownloadNotifications
+import me.rerere.awara.data.download.DownloadScanLogger
 import me.rerere.awara.data.download.DownloadStorage
+import me.rerere.awara.data.download.MetadataScanFeedback
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTask
+import me.rerere.awara.data.entity.DownloadTaskStatusConverter
 import me.rerere.awara.data.entity.HistoryItem
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
@@ -27,14 +33,40 @@ val databaseModule = module {
     single { DownloadManager(androidContext(), get(), get(), get()) }
 
     single {
+        val context = androidContext()
         DownloadFolderScanner(
             dataSource =
                 AndroidDownloadScanDataSource(
-                    context = androidContext(),
+                    context = context,
                     downloadStorage = get(),
                     downloadDao = get<AppDatabase>().downloadDao(),
                     mediaRepo = get(),
-                )
+                ),
+            onMetadataFeedback = { feedback ->
+                when (feedback) {
+                    is MetadataScanFeedback.Progress ->
+                        DownloadNotifications.showMetadataScanProgressNotification(
+                            context,
+                            feedback.completed,
+                            feedback.total,
+                        )
+                    is MetadataScanFeedback.Completed ->
+                        DownloadNotifications.showMetadataScanCompleteNotification(
+                            context,
+                            feedback.total,
+                        )
+                    MetadataScanFeedback.Cancelled ->
+                        DownloadNotifications.cancelMetadataScanProgressNotification(context)
+                }
+            },
+            logger =
+                DownloadScanLogger { isWarning, message, throwable ->
+                    if (isWarning) {
+                        Log.w("DownloadFolderScanner", message, throwable)
+                    } else {
+                        Log.i("DownloadFolderScanner", message)
+                    }
+                },
         )
     }
 }
@@ -58,6 +90,7 @@ val databaseModule = module {
             AutoMigration(from = 11, to = 12),
         ],
 )
+@TypeConverters(DownloadTaskStatusConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     @RenameColumn(tableName = "downloaded_items", fromColumnName = "path", toColumnName = "uri")
     class Migration2To3 : AutoMigrationSpec

@@ -1,5 +1,6 @@
 package me.rerere.awara.ui.page.download
 
+import android.content.Context
 import android.net.Uri
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -13,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
@@ -28,12 +28,14 @@ import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.ui.component.common.UiState
 import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 
 class DownloadVM(
     private val appDatabase: AppDatabase,
     private val downloadStorage: DownloadStorage,
     private val userRepo: UserRepo,
 ) : ViewModel(), KoinComponent {
+    private val appContext: Context by inject()
     var state by mutableStateOf(DownloadState())
         private set
 
@@ -113,7 +115,8 @@ class DownloadVM(
         viewModelScope.launch(Dispatchers.IO) {
             thumbnailSemaphore.withPermit {
                 val generatedUri =
-                    downloadStorage.generateLocalThumbnail(
+                    LocalVideoThumbnailGenerator.generateAndSaveThumbnail(
+                        context = appContext,
                         resourceId = item.resourceId,
                         videoUriString = item.uri,
                         knownDurationMs = item.durationMs,
@@ -245,7 +248,10 @@ class DownloadVM(
                             // 文件删除成功后，即便外部取消也必须保证清理 Room 记录及本地缩略图文件
                             withContext(NonCancellable) {
                                 appDatabase.downloadDao().deleteDownloadItem(item)
-                                downloadStorage.deleteLocalThumbnail(item.resourceId)
+                                LocalVideoThumbnailGenerator.deleteThumbnailForResource(
+                                    appContext,
+                                    item.resourceId,
+                                )
                             }
                         }
                         successIds.add(item.id)

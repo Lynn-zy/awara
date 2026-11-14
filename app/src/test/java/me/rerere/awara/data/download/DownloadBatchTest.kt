@@ -5,7 +5,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,7 +16,7 @@ import org.junit.Test
 class DownloadBatchTest {
     private fun createTask(
         taskId: String,
-        status: String,
+        status: DownloadTaskStatus,
         title: String = "Test Video $taskId",
         resourceId: String = "res_$taskId",
     ): DownloadTask {
@@ -58,16 +61,139 @@ class DownloadBatchTest {
     }
 
     @Test
-    fun filterResumableTasksKeepsOnlyPausedTasks() {
+    fun filterManualResumableTasksKeepsOnlyPausedTasks() {
         val tasks =
             listOf(
                 createTask("1", DownloadTaskStatus.QUEUED),
                 createTask("2", DownloadTaskStatus.RUNNING),
                 createTask("3", DownloadTaskStatus.PAUSED),
                 createTask("4", DownloadTaskStatus.FAILED),
+                createTask("5", DownloadTaskStatus.RETRYING),
             )
 
-        assertEquals(listOf("3"), DownloadManager.filterResumableTasks(tasks).map { it.taskId })
+        assertEquals(
+            listOf("3"),
+            DownloadManager.filterManualResumableTasks(tasks).map { it.taskId },
+        )
+    }
+
+    @Test
+    fun filterStartupUnfinishedTasksCoversAllRecoverableLifecycleStates() {
+        val tasks =
+            listOf(
+                createTask("1", DownloadTaskStatus.QUEUED),
+                createTask("2", DownloadTaskStatus.RUNNING),
+                createTask("3", DownloadTaskStatus.PAUSED),
+                createTask("4", DownloadTaskStatus.RETRYING),
+                createTask("5", DownloadTaskStatus.FAILED),
+                createTask("6", DownloadTaskStatus.SAVING),
+                createTask("7", DownloadTaskStatus.CANCELLING),
+            )
+
+        assertEquals(
+            listOf("1", "2", "3", "4"),
+            DownloadManager.filterStartupUnfinishedTasks(tasks).map { it.taskId },
+        )
+        assertTrue(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.QUEUED))
+        assertTrue(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.RUNNING))
+        assertTrue(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.PAUSED))
+        assertTrue(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.RETRYING))
+        assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.FAILED))
+        assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.SAVING))
+        assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.CANCELLING))
+    }
+
+    @Test
+    fun shouldBlockAutomaticStartHonorsAuthorizationAndAutoResumePolicy() {
+        assertTrue(
+            DownloadManager.shouldBlockAutomaticStart(
+                status = DownloadTaskStatus.QUEUED,
+                autoResumeEnabled = false,
+                manuallyAuthorized = false,
+            )
+        )
+        assertTrue(
+            DownloadManager.shouldBlockAutomaticStart(
+                status = DownloadTaskStatus.RUNNING,
+                autoResumeEnabled = false,
+                manuallyAuthorized = false,
+            )
+        )
+        assertTrue(
+            DownloadManager.shouldBlockAutomaticStart(
+                status = DownloadTaskStatus.RETRYING,
+                autoResumeEnabled = false,
+                manuallyAuthorized = false,
+            )
+        )
+        assertFalse(
+            DownloadManager.shouldBlockAutomaticStart(
+                status = DownloadTaskStatus.QUEUED,
+                autoResumeEnabled = false,
+                manuallyAuthorized = true,
+            )
+        )
+        assertFalse(
+            DownloadManager.shouldBlockAutomaticStart(
+                status = DownloadTaskStatus.RUNNING,
+                autoResumeEnabled = true,
+                manuallyAuthorized = false,
+            )
+        )
+        assertFalse(
+            DownloadManager.shouldBlockAutomaticStart(
+                status = DownloadTaskStatus.PAUSED,
+                autoResumeEnabled = false,
+                manuallyAuthorized = false,
+            )
+        )
+    }
+
+    @Test
+    fun decideRetryEnforcesCapAndResetsProgressStreak() {
+        val disabled =
+            DownloadManager.decideRetry(
+                autoRetryEnabled = false,
+                receivedNewData = false,
+                retryCount = 0,
+            )
+        assertFalse(disabled.shouldRetry)
+        assertEquals(0, disabled.nextRetryCount)
+
+        assertTrue(DownloadManager.decideRetry(true, false, 0).shouldRetry)
+        assertTrue(DownloadManager.decideRetry(true, false, 1).shouldRetry)
+        assertTrue(DownloadManager.decideRetry(true, false, 2).shouldRetry)
+        assertFalse(DownloadManager.decideRetry(true, false, 3).shouldRetry)
+
+        val progressReset =
+            DownloadManager.decideRetry(
+                autoRetryEnabled = true,
+                receivedNewData = true,
+                retryCount = 3,
+            )
+        assertTrue(progressReset.shouldRetry)
+        assertEquals(1, progressReset.nextRetryCount)
+    }
+
+    @Test
+    fun activeCallGroupCancelsCurrentAndLateCallsWhileIgnoringUnregistered() {
+        val client = OkHttpClient()
+        val request = Request.Builder().url("https://example.com/video.mp4").build()
+
+        val group = DownloadManager.ActiveCallGroup()
+        val activeCall = client.newCall(request)
+        val unregisteredCall = client.newCall(request)
+        val lateCall = client.newCall(request)
+
+        group.register(activeCall)
+        group.register(unregisteredCall)
+        group.unregister(unregisteredCall)
+        group.cancel()
+        group.register(lateCall)
+
+        assertTrue(activeCall.isCanceled())
+        assertFalse(unregisteredCall.isCanceled())
+        assertTrue(lateCall.isCanceled())
     }
 
     @Test

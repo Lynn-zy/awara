@@ -4,13 +4,13 @@ import java.io.EOFException
 import java.io.IOException
 import java.net.InetAddress
 import java.security.MessageDigest
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -26,23 +26,43 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-class ResumableDownloaderTest {
+/**
+ * 通过 [RangeDownloader.download] 公开接口验证顺序降级路径与断点一致性的全部回归用例，
+ * 不再依赖内部实现方法绕过探测门禁。
+ */
+class RangeDownloaderFallbackTest {
     @get:Rule val tempFolder = TemporaryFolder()
-
     private lateinit var server: MockWebServer
     private lateinit var okHttpClient: OkHttpClient
-    private lateinit var downloader: ResumableDownloader
+    private lateinit var downloader: RangeDownloader
 
-    /** 返回显式指向 127.0.0.1 的回环地址，规避双栈环境下的 localhost 解析抖动。 */
+    /** 构造显式绑定 `127.0.0.1` 的回环 URL，避免双栈环境 `localhost` 解析异常。 */
     private fun MockWebServer.loopbackUrl(path: String) =
         url(path).newBuilder().host("127.0.0.1").build()
+
+    /** 入队一次无强 ETag 的 `bytes=0-0` 探测响应，令公开 `download(...)` 确定走入顺序回退路径。 */
+    private fun enqueueNoStrongTagProbe(
+        total: Long? = null,
+        extraHeader: Pair<String, String>? = null,
+    ) {
+        val totalPart = total?.toString() ?: "*"
+        server.enqueue(
+            MockResponse().apply {
+                setResponseCode(206)
+                setHeader("Content-Range", "bytes 0-0/$totalPart")
+                setHeader("Content-Type", "video/mp4")
+                extraHeader?.let { (name, value) -> setHeader(name, value) }
+                setBody("A")
+            }
+        )
+    }
 
     @Before
     fun setUp() {
         server = MockWebServer()
         server.start(InetAddress.getByName("127.0.0.1"), 0)
         okHttpClient = OkHttpClient.Builder().build()
-        downloader = ResumableDownloader(okHttpClient)
+        downloader = RangeDownloader(okHttpClient)
     }
 
     @After
@@ -51,9 +71,16 @@ class ResumableDownloaderTest {
     }
 
     @Test
-    fun downloadResumesWith206WhenValidatorMatches() = runBlocking {
+    fun downloadResumesWith206WhenStrongValidatorMatches() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("test.part").apply { writeText("ABC") }
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(206)
+                    .setHeader("Content-Range", "bytes 0-0/7")
+                    .setHeader("ETag", "\"test-etag\"")
+                    .setBody("A")
+            )
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -62,33 +89,40 @@ class ResumableDownloaderTest {
                     .setBody("DEFG")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"test-etag\"",
+                expectedTotalBytes = 7L,
                 onProgress = { _, _ -> },
             )
 
-            val recorded = server.takeRequest()
-            assertEquals("bytes=3-", recorded.getHeader("Range"))
-            assertEquals("\"test-etag\"", recorded.getHeader("If-Range"))
+            val probe = server.takeRequest()
+            assertEquals("bytes=0-0", probe.getHeader("Range"))
+            assertEquals("\"test-etag\"", probe.getHeader("If-Range"))
+            val chunkReq = server.takeRequest()
+            assertEquals("bytes=3-6", chunkReq.getHeader("Range"))
+            assertEquals("\"test-etag\"", chunkReq.getHeader("If-Range"))
             assertEquals("ABCDEFG", file.readText())
             assertEquals(7L, file.length())
         }
     }
 
-    /** 普通顺序降级只统计实际正文，读取完成后归零，不把原始 URL 留在调试快照中。 */
+    /** 单源重定向回退到允许跟随的重定向顺序下载，仅统计真实正文连接并在完成后归零。 */
     @Test
     fun sequentialTransferPublishesActiveHostAndClearsAfterCompletion() =
         runBlocking<Unit> {
-            val tracker = me.rerere.awara.data.diagnostics.CdnConnectionTracker()
+            val tracker = CdnConnectionTracker()
             val content = ByteArray(32 * 1024) { 3 }
             val redirected = server.loopbackUrl("/actual.mp4")
+            // 探测遇 302 直接平滑退回顺序通道，顺序请求再 302 到实际节点
+            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", redirected))
             server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", redirected))
             server.enqueue(MockResponse().setBody(Buffer().write(content)))
+
             var observedActiveConnection = false
-            ResumableDownloader(okHttpClient, connectionTracker = tracker)
-                .downloadSequential(
+            RangeDownloader(okHttpClient, connectionTracker = tracker)
+                .download(
                     url = server.loopbackUrl("/video.mp4?signature=not-for-display").toString(),
                     targetFile = tempFolder.newFile("diagnostic.part"),
                     validator = null,
@@ -110,8 +144,9 @@ class ResumableDownloaderTest {
                 tempFolder.newFile("reset-progress.part").apply { writeText("OLD_PARTIAL_DATA") }
             var receivedBytes = 0L
             server.enqueue(MockResponse().setResponseCode(200).setBody("NEW"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("NEW"))
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"old-etag\"",
@@ -121,7 +156,7 @@ class ResumableDownloaderTest {
 
             assertEquals(3L, receivedBytes)
             assertEquals("NEW", file.readText())
-            assertTrue(decideDownloadRetry(true, receivedBytes > 0L, 3).shouldRetry)
+            assertTrue(DownloadManager.decideRetry(true, receivedBytes > 0L, 3).shouldRetry)
         }
 
     @Test
@@ -132,12 +167,12 @@ class ResumableDownloaderTest {
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
-                    .setHeader("Content-Range", "bytes 0-2/3")
+                    .setHeader("Content-Range", "bytes 0-0/3")
                     .setHeader("ETag", "\"same-etag\"")
-                    .setBody("ABC")
+                    .setBody("A")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"same-etag\"",
@@ -147,7 +182,7 @@ class ResumableDownloaderTest {
             )
 
             assertEquals(0L, receivedBytes)
-            assertFalse(decideDownloadRetry(true, receivedBytes > 0L, 3).shouldRetry)
+            assertFalse(DownloadManager.decideRetry(true, receivedBytes > 0L, 3).shouldRetry)
         }
 
     @Test
@@ -161,8 +196,15 @@ class ResumableDownloaderTest {
                     .setHeader("Content-Length", 11)
                     .setBody("NEW_CONTENT")
             )
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "video/mp4")
+                    .setHeader("Content-Length", 11)
+                    .setBody("NEW_CONTENT")
+            )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"test-etag\"",
@@ -175,12 +217,11 @@ class ResumableDownloaderTest {
     }
 
     @Test
-    fun download416RetriesFromZeroOnceAndSucceedsWith200() = runBlocking {
+    fun download416RetriesFromZeroOnceInFallbackAndSucceedsWith200() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("test.part").apply { writeText("ABC") }
-            server.enqueue(
-                MockResponse().setResponseCode(416).setHeader("Content-Range", "bytes */3")
-            )
+            enqueueNoStrongTagProbe(total = 3L)
+            server.enqueue(MockResponse().setResponseCode(416).setHeader("Content-Range", "bytes */3"))
             server.enqueue(
                 MockResponse()
                     .setResponseCode(200)
@@ -188,106 +229,49 @@ class ResumableDownloaderTest {
                     .setBody("FULL_CONTENT")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
-                validator = "\"test-etag\"",
+                validator = null,
+                expectedTotalBytes = 3L,
                 onProgress = { _, _ -> },
             )
 
-            val firstReq = server.takeRequest()
-            assertEquals("bytes=3-", firstReq.getHeader("Range"))
-
-            val secondReq = server.takeRequest()
-            assertNull(secondReq.getHeader("Range"))
+            assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
+            assertEquals("bytes=0-", server.takeRequest().getHeader("Range"))
+            assertNull(server.takeRequest().getHeader("Range"))
             assertEquals("FULL_CONTENT", file.readText())
         }
     }
 
     @Test
-    fun downloadBad206ContentRangeResetsFromZeroAndSucceeds() = runBlocking {
+    fun downloadChangedValidatorOn206ResetsUntrustedPrefixFromZero() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("test.part").apply { writeText("ABC") }
+            val fullData = "NEW_FULL_DATA"
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
-                    .setHeader("Content-Range", "bytes 0-6/7")
-                    .setBody("INVALID")
+                    .setHeader("Content-Range", "bytes 0-0/${fullData.length}")
+                    .setHeader("ETag", "\"changed-etag\"")
+                    .setBody("N")
             )
-            server.enqueue(
-                MockResponse()
-                    .setResponseCode(200)
-                    .setHeader("Content-Length", 13)
-                    .setBody("FRESH_CONTENT")
-            )
-
-            downloader.downloadSequential(
-                url = server.loopbackUrl("/video.mp4").toString(),
-                targetFile = file,
-                validator = "\"test-etag\"",
-                onProgress = { _, _ -> },
-            )
-
-            val firstReq = server.takeRequest()
-            assertEquals("bytes=3-", firstReq.getHeader("Range"))
-
-            val secondReq = server.takeRequest()
-            assertNull(secondReq.getHeader("Range"))
-            assertEquals("FRESH_CONTENT", file.readText())
-        }
-    }
-
-    @Test
-    fun downloadChangedValidatorOn206ResetsFromZero() = runBlocking {
-        withTimeout(5000) {
-            val file = tempFolder.newFile("test.part").apply { writeText("ABC") }
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
-                    .setHeader("Content-Range", "bytes 3-6/7")
+                    .setHeader("Content-Range", "bytes 0-${fullData.length - 1}/${fullData.length}")
                     .setHeader("ETag", "\"changed-etag\"")
-                    .setBody("DEFG")
-            )
-            server.enqueue(
-                MockResponse()
-                    .setResponseCode(200)
-                    .setHeader("ETag", "\"changed-etag\"")
-                    .setHeader("Content-Length", 13)
-                    .setBody("NEW_FULL_DATA")
+                    .setBody(fullData)
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"original-etag\"",
                 onProgress = { _, _ -> },
             )
 
-            assertEquals("NEW_FULL_DATA", file.readText())
-        }
-    }
-
-    @Test
-    fun downloadRestartsFromZeroWhenNoValidatorProvided() = runBlocking {
-        withTimeout(5000) {
-            val file = tempFolder.newFile("test.part").apply { writeText("ABC") }
-            server.enqueue(
-                MockResponse()
-                    .setResponseCode(200)
-                    .setHeader("Content-Length", 17)
-                    .setBody("FULL_NO_VALIDATOR")
-            )
-
-            downloader.downloadSequential(
-                url = server.loopbackUrl("/video.mp4").toString(),
-                targetFile = file,
-                validator = null,
-                onProgress = { _, _ -> },
-            )
-
-            val req = server.takeRequest()
-            assertNull(req.getHeader("Range"))
-            assertEquals("FULL_NO_VALIDATOR", file.readText())
+            assertEquals(fullData, file.readText())
         }
     }
 
@@ -296,8 +280,9 @@ class ResumableDownloaderTest {
         withTimeout(5000) {
             val file = tempFolder.newFile("test.part")
             server.enqueue(MockResponse().setResponseCode(200).setChunkedBody("STREAMING_DATA", 4))
+            server.enqueue(MockResponse().setResponseCode(200).setChunkedBody("STREAMING_DATA", 4))
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
@@ -312,18 +297,21 @@ class ResumableDownloaderTest {
     fun freshChunkedRangeResponseRecordsRealTotalForPauseAndResume() = runBlocking {
         val file = tempFolder.newFile("fresh-range.part")
         val progress = mutableListOf<Pair<Long, Long>>()
+        // total 未知引发探测回退，随后顺序请求返回已知总长的分块 206
+        enqueueNoStrongTagProbe(total = null)
         server.enqueue(
             MockResponse()
                 .setResponseCode(206)
                 .setHeader("Content-Range", "bytes 0-6/7")
                 .setChunkedBody("ABCDEFG", 2)
         )
-        downloader.downloadSequential(
+        downloader.download(
             url = server.loopbackUrl("/video.mp4").toString(),
             targetFile = file,
             validator = null,
             onProgress = { bytes, total -> progress.add(bytes to total) },
         )
+        assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
         assertEquals("bytes=0-", server.takeRequest().getHeader("Range"))
         assertEquals(0L to 7L, progress.first())
         assertEquals(7L to 7L, progress.last())
@@ -335,6 +323,7 @@ class ResumableDownloaderTest {
         withTimeout(5000) {
             val file = tempFolder.newFile("resumed.part").apply { writeText("ABC") }
             val progress = mutableListOf<Pair<Long, Long>>()
+            enqueueNoStrongTagProbe(total = 7L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -343,7 +332,7 @@ class ResumableDownloaderTest {
                     .setBody("ABCDEFG")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/download?filename=video_360.mp4&expires=renewed").toString(),
                 targetFile = file,
                 validator = null,
@@ -351,12 +340,13 @@ class ResumableDownloaderTest {
                 onProgress = { bytes, total -> progress.add(bytes to total) },
             )
 
-            val req = server.takeRequest()
-            assertEquals("bytes=0-", req.getHeader("Range"))
-            assertNull(req.getHeader("If-Range"))
+            assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
+            val seqReq = server.takeRequest()
+            assertEquals("bytes=0-", seqReq.getHeader("Range"))
+            assertNull(seqReq.getHeader("If-Range"))
             assertEquals(3L to 7L, progress.first())
             assertEquals("ABCDEFG", file.readText())
-            assertEquals(1, server.requestCount)
+            assertEquals(2, server.requestCount)
         }
     }
 
@@ -365,6 +355,7 @@ class ResumableDownloaderTest {
         withTimeout(5000) {
             val file = tempFolder.newFile("weak_etag.part").apply { writeText("ABC") }
             var resolvedValidator: String? = "SHOULD_BE_CLEARED"
+            enqueueNoStrongTagProbe(total = 7L, extraHeader = "ETag" to "W/\"weak-123\"")
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -373,7 +364,7 @@ class ResumableDownloaderTest {
                     .setBody("ABCDEFG")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
@@ -382,9 +373,10 @@ class ResumableDownloaderTest {
                 onProgress = { _, _ -> },
             )
 
-            val req = server.takeRequest()
-            assertEquals("bytes=0-", req.getHeader("Range"))
-            assertNull(req.getHeader("If-Range"))
+            assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
+            val seqReq = server.takeRequest()
+            assertEquals("bytes=0-", seqReq.getHeader("Range"))
+            assertNull(seqReq.getHeader("If-Range"))
             assertNull("弱 ETag 不作为强校验器，应清理旧校验器", resolvedValidator)
             assertEquals("ABCDEFG", file.readText())
         }
@@ -395,6 +387,7 @@ class ResumableDownloaderTest {
         withTimeout(5000) {
             val file = tempFolder.newFile("hash_test.part").apply { writeText("ABC") }
             val progress = mutableListOf<Pair<Long, Long>>()
+            enqueueNoStrongTagProbe(total = 7L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -402,7 +395,7 @@ class ResumableDownloaderTest {
                     .setBody("ABCDEFG")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
@@ -414,9 +407,7 @@ class ResumableDownloaderTest {
             val expectedHash =
                 MessageDigest.getInstance("SHA-256").digest("ABCDEFG".toByteArray()).joinToString(
                     ""
-                ) {
-                    "%02x".format(it)
-                }
+                ) { "%02x".format(it) }
             val actualHash =
                 MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") {
                     "%02x".format(it)
@@ -430,6 +421,7 @@ class ResumableDownloaderTest {
     fun resumeOverlapMismatchRetainsPartialFileWithoutMutation() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("mismatch.part").apply { writeText("XYZ") }
+            enqueueNoStrongTagProbe(total = 7L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -438,7 +430,7 @@ class ResumableDownloaderTest {
             )
 
             try {
-                downloader.downloadSequential(
+                downloader.download(
                     url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
@@ -456,6 +448,7 @@ class ResumableDownloaderTest {
     fun resumeTotalChangeRetainsPartialFile() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("total_change.part").apply { writeText("ABC") }
+            enqueueNoStrongTagProbe(total = 10L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -464,7 +457,7 @@ class ResumableDownloaderTest {
             )
 
             try {
-                downloader.downloadSequential(
+                downloader.download(
                     url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
@@ -482,6 +475,7 @@ class ResumableDownloaderTest {
     fun completedPartDoesNotTrigger416AndCompletesAfterOverlapVerification() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("completed.part").apply { writeText("ABCDEFG") }
+            enqueueNoStrongTagProbe(total = 7L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -489,7 +483,7 @@ class ResumableDownloaderTest {
                     .setBody("ABCDEFG")
             )
 
-            downloader.downloadSequential(
+            downloader.download(
                 url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
@@ -497,9 +491,9 @@ class ResumableDownloaderTest {
                 onProgress = { _, _ -> },
             )
 
-            val req = server.takeRequest()
-            assertEquals("bytes=0-", req.getHeader("Range"))
-            assertEquals(1, server.requestCount)
+            assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
+            assertEquals("bytes=0-", server.takeRequest().getHeader("Range"))
+            assertEquals(2, server.requestCount)
             assertEquals("ABCDEFG", file.readText())
         }
     }
@@ -508,6 +502,7 @@ class ResumableDownloaderTest {
     fun chunked206TruncatedBodyThrowsEOFExceptionAndDoesNotFakeComplete() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("chunked_truncated.part").apply { writeText("ABC") }
+            enqueueNoStrongTagProbe(total = 7L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -516,7 +511,7 @@ class ResumableDownloaderTest {
             )
 
             try {
-                downloader.downloadSequential(
+                downloader.download(
                     url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
@@ -525,7 +520,7 @@ class ResumableDownloaderTest {
                 )
                 throw AssertionError("少字节截断的 206 响应必须抛出异常")
             } catch (_: EOFException) {
-                // 预期截断抛出 EOFException
+                // 预期抛出 EOFException
             }
         }
     }
@@ -534,6 +529,7 @@ class ResumableDownloaderTest {
     fun chunked206ExcessBodyThrowsIOExceptionAndDoesNotFakeComplete() = runBlocking {
         withTimeout(5000) {
             val file = tempFolder.newFile("chunked_excess.part").apply { writeText("ABC") }
+            enqueueNoStrongTagProbe(total = 7L)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -542,7 +538,7 @@ class ResumableDownloaderTest {
             )
 
             try {
-                downloader.downloadSequential(
+                downloader.download(
                     url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
@@ -564,6 +560,7 @@ class ResumableDownloaderTest {
             val totalBytes = fullContent.size.toLong()
             val file = tempFolder.newFile("cancel_and_resume.part")
             var savedTotalBytes = -1L
+            server.enqueue(MockResponse().setResponseCode(200).setBody("PROBE_UNSUPPORTED"))
             server.enqueue(
                 MockResponse()
                     .setHeader("Content-Type", "video/mp4")
@@ -571,7 +568,7 @@ class ResumableDownloaderTest {
                     .throttleBody(256, 100, TimeUnit.MILLISECONDS)
             )
             val downloading = launch {
-                downloader.downloadSequential(
+                downloader.download(
                     url = server.loopbackUrl("/download?filename=fixture.mp4&expires=old").toString(),
                     targetFile = file,
                     validator = null,
@@ -587,7 +584,10 @@ class ResumableDownloaderTest {
             assertTrue(partialLength in 1 until totalBytes)
             assertEquals(totalBytes, savedTotalBytes)
             server.takeRequest()
+            server.takeRequest()
+
             val rangeStart = maxOf(0L, partialLength - 65536L)
+            enqueueNoStrongTagProbe(total = totalBytes)
             server.enqueue(
                 MockResponse()
                     .setResponseCode(206)
@@ -603,15 +603,15 @@ class ResumableDownloaderTest {
                     )
             )
             val progress = mutableListOf<Pair<Long, Long>>()
-            val newDownloader =
-                ResumableDownloader(OkHttpClient.Builder().build(), DownloadTransferSettings())
-            newDownloader.downloadSequential(
+            val newDownloader = RangeDownloader(OkHttpClient.Builder().build())
+            newDownloader.download(
                 url = server.loopbackUrl("/download?filename=fixture.mp4&expires=new").toString(),
                 targetFile = file,
                 validator = null,
                 expectedTotalBytes = savedTotalBytes,
                 onProgress = { bytes, total -> progress.add(bytes to total) },
             )
+            assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
             assertEquals("bytes=$rangeStart-", server.takeRequest().getHeader("Range"))
             assertEquals(partialLength to totalBytes, progress.first())
             assertEquals(totalBytes, file.length())
@@ -626,6 +626,10 @@ class ResumableDownloaderTest {
     @Test
     fun lastModifiedDateUsesOverlapInsteadOfIfRange() = runBlocking {
         val file = tempFolder.newFile("date.part").apply { writeText("ABC") }
+        enqueueNoStrongTagProbe(
+            total = 7L,
+            extraHeader = "Last-Modified" to "Wed, 14 Oct 2026 01:00:00 GMT",
+        )
         server.enqueue(
             MockResponse()
                 .setResponseCode(206)
@@ -634,7 +638,7 @@ class ResumableDownloaderTest {
                 .setBody("ABCDEFG")
         )
         var resolved: String? = "old"
-        downloader.downloadSequential(
+        downloader.download(
             url = server.loopbackUrl("/video.mp4").toString(),
             targetFile = file,
             validator = "Tue, 13 Oct 2026 01:00:00 GMT",
@@ -642,6 +646,7 @@ class ResumableDownloaderTest {
             onValidatorResolved = { resolved = it },
             onProgress = { _, _ -> },
         )
+        assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
         val request = server.takeRequest()
         assertEquals("bytes=0-", request.getHeader("Range"))
         assertNull(request.getHeader("If-Range"))
@@ -653,10 +658,11 @@ class ResumableDownloaderTest {
     fun downloadCancellationMidstreamRetainsPartialFileAndSupportsDiscard() = runBlocking {
         withTimeout(5000) {
             val parts = DownloadParts(tempFolder.newFolder("parts"))
-            val taskId = UUID.randomUUID().toString()
+            val taskId = DownloadTaskId.random()
             val file = parts.file(taskId)
             val largeBody = "X".repeat(65536)
 
+            server.enqueue(MockResponse().setResponseCode(200).setBody("PROBE_UNSUPPORTED"))
             server.enqueue(
                 MockResponse()
                     .setResponseCode(200)
@@ -665,7 +671,7 @@ class ResumableDownloaderTest {
             )
 
             val job = launch {
-                downloader.downloadSequential(
+                downloader.download(
                     url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
@@ -683,7 +689,6 @@ class ResumableDownloaderTest {
 
             assertTrue("部分下载文件应当被保留", file.exists())
             assertTrue("部分下载文件大小应当大于 0", file.length() > 0L)
-
             assertTrue(job.isCancelled)
             parts.delete(taskId)
             assertFalse(file.exists())
@@ -695,7 +700,7 @@ class ResumableDownloaderTest {
         val file = tempFolder.newFile("retained.part").apply { writeText("ABC") }
         server.enqueue(MockResponse().setResponseCode(403))
         try {
-            downloader.downloadSequential(
+            downloader.download(
                 server.loopbackUrl("/expired.mp4").toString(),
                 file,
                 null,
@@ -710,27 +715,28 @@ class ResumableDownloaderTest {
     @Test
     fun downloadCanRestartWithValidZeroOffsetPartialResponse() = runBlocking {
         val file = tempFolder.newFile("restart.part").apply { writeText("ABC") }
+        val newContent = "NEWFILE"
         server.enqueue(
             MockResponse()
                 .setResponseCode(206)
                 .setHeader("ETag", "\"new\"")
-                .setHeader("Content-Range", "bytes 3-6/7")
-                .setBody("DEFG")
+                .setHeader("Content-Range", "bytes 0-0/${newContent.length}")
+                .setBody("N")
         )
         server.enqueue(
             MockResponse()
                 .setResponseCode(206)
                 .setHeader("ETag", "\"new\"")
-                .setHeader("Content-Range", "bytes 0-6/7")
-                .setBody("NEWFILE")
+                .setHeader("Content-Range", "bytes 0-${newContent.length - 1}/${newContent.length}")
+                .setBody(newContent)
         )
-        downloader.downloadSequential(
+        downloader.download(
             server.loopbackUrl("/new.mp4").toString(),
             file,
             "\"old\"",
             onProgress = { _, _ -> },
         )
-        assertEquals("NEWFILE", file.readText())
+        assertEquals(newContent, file.readText())
         assertEquals(2, server.requestCount)
     }
 }

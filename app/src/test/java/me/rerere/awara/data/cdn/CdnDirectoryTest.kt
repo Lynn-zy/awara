@@ -143,8 +143,8 @@ class CdnDirectoryTest {
         // 验证总可用节点数为 28 个 (26 fast + 2 slow)
         assertEquals(28, nodes.size)
 
-        val fastNodes = nodes.filter { it.group == "fast" }
-        val slowNodes = nodes.filter { it.group == "slow" }
+        val fastNodes = nodes.filter { it.group == CdnNodeGroup.FAST }
+        val slowNodes = nodes.filter { it.group == CdnNodeGroup.SLOW }
         assertEquals(26, fastNodes.size)
         assertEquals(2, slowNodes.size)
 
@@ -196,7 +196,7 @@ class CdnDirectoryTest {
         val nodes = CdnDirectory.parse(html)
 
         assertEquals(listOf("kafka.iwara.tv"), nodes.map { it.host })
-        assertEquals("fast", nodes.single().group)
+        assertEquals(CdnNodeGroup.FAST, nodes.single().group)
     }
 
     /**

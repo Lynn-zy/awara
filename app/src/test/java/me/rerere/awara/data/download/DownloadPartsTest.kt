@@ -1,7 +1,6 @@
 package me.rerere.awara.data.download
 
 import java.io.IOException
-import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,7 +16,7 @@ class DownloadPartsTest {
     fun sparseOrCorruptedStateNeverUsesLogicalLengthAndCleanupRemovesState() {
         val root = temporary.newFolder("ranges")
         val parts = DownloadParts(root)
-        val taskId = UUID.randomUUID().toString()
+        val taskId = DownloadTaskId.random()
         val target = parts.file(taskId).apply { writeBytes(ByteArray(64)) }
         DownloadRangeStore.sidecarFile(target).writeText("broken")
         DownloadRangeStore.tempSidecarFile(target).writeText("interrupted")
@@ -25,7 +24,7 @@ class DownloadPartsTest {
         assertEquals(0L, parts.completedBytes(taskId))
         assertEquals(listOf(taskId), parts.taskIds())
         parts.delete(taskId)
-        assertEquals(emptyList<String>(), parts.taskIds())
+        assertEquals(emptyList<DownloadTaskId>(), parts.taskIds())
         assertFalse(DownloadRangeStore.hasState(target))
     }
 
@@ -33,7 +32,7 @@ class DownloadPartsTest {
     @Test
     fun stateOnlyTaskIsDiscoveredForOrphanCleanup() {
         val parts = DownloadParts(temporary.newFolder("orphan"))
-        val taskId = UUID.randomUUID().toString()
+        val taskId = DownloadTaskId.random()
         DownloadRangeStore.sidecarFile(parts.file(taskId)).writeText("orphan")
         assertEquals(listOf(taskId), parts.taskIds())
         parts.delete(taskId)
@@ -43,8 +42,8 @@ class DownloadPartsTest {
     @Test
     fun discardingOneTaskDoesNotRemoveAnotherTasksPartialFile() {
         val parts = DownloadParts(temporary.newFolder("parts"))
-        val cancelledId = UUID.randomUUID().toString()
-        val pausedId = UUID.randomUUID().toString()
+        val cancelledId = DownloadTaskId.random()
+        val pausedId = DownloadTaskId.random()
         parts.file(cancelledId).writeText("cancelled content")
         parts.file(pausedId).writeText("retained content")
 
@@ -57,7 +56,7 @@ class DownloadPartsTest {
     @Test
     fun discardingMissingTaskIsIdempotent() {
         val parts = DownloadParts(temporary.newFolder("parts"))
-        val taskId = UUID.randomUUID().toString()
+        val taskId = DownloadTaskId.random()
         parts.delete(taskId)
         parts.delete(taskId)
         assertFalse(parts.file(taskId).exists())
@@ -65,13 +64,14 @@ class DownloadPartsTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun invalidTaskIdCannotEscapeTemporaryDirectory() {
-        DownloadParts(temporary.newFolder("parts")).delete("../outside")
+        val invalid = DownloadTaskId.parse("../outside")
+        DownloadParts(temporary.newFolder("parts")).delete(invalid)
     }
 
     @Test
     fun refusingDirectoryDeletionProtectsContents() {
         val parts = DownloadParts(temporary.newFolder("parts"))
-        val taskId = UUID.randomUUID().toString()
+        val taskId = DownloadTaskId.random()
         val unexpectedDirectory = parts.file(taskId).apply { mkdir() }
         val child = unexpectedDirectory.resolve("keep.txt").apply { writeText("keep") }
         try {
@@ -86,10 +86,10 @@ class DownloadPartsTest {
     fun orphanCandidatesOnlyIncludeCanonicalTaskFiles() {
         val root = temporary.newFolder("parts")
         val parts = DownloadParts(root)
-        val taskId = UUID.randomUUID().toString()
+        val taskId = DownloadTaskId.random()
         parts.file(taskId).writeText("part")
         root.resolve("unrelated.part").writeText("keep")
-        root.resolve("$taskId.mp4").writeText("keep")
+        root.resolve("${taskId.value}.mp4").writeText("keep")
         assertEquals(listOf(taskId), parts.taskIds())
     }
 }

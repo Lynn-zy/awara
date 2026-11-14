@@ -8,15 +8,13 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -31,12 +29,26 @@ import okio.Buffer
 import org.jsoup.Jsoup
 
 /**
+ * CDN 节点环分组。
+ *
+ * 通过显式 `@SerialName` 维持磁盘 24 小时缓存 JSON `"fast"` / `"slow"` 线格式兼容。
+ */
+@Serializable
+internal enum class CdnNodeGroup {
+    /** 高速环节点。 */
+    @SerialName("fast") FAST,
+
+    /** 慢速主备环节点。 */
+    @SerialName("slow") SLOW,
+}
+
+/**
  * CDN 节点数据模型。
  *
  * @property host 节点主机名（单层 iwara.tv 规范域名，全小写）
- * @property group 节点组别标识（"fast" 代表高速环节点，"slow" 代表主备慢速环节点）
+ * @property group 节点组别标识（高速环或慢速主备环）
  */
-@Serializable internal data class CdnNode(val host: String, val group: String)
+@Serializable internal data class CdnNode(val host: String, val group: CdnNodeGroup)
 
 /**
  * 持久化到磁盘的 CDN 目录缓存结构。
@@ -238,61 +250,44 @@ internal class CdnDirectory(
                     .build()
 
             val call = directoryClient.newCall(request)
-            onBindCall?.invoke(call)
-
-            try {
+            withCancellableCall(call = call, onBindCall = onBindCall, onUnbindCall = onUnbindCall) {
                 withContext(Dispatchers.IO) {
-                    val watcher =
-                        launch(start = CoroutineStart.UNDISPATCHED) {
-                            try {
-                                awaitCancellation()
-                            } finally {
-                                call.cancel()
-                            }
+                    call.execute().use { response ->
+                        if (!response.isSuccessful) {
+                            throw IOException(
+                                "HTTP ${response.code} fetching distribution directory"
+                            )
                         }
-                    try {
-                        call.execute().use { response ->
-                            if (!response.isSuccessful) {
+                        val body =
+                            response.body
+                                ?: throw IOException("Empty response body from directory")
+                        val maxBytes = CdnPolicy.DIRECTORY_MAX_BYTES
+                        val contentLength = body.contentLength()
+                        if (contentLength > maxBytes) {
+                            throw IOException(
+                                "Header Content-Length $contentLength exceeds DIRECTORY_MAX_BYTES ($maxBytes)"
+                            )
+                        }
+
+                        val source = body.source()
+                        val buffer = Buffer()
+                        var totalRead = 0L
+                        val chunkSize = 8192L
+
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val read = source.read(buffer, chunkSize)
+                            if (read == -1L) break
+                            totalRead += read
+                            if (totalRead > maxBytes) {
                                 throw IOException(
-                                    "HTTP ${response.code} fetching distribution directory"
+                                    "Stream size exceeded DIRECTORY_MAX_BYTES ($maxBytes bytes)"
                                 )
                             }
-                            val body =
-                                response.body
-                                    ?: throw IOException("Empty response body from directory")
-                            val maxBytes = CdnPolicy.DIRECTORY_MAX_BYTES
-                            val contentLength = body.contentLength()
-                            if (contentLength > maxBytes) {
-                                throw IOException(
-                                    "Header Content-Length $contentLength exceeds DIRECTORY_MAX_BYTES ($maxBytes)"
-                                )
-                            }
-
-                            val source = body.source()
-                            val buffer = Buffer()
-                            var totalRead = 0L
-                            val chunkSize = 8192L
-
-                            while (true) {
-                                coroutineContext.ensureActive()
-                                val read = source.read(buffer, chunkSize)
-                                if (read == -1L) break
-                                totalRead += read
-                                if (totalRead > maxBytes) {
-                                    throw IOException(
-                                        "Stream size exceeded DIRECTORY_MAX_BYTES ($maxBytes bytes)"
-                                    )
-                                }
-                            }
-                            buffer.readUtf8()
                         }
-                    } finally {
-                        watcher.cancel()
+                        buffer.readUtf8()
                     }
                 }
-            } finally {
-                call.cancel()
-                onUnbindCall?.invoke(call)
             }
         }
 
@@ -414,13 +409,13 @@ internal class CdnDirectory(
                     "yuko",
                     "yukong",
                 )
-                .map { CdnNode(host = "$it.iwara.tv", group = "fast") } +
+                .map { CdnNode(host = "$it.iwara.tv", group = CdnNodeGroup.FAST) } +
                 listOf(
                         // 2 个 slow 节点
                         "mikoto",
                         "hime",
                     )
-                    .map { CdnNode(host = "$it.iwara.tv", group = "slow") }
+                    .map { CdnNode(host = "$it.iwara.tv", group = CdnNodeGroup.SLOW) }
 
         /**
          * 解析 distribution 状态页 HTML 文本为有效 CDN 节点列表。
@@ -477,9 +472,9 @@ internal class CdnDirectory(
                 val group =
                     when {
                         ringType.equals("recent=1700GB", ignoreCase = true) ||
-                            ringType.startsWith("recent=", ignoreCase = true) -> "fast"
+                            ringType.startsWith("recent=", ignoreCase = true) -> CdnNodeGroup.FAST
                         ringType.equals("primary", ignoreCase = true) ||
-                            ringType.equals("mirror", ignoreCase = true) -> "slow"
+                            ringType.equals("mirror", ignoreCase = true) -> CdnNodeGroup.SLOW
                         else -> continue
                     }
 

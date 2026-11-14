@@ -31,11 +31,9 @@ import me.rerere.awara.data.download.DownloadCdnBudget
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
-import me.rerere.awara.data.download.DownloadTransferSettings
-import me.rerere.awara.data.download.ResumableDownloader
-import me.rerere.awara.data.download.decideDownloadRetry
+import me.rerere.awara.data.download.DownloadTaskId
+import me.rerere.awara.data.download.RangeDownloader
 import me.rerere.awara.data.download.sanitizedDownloadErrorMessage
-import me.rerere.awara.data.download.shouldBlockAutomaticDownloadStart
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.data.entity.DownloadType
@@ -62,7 +60,9 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
     }
 
     override suspend fun doWork(): Result {
-        val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
+        val rawTaskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
+        val parsedTaskId = DownloadTaskId.parseOrNull(rawTaskId) ?: return Result.failure()
+        val taskId = parsedTaskId.value
         val startupTask = appDatabase.downloadTaskDao().getTask(taskId)
         if (startupTask == null || startupTask.workId != id.toString()) {
             return Result.failure()
@@ -74,7 +74,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
             val manuallyAuthorized =
                 downloadManager.consumeExecutionAuthorization(taskId, id.toString())
             if (
-                shouldBlockAutomaticDownloadStart(
+                DownloadManager.shouldBlockAutomaticStart(
                     status = startupTask.status,
                     autoResumeEnabled = downloadManager.isAutoResumeEnabled(),
                     manuallyAuthorized = manuallyAuthorized,
@@ -248,15 +248,14 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         )
                     )
 
-                    val partFile = downloadManager.parts.file(taskId)
+                    val partFile = downloadManager.parts.file(parsedTaskId)
                     // 配置只在任务启动/恢复时读取，设置变化不会中断正在执行的传输。
-                    val transferSettings = DownloadTransferSettings.read()
-                    val resumableDownloader =
-                        ResumableDownloader(
-                            okHttpClient,
-                            transferSettings,
-                            cdnDirectory =
-                                if (transferSettings.multiCdnEnabled) cdnDirectory else null,
+                    val multiCdnEnabled = DownloadManager.isMultiCdnEnabled()
+                    val downloader =
+                        RangeDownloader(
+                            okHttpClient = okHttpClient,
+                            multiCdnEnabled = multiCdnEnabled,
+                            cdnDirectory = if (multiCdnEnabled) cdnDirectory else null,
                             refreshLink = {
                                 downloadManager.refreshActiveSource(taskId, id.toString())
                             },
@@ -274,7 +273,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         )
 
                     transferInProgress = true
-                    resumableDownloader.download(
+                    downloader.download(
                         url = currentTask.url,
                         targetFile = partFile,
                         validator = currentTask.validator,
@@ -337,7 +336,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         } catch (exception: Exception) {
                             currentCoroutineContext().ensureActive()
                             withContext(NonCancellable) {
-                                downloadManager.parts.delete(taskId)
+                                downloadManager.parts.delete(parsedTaskId)
                                 appDatabase
                                     .downloadTaskDao()
                                     .updateProgress(taskId, id.toString(), 0L, -1L)
@@ -447,7 +446,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         }
                         committed = saved
                         if (committed) {
-                            runCatching { downloadManager.parts.delete(taskId) }
+                            runCatching { downloadManager.parts.delete(parsedTaskId) }
                                 .onFailure { Log.w(TAG, "待回收下载分块 taskId=$taskId") }
                             // 事务成功提交后安全清理旧物理 URI
                             oldUriToClean?.let { oldUri ->
@@ -487,6 +486,9 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     DownloadTaskStatus.CANCELLING -> {
                                         // 用户主动取消，保留 CANCELLING 状态由 DownloadManager 处理
                                     }
+                                    DownloadTaskStatus.QUEUED,
+                                    DownloadTaskStatus.RETRYING,
+                                    DownloadTaskStatus.FAILED -> Unit
                                     DownloadTaskStatus.RUNNING,
                                     DownloadTaskStatus.SAVING -> {
                                         // 系统取消，仅在仍为当前代且处于运行/保存时转入 PAUSED
@@ -536,7 +538,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                             destinationUri.toString()
                                         else ""
                                     val retryDecision =
-                                        decideDownloadRetry(
+                                        DownloadManager.decideRetry(
                                             autoRetryEnabled =
                                                 transferInProgress &&
                                                     downloadManager.isAutomaticRetryEnabled(),
@@ -614,7 +616,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                             .updateSettledBytes(
                                 taskId,
                                 id.toString(),
-                                downloadManager.parts.completedBytes(taskId),
+                                downloadManager.parts.completedBytes(parsedTaskId),
                             )
                         val latestTask = appDatabase.downloadTaskDao().getTask(taskId)
                         // 过期 Worker 不得清除新一代任务的排队或进度通知。

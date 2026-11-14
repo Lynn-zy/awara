@@ -201,66 +201,123 @@ fun inferIwaraVideoQuality(
 }
 
 /**
- * 文件夹扫描与元数据补全的数据源抽象接口，用于隔离平台存储、数据库、网络与通知副作用。
+ * 文件夹扫描的目录列举与库内已有记录快照。
+ *
+ * @property files 目录单层中的候选文件列表
+ * @property existingItems 数据库中现有的已下载条目列表
+ */
+data class LocalDirectoryScanSnapshot(
+    val files: List<ScannedFileCandidate>,
+    val existingItems: List<DownloadItem>,
+)
+
+/**
+ * 本地视频文件的存在性与轨道探测结果。
+ *
+ * @property exists URI 对应的物理文件是否可读存在
+ * @property mediaInfo 视频轨道信息；若仅做存在性校验或文件非有效视频则为 null
+ */
+data class LocalVideoInspection(
+    val exists: Boolean,
+    val mediaInfo: ProbedVideoMediaInfo? = null,
+)
+
+/**
+ * 已有下载记录的本地路径与媒体属性修复条目。
+ */
+data class ScannedLocationRepair(
+    val id: Int,
+    val uri: String,
+    val sizeBytes: Long,
+    val durationMs: Long,
+    val quality: String,
+)
+
+/**
+ * 在线元数据补全成功后的回填更新条目。
+ */
+data class ScannedMetadataUpdate(
+    val id: Int,
+    val title: String,
+    val thumbnail: String,
+    val authorId: String,
+    val authorName: String,
+    val authorAvatar: String,
+    val publishedAtEpochSeconds: Long,
+    val quality: String,
+)
+
+/**
+ * 本地第 6 秒兜底封面提取与落库请求。
+ */
+data class FallbackThumbnailSyncRequest(
+    val itemId: Int,
+    val resourceId: String,
+    val videoUriString: String,
+    val durationMs: Long,
+)
+
+/**
+ * 持久化仓储同步操作集合，整合本地导入批量写入与后台元数据/兜底封面回填。
+ */
+data class ScanRepositorySync(
+    val locationRepairs: List<ScannedLocationRepair> = emptyList(),
+    val newItems: List<DownloadItem> = emptyList(),
+    val metadataUpdate: ScannedMetadataUpdate? = null,
+    val fallbackThumbnail: FallbackThumbnailSyncRequest? = null,
+)
+
+/**
+ * 持久化仓储同步返回结果。
+ *
+ * @property insertedIds 与 [ScanRepositorySync.newItems] 顺序一致的新增主键 ID 列表
+ * @property fallbackThumbnailUri 生成并保存的本地保底封面 URI（若有）
+ */
+data class ScanRepositorySyncResult(
+    val insertedIds: List<Int> = emptyList(),
+    val fallbackThumbnailUri: String? = null,
+)
+
+/**
+ * 后台元数据补全进度的通知反馈事件。
+ */
+sealed interface MetadataScanFeedback {
+    /** 元数据补全进行中 */
+    data class Progress(val completed: Int, val total: Int) : MetadataScanFeedback
+
+    /** 本轮补全全部结束 */
+    data class Completed(val total: Int) : MetadataScanFeedback
+
+    /** 因异常中止而清除进度通知 */
+    data object Cancelled : MetadataScanFeedback
+}
+
+/**
+ * 扫描协调器的轻量日志输出回调。
+ */
+fun interface DownloadScanLogger {
+    /** 记录信息或告警日志 */
+    fun log(isWarning: Boolean, message: String, throwable: Throwable?)
+}
+
+/**
+ * 文件夹扫描与元数据补全的数据源抽象接口，以粗粒度语义隔离存储、视频探测、在线接口与数据库同步。
  */
 interface DownloadScanDataSource {
-    /** 列出目标目录当前单层的文件候选列表 */
-    suspend fun listFiles(treeUriString: String?): List<ScannedFileCandidate>
+    /** 扫描目标单层目录并获取库内现有记录快照 */
+    suspend fun scanLocalDirectory(treeUriString: String?): LocalDirectoryScanSnapshot
 
-    /** 检查指定 URI 字符串对应的物理文件是否仍然存在可读 */
-    suspend fun uriExists(uriString: String): Boolean
-
-    /** 探测本地视频文件的轨道有效性、时长与分辨率，非有效视频返回 null */
-    suspend fun probeVideo(uriString: String): ProbedVideoMediaInfo?
-
-    /** 读取数据库中现有的全部已下载记录 */
-    suspend fun getExistingItems(): List<DownloadItem>
-
-    /** 插入一条新导入的本地保底下载记录并返回自增主键 ID */
-    suspend fun insertItem(item: DownloadItem): Int
-
-    /** 修复已有记录的本地文件 URI、大小、时长与兜底清晰度 */
-    suspend fun repairItemLocation(
-        id: Int,
-        uri: String,
-        sizeBytes: Long,
-        durationMs: Long,
-        quality: String,
-    )
+    /** 校验本地视频 URI 是否存在可读，并按需探测视频时长与分辨率 */
+    suspend fun inspectLocalVideo(
+        uriString: String,
+        extractMediaInfo: Boolean = true,
+    ): LocalVideoInspection
 
     /** 联网请求 Iwara 接口获取指定视频 ID 的在线元数据 */
     suspend fun fetchOnlineVideo(resourceId: String): Video
 
-    /** 将联网获取到的完整元数据回填至数据库指定记录 */
-    suspend fun updateItemMetadata(
-        id: Int,
-        title: String,
-        thumbnail: String,
-        authorId: String,
-        authorName: String,
-        authorAvatar: String,
-        publishedAtEpochSeconds: Long,
-        quality: String,
-    )
-
-    /** 在线封面不可用（如原视频删稿或作者销号）时，从本地视频截取画面生成持久化兜底封面并回填数据库 */
-    suspend fun generateAndSaveFallbackThumbnail(
-        itemId: Int,
-        resourceId: String,
-        videoUriString: String,
-        durationMs: Long,
-    ): String? {
-        return null
-    }
-
-    /** 发送或更新系统栏元数据获取进度通知 */
-    fun notifyMetadataProgress(completed: Int, total: Int)
-
-    /** 发送系统栏元数据获取完成通知 */
-    fun notifyMetadataComplete(total: Int)
-
-    /** 取消系统栏元数据获取进度通知 */
-    fun cancelMetadataProgressNotification()
+    /** 同步执行路径修复、新记录入库、在线元数据回填及本地第 6 秒保底封面写入 */
+    suspend fun syncRepository(operations: ScanRepositorySync): ScanRepositorySyncResult
 }
 
 /**
@@ -272,18 +329,89 @@ class AndroidDownloadScanDataSource(
     private val downloadDao: DownloadDao,
     private val mediaRepo: MediaRepo,
 ) : DownloadScanDataSource {
-    override suspend fun listFiles(treeUriString: String?): List<ScannedFileCandidate> {
-        return downloadStorage.listSingleLevelFiles(treeUriString)
+    override suspend fun scanLocalDirectory(treeUriString: String?): LocalDirectoryScanSnapshot {
+        val files = downloadStorage.listSingleLevelFiles(treeUriString)
+        if (files.isEmpty()) {
+            return LocalDirectoryScanSnapshot(files = emptyList(), existingItems = emptyList())
+        }
+        return LocalDirectoryScanSnapshot(
+            files = files,
+            existingItems = downloadDao.getAllDownloadedItems(),
+        )
     }
 
-    override suspend fun uriExists(uriString: String): Boolean {
-        if (uriString.isBlank()) return false
-        val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return false
-        return downloadStorage.exists(uri)
+    override suspend fun inspectLocalVideo(
+        uriString: String,
+        extractMediaInfo: Boolean,
+    ): LocalVideoInspection {
+        if (uriString.isBlank()) return LocalVideoInspection(exists = false)
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull()
+            ?: return LocalVideoInspection(exists = false)
+        val exists = downloadStorage.exists(uri)
+        if (!exists || !extractMediaInfo) {
+            return LocalVideoInspection(exists = exists, mediaInfo = null)
+        }
+        return LocalVideoInspection(exists = true, mediaInfo = probeVideo(uri, uriString))
     }
 
-    override suspend fun probeVideo(uriString: String): ProbedVideoMediaInfo? {
-        val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
+    override suspend fun fetchOnlineVideo(resourceId: String): Video {
+        return mediaRepo.getVideo(resourceId)
+    }
+
+    override suspend fun syncRepository(operations: ScanRepositorySync): ScanRepositorySyncResult {
+        for (repair in operations.locationRepairs) {
+            downloadDao.repairDownloadedFileLocation(
+                id = repair.id,
+                uri = repair.uri,
+                sizeBytes = repair.sizeBytes,
+                durationMs = repair.durationMs,
+                quality = repair.quality,
+            )
+        }
+
+        val insertedIds =
+            operations.newItems.map { item ->
+                downloadDao.insertDownloadItem(item).toInt()
+            }
+
+        val fallbackUri =
+            operations.fallbackThumbnail?.let { fallback ->
+                LocalVideoThumbnailGenerator.generateAndSaveThumbnail(
+                    context = context,
+                    resourceId = fallback.resourceId,
+                    videoUriString = fallback.videoUriString,
+                    knownDurationMs = fallback.durationMs,
+                )
+            }
+
+        val metadataUpdate = operations.metadataUpdate
+        if (metadataUpdate != null) {
+            val resolvedThumbnail = metadataUpdate.thumbnail.ifBlank { fallbackUri.orEmpty() }
+            downloadDao.updateScannedMetadata(
+                id = metadataUpdate.id,
+                title = metadataUpdate.title,
+                thumbnail = resolvedThumbnail,
+                authorId = metadataUpdate.authorId,
+                authorName = metadataUpdate.authorName,
+                authorAvatar = metadataUpdate.authorAvatar,
+                publishedAtEpochSeconds = metadataUpdate.publishedAtEpochSeconds,
+                quality = metadataUpdate.quality,
+            )
+        } else if (operations.fallbackThumbnail != null && !fallbackUri.isNullOrBlank()) {
+            downloadDao.compareAndSetThumbnail(
+                id = operations.fallbackThumbnail.itemId,
+                expectedOldThumbnail = "",
+                newThumbnail = fallbackUri,
+            )
+        }
+
+        return ScanRepositorySyncResult(
+            insertedIds = insertedIds,
+            fallbackThumbnailUri = fallbackUri,
+        )
+    }
+
+    private fun probeVideo(uri: Uri, uriString: String): ProbedVideoMediaInfo? {
         val retriever = MediaMetadataRetriever()
         return try {
             val descriptorOpened =
@@ -320,90 +448,15 @@ class AndroidDownloadScanDataSource(
             runCatching { retriever.release() }
         }
     }
-
-    override suspend fun getExistingItems(): List<DownloadItem> {
-        return downloadDao.getAllDownloadedItems()
-    }
-
-    override suspend fun insertItem(item: DownloadItem): Int {
-        return downloadDao.insertDownloadItem(item).toInt()
-    }
-
-    override suspend fun repairItemLocation(
-        id: Int,
-        uri: String,
-        sizeBytes: Long,
-        durationMs: Long,
-        quality: String,
-    ) {
-        downloadDao.repairDownloadedFileLocation(
-            id = id,
-            uri = uri,
-            sizeBytes = sizeBytes,
-            durationMs = durationMs,
-            quality = quality,
-        )
-    }
-
-    override suspend fun fetchOnlineVideo(resourceId: String): Video {
-        return mediaRepo.getVideo(resourceId)
-    }
-
-    override suspend fun updateItemMetadata(
-        id: Int,
-        title: String,
-        thumbnail: String,
-        authorId: String,
-        authorName: String,
-        authorAvatar: String,
-        publishedAtEpochSeconds: Long,
-        quality: String,
-    ) {
-        downloadDao.updateScannedMetadata(
-            id = id,
-            title = title,
-            thumbnail = thumbnail,
-            authorId = authorId,
-            authorName = authorName,
-            authorAvatar = authorAvatar,
-            publishedAtEpochSeconds = publishedAtEpochSeconds,
-            quality = quality,
-        )
-    }
-
-    override suspend fun generateAndSaveFallbackThumbnail(
-        itemId: Int,
-        resourceId: String,
-        videoUriString: String,
-        durationMs: Long,
-    ): String? {
-        val localThumbUri =
-            LocalVideoThumbnailGenerator.generateAndSaveThumbnail(
-                context = context,
-                resourceId = resourceId,
-                videoUriString = videoUriString,
-                knownDurationMs = durationMs,
-            ) ?: return null
-        downloadDao.compareAndSetThumbnail(
-            id = itemId,
-            expectedOldThumbnail = "",
-            newThumbnail = localThumbUri,
-        )
-        return localThumbUri
-    }
-
-    override fun notifyMetadataProgress(completed: Int, total: Int) {
-        DownloadNotifications.showMetadataScanProgressNotification(context, completed, total)
-    }
-
-    override fun notifyMetadataComplete(total: Int) {
-        DownloadNotifications.showMetadataScanCompleteNotification(context, total)
-    }
-
-    override fun cancelMetadataProgressNotification() {
-        DownloadNotifications.cancelMetadataScanProgressNotification(context)
-    }
 }
+
+/**
+ * 待导入新记录及其对应的元数据补全模板。
+ */
+private data class PendingNewImport(
+    val item: DownloadItem,
+    val enrichTargetTemplate: MetadataEnrichTarget,
+)
 
 /**
  * 视频下载文件夹扫描与后台元数据补全协调器。
@@ -411,12 +464,14 @@ class AndroidDownloadScanDataSource(
  * 职责：
  * 1. 同步扫描目标单层目录中符合 `标题_视频ID.mp4` 规则的有效视频，按 `resourceId` 择优去重并立即写入本地保底记录；
  * 2. 对需要补全封面、作者与完整标题的视频启动应用级后台任务，温和并发拉取在线信息；
- * 3. 通过 [metadataProgress] 向「已下载视频」页实时广播进度，并联动系统栏进度通知与完成通知。
+ * 3. 通过 [metadataProgress] 向「已下载视频」页实时广播进度，并通过回调触发通知与日志记录。
  */
 class DownloadFolderScanner(
     private val dataSource: DownloadScanDataSource,
     private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val metadataConcurrency: Int = DEFAULT_METADATA_CONCURRENCY,
+    private val onMetadataFeedback: (MetadataScanFeedback) -> Unit = {},
+    private val logger: DownloadScanLogger = DownloadScanLogger { _, _, _ -> },
 ) {
     private val scanMutex = Mutex()
     private val enrichLock = Any()
@@ -436,10 +491,11 @@ class DownloadFolderScanner(
     suspend fun scanAndImport(treeUriString: String?): ScanFolderSummary =
         withContext(Dispatchers.IO) {
             scanMutex.withLock {
-                val rawFiles = dataSource.listFiles(treeUriString)
+                val snapshot = dataSource.scanLocalDirectory(treeUriString)
                 // 仅保留文件大小 > 0 且符合标准命名的候选文件；同一视频 ID 存在多个文件时取体积最大者
-                val bestCandidateByResourceId = LinkedHashMap<String, Pair<ParsedIwaraFileName, ScannedFileCandidate>>()
-                for (candidate in rawFiles) {
+                val bestCandidateByResourceId =
+                    LinkedHashMap<String, Pair<ParsedIwaraFileName, ScannedFileCandidate>>()
+                for (candidate in snapshot.files) {
                     coroutineContext.ensureActive()
                     if (candidate.sizeBytes <= 0L) continue
                     val parsed = parseIwaraDownloadFileName(candidate.displayName) ?: continue
@@ -458,12 +514,11 @@ class DownloadFolderScanner(
                     )
                 }
 
-                val existingByResourceId =
-                    dataSource.getExistingItems().associateBy { it.resourceId }
+                val existingByResourceId = snapshot.existingItems.associateBy { it.resourceId }
 
-                var newlyImportedCount = 0
-                var repairedCount = 0
                 var skippedExistingCount = 0
+                val repairs = mutableListOf<ScannedLocationRepair>()
+                val pendingNewImports = mutableListOf<PendingNewImport>()
                 val enrichTargets = mutableListOf<MetadataEnrichTarget>()
 
                 for ((resourceId, pair) in bestCandidateByResourceId) {
@@ -472,14 +527,23 @@ class DownloadFolderScanner(
                     val existing = existingByResourceId[resourceId]
 
                     if (existing != null) {
-                        val existingFileValid = dataSource.uriExists(existing.uri)
+                        val existingFileValid =
+                            dataSource
+                                .inspectLocalVideo(existing.uri, extractMediaInfo = false)
+                                .exists
                         val metadataComplete = existing.thumbnail.isNotBlank()
                         if (existingFileValid && metadataComplete) {
                             skippedExistingCount++
                             continue
                         }
 
-                        val mediaInfo = dataSource.probeVideo(fileCandidate.uriString) ?: continue
+                        val mediaInfo =
+                            dataSource
+                                .inspectLocalVideo(
+                                    fileCandidate.uriString,
+                                    extractMediaInfo = true,
+                                )
+                                .mediaInfo ?: continue
                         val localQuality =
                             inferIwaraVideoQuality(
                                 width = mediaInfo.width,
@@ -487,14 +551,14 @@ class DownloadFolderScanner(
                             )
 
                         if (!existingFileValid) {
-                            dataSource.repairItemLocation(
-                                id = existing.id,
-                                uri = fileCandidate.uriString,
-                                sizeBytes = fileCandidate.sizeBytes,
-                                durationMs = mediaInfo.durationMs,
-                                quality = localQuality,
-                            )
-                            repairedCount++
+                            repairs +=
+                                ScannedLocationRepair(
+                                    id = existing.id,
+                                    uri = fileCandidate.uriString,
+                                    sizeBytes = fileCandidate.sizeBytes,
+                                    durationMs = mediaInfo.durationMs,
+                                    quality = localQuality,
+                                )
                         }
 
                         if (!metadataComplete) {
@@ -513,8 +577,11 @@ class DownloadFolderScanner(
                         continue
                     }
 
-                    // 数据库中尚无该 resourceId：校验视频轨道并写入本地保底记录
-                    val mediaInfo = dataSource.probeVideo(fileCandidate.uriString) ?: continue
+                    // 数据库中尚无该 resourceId：校验视频轨道并纳入批量本地保底入库列表
+                    val mediaInfo =
+                        dataSource
+                            .inspectLocalVideo(fileCandidate.uriString, extractMediaInfo = true)
+                            .mediaInfo ?: continue
                     val localQuality =
                         inferIwaraVideoQuality(
                             width = mediaInfo.width,
@@ -526,36 +593,51 @@ class DownloadFolderScanner(
                         } else {
                             Instant.now()
                         }
-                    val insertedId =
-                        dataSource.insertItem(
-                            DownloadItem(
-                                title = parsed.title,
-                                thumbnail = "",
-                                uri = fileCandidate.uriString,
-                                type = DownloadType.VIDEO,
-                                resourceId = resourceId,
-                                time = recordTime,
-                                authorId = "",
-                                authorName = "",
-                                authorAvatar = "",
-                                sizeBytes = fileCandidate.sizeBytes,
-                                quality = localQuality,
-                                durationMs = mediaInfo.durationMs,
-                                publishedAtEpochSeconds = 0L,
+                    val newItem =
+                        DownloadItem(
+                            title = parsed.title,
+                            thumbnail = "",
+                            uri = fileCandidate.uriString,
+                            type = DownloadType.VIDEO,
+                            resourceId = resourceId,
+                            time = recordTime,
+                            authorId = "",
+                            authorName = "",
+                            authorAvatar = "",
+                            sizeBytes = fileCandidate.sizeBytes,
+                            quality = localQuality,
+                            durationMs = mediaInfo.durationMs,
+                            publishedAtEpochSeconds = 0L,
+                        )
+                    pendingNewImports +=
+                        PendingNewImport(
+                            item = newItem,
+                            enrichTargetTemplate =
+                                MetadataEnrichTarget(
+                                    itemId = 0,
+                                    resourceId = resourceId,
+                                    videoUriString = fileCandidate.uriString,
+                                    durationMs = mediaInfo.durationMs,
+                                    fallbackTitle = parsed.title,
+                                    localQuality = localQuality,
+                                    localWidth = mediaInfo.width,
+                                    localHeight = mediaInfo.height,
+                                ),
+                        )
+                }
+
+                if (repairs.isNotEmpty() || pendingNewImports.isNotEmpty()) {
+                    val syncResult =
+                        dataSource.syncRepository(
+                            ScanRepositorySync(
+                                locationRepairs = repairs,
+                                newItems = pendingNewImports.map { it.item },
                             )
                         )
-                    newlyImportedCount++
-                    enrichTargets +=
-                        MetadataEnrichTarget(
-                            itemId = insertedId,
-                            resourceId = resourceId,
-                            videoUriString = fileCandidate.uriString,
-                            durationMs = mediaInfo.durationMs,
-                            fallbackTitle = parsed.title,
-                            localQuality = localQuality,
-                            localWidth = mediaInfo.width,
-                            localHeight = mediaInfo.height,
-                        )
+                    pendingNewImports.forEachIndexed { index, pending ->
+                        val insertedId = syncResult.insertedIds.getOrNull(index) ?: return@forEachIndexed
+                        enrichTargets += pending.enrichTargetTemplate.copy(itemId = insertedId)
+                    }
                 }
 
                 if (enrichTargets.isNotEmpty()) {
@@ -563,8 +645,8 @@ class DownloadFolderScanner(
                 }
 
                 ScanFolderSummary(
-                    newlyImportedCount = newlyImportedCount,
-                    repairedCount = repairedCount,
+                    newlyImportedCount = pendingNewImports.size,
+                    repairedCount = repairs.size,
                     metadataTargetCount = enrichTargets.size,
                     skippedExistingCount = skippedExistingCount,
                 )
@@ -593,7 +675,7 @@ class DownloadFolderScanner(
     }
 
     /**
-     * 执行单批次在线元数据拉取，实时更新 StateFlow 进度与系统通知。
+     * 执行单批次在线元数据拉取，实时更新 StateFlow 进度并回调通知反馈。
      */
     private suspend fun runEnrichmentBatch(targets: List<MetadataEnrichTarget>) {
         val total = targets.size
@@ -601,7 +683,7 @@ class DownloadFolderScanner(
 
         val completedCounter = AtomicInteger(0)
         _metadataProgress.value = MetadataScanProgress(completed = 0, total = total)
-        dataSource.notifyMetadataProgress(completed = 0, total = total)
+        onMetadataFeedback(MetadataScanFeedback.Progress(completed = 0, total = total))
 
         try {
             val semaphore = Semaphore(metadataConcurrency.coerceAtLeast(1))
@@ -618,27 +700,36 @@ class DownloadFolderScanner(
                                 val done = completedCounter.incrementAndGet()
                                 _metadataProgress.value =
                                     MetadataScanProgress(completed = done, total = total)
-                                dataSource.notifyMetadataProgress(completed = done, total = total)
+                                onMetadataFeedback(
+                                    MetadataScanFeedback.Progress(completed = done, total = total)
+                                )
                             }
                         }
                     }
                     .awaitAll()
             }
             _metadataProgress.value = null
-            dataSource.notifyMetadataComplete(total = total)
+            onMetadataFeedback(MetadataScanFeedback.Completed(total = total))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            safeLogWarn("runEnrichmentBatch: 后台元数据拉取异常中断", e)
+            logger.log(isWarning = true, message = "runEnrichmentBatch: 后台元数据拉取异常中断", throwable = e)
             _metadataProgress.value = null
-            dataSource.cancelMetadataProgressNotification()
+            onMetadataFeedback(MetadataScanFeedback.Cancelled)
         }
     }
 
     /**
-     * 拉取单个视频的在线信息并回填数据库；若原视频已删稿（404）、无封面或断网，则自动截取本地视频第 6 秒画面作为封面。
+     * 拉取单个视频的在线信息并回填数据库；若原视频已删稿（404）、无封面或断网，则生成本地第 6 秒画面作为封面。
      */
     private suspend fun enrichSingleTarget(target: MetadataEnrichTarget) {
+        val fallbackRequest =
+            FallbackThumbnailSyncRequest(
+                itemId = target.itemId,
+                resourceId = target.resourceId,
+                videoUriString = target.videoUriString,
+                durationMs = target.durationMs,
+            )
         try {
             val video = dataSource.fetchOnlineVideo(target.resourceId)
             val resolvedQuality =
@@ -654,49 +745,32 @@ class DownloadFolderScanner(
                 } else {
                     ""
                 }
-            val finalThumbnail =
-                onlineThumbnail.ifBlank {
-                    dataSource.generateAndSaveFallbackThumbnail(
-                        itemId = target.itemId,
-                        resourceId = target.resourceId,
-                        videoUriString = target.videoUriString,
-                        durationMs = target.durationMs,
-                    ).orEmpty()
-                }
-            dataSource.updateItemMetadata(
-                id = target.itemId,
-                title = video.title.ifBlank { target.fallbackTitle },
-                thumbnail = finalThumbnail,
-                authorId = video.user?.username ?: video.user?.id.orEmpty(),
-                authorName = video.user?.name.orEmpty(),
-                authorAvatar = (video.user?.avatar).toAvatarUrl(),
-                publishedAtEpochSeconds = video.createdAt.epochSecond,
-                quality = resolvedQuality,
+            dataSource.syncRepository(
+                ScanRepositorySync(
+                    metadataUpdate =
+                        ScannedMetadataUpdate(
+                            id = target.itemId,
+                            title = video.title.ifBlank { target.fallbackTitle },
+                            thumbnail = onlineThumbnail,
+                            authorId = video.user?.username ?: video.user?.id.orEmpty(),
+                            authorName = video.user?.name.orEmpty(),
+                            authorAvatar = (video.user?.avatar).toAvatarUrl(),
+                            publishedAtEpochSeconds = video.createdAt.epochSecond,
+                            quality = resolvedQuality,
+                        ),
+                    fallbackThumbnail = if (onlineThumbnail.isBlank()) fallbackRequest else null,
+                )
             )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            safeLogInfo(
-                "enrichSingleTarget: 视频在线元数据不可用，使用本地第 6 秒封面保底 resourceId=${target.resourceId}, reason=${e.message}"
+            logger.log(
+                isWarning = false,
+                message =
+                    "enrichSingleTarget: 视频在线元数据不可用，使用本地第 6 秒封面保底 resourceId=${target.resourceId}, reason=${e.message}",
+                throwable = null,
             )
-            dataSource.generateAndSaveFallbackThumbnail(
-                itemId = target.itemId,
-                resourceId = target.resourceId,
-                videoUriString = target.videoUriString,
-                durationMs = target.durationMs,
-            )
+            dataSource.syncRepository(ScanRepositorySync(fallbackThumbnail = fallbackRequest))
         }
-    }
-
-    private fun safeLogInfo(message: String) {
-        try {
-            Log.i(TAG, message)
-        } catch (_: Throwable) {}
-    }
-
-    private fun safeLogWarn(message: String, throwable: Throwable) {
-        try {
-            Log.w(TAG, message, throwable)
-        } catch (_: Throwable) {}
     }
 }

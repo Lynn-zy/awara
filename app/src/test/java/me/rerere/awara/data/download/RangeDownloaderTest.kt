@@ -1,7 +1,9 @@
 package me.rerere.awara.data.download
 
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.InetAddress
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -16,6 +18,7 @@ import kotlinx.coroutines.withTimeout
 import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -24,14 +27,19 @@ import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/** 所有请求都在回环测试服务上进行，不使用真实账号、签名地址或视频。 */
-class SegmentedDownloaderTest {
+/** 验证 [RangeDownloader] 通过公开 `download(...)` 接口驱动的并发分块、断点侧车状态、错误拒绝与回退收敛。 */
+class RangeDownloaderTest {
     @get:Rule val temporary = TemporaryFolder()
     private val payload = ByteArray(64) { (it + 1).toByte() }
     private val etag = "\"fixture-etag\""
@@ -61,13 +69,14 @@ class SegmentedDownloaderTest {
         server.shutdown()
     }
 
-    /** 从实际 Range 构造严格匹配的响应，便于把每个错误边界独立注入。 */
+    /** 从实际 Range 构造严格匹配的 206 响应。 */
     private fun responseFor(request: RecordedRequest): MockResponse {
         val match =
-            Regex("bytes=(\\d+)-(\\d+)").matchEntire(request.getHeader("Range").orEmpty())
+            Regex("bytes=(\\d+)-(\\d*)").matchEntire(request.getHeader("Range").orEmpty())
                 ?: return MockResponse().setResponseCode(400)
         val start = match.groupValues[1].toInt()
-        val end = match.groupValues[2].toInt()
+        val end =
+            match.groupValues[2].takeIf { it.isNotEmpty() }?.toInt() ?: (payload.size - 1)
         return MockResponse()
             .setResponseCode(206)
             .setHeader("Content-Range", "bytes $start-$end/${payload.size}")
@@ -83,10 +92,10 @@ class SegmentedDownloaderTest {
             }
     }
 
-    /** 将指定完成区间写入真实磁盘和日志，区间之外保留空洞。 */
+    /** 将指定完成区间写入真实磁盘与区间日志，区间之外保留零空洞。 */
     private fun seed(file: java.io.File, ranges: List<Pair<Long, Long>>) {
         file.writeBytes(ByteArray(payload.size))
-        java.io.RandomAccessFile(file, "rw").use { output ->
+        RandomAccessFile(file, "rw").use { output ->
             ranges.forEach { (start, end) ->
                 output.seek(start)
                 output.write(payload, start.toInt(), (end - start + 1).toInt())
@@ -116,17 +125,15 @@ class SegmentedDownloaderTest {
                 val file = temporary.newFile()
                 val progress = mutableListOf<Long>()
                 var newBytes = 0L
-                assertTrue(
-                    SegmentedDownloader(client, 16)
-                        .download(
-                            url,
-                            file,
-                            null,
-                            connections = 1,
-                            onBytesDownloaded = { newBytes += it },
-                            onProgress = { count, _ -> progress.add(count) },
-                        )
-                )
+                RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                    .download(
+                        url = url,
+                        targetFile = file,
+                        validator = null,
+                        connections = 1,
+                        onBytesDownloaded = { newBytes += it },
+                        onProgress = { count, _ -> progress.add(count) },
+                    )
                 assertArrayEquals(payload, file.readBytes())
                 assertEquals(64L, newBytes)
                 assertEquals(listOf(0L, 64L), progress)
@@ -162,10 +169,8 @@ class SegmentedDownloaderTest {
                 }
                 val file = temporary.newFile()
                 val progress = mutableListOf<Long>()
-                assertTrue(
-                    SegmentedDownloader(client, 16)
-                        .download(url, file, null, onProgress = { count, _ -> progress.add(count) })
-                )
+                RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                    .download(url, file, null, onProgress = { count, _ -> progress.add(count) })
                 assertEquals(0L, arrived.count)
                 assertArrayEquals(payload, file.readBytes())
                 assertTrue(progress.zipWithNext().all { (previous, next) -> next >= previous })
@@ -201,26 +206,21 @@ class SegmentedDownloaderTest {
                     }
                 }
                 val file = temporary.newFile()
-                assertTrue(
-                    SegmentedDownloader(client, 16, connectionTracker = tracker)
-                        .download(url, file, null, connections = 2, onProgress = { _, _ -> })
-                )
+                RangeDownloader(okHttpClient = client, blockSizeBytes = 16, connectionTracker = tracker)
+                    .download(url, file, null, connections = 2, onProgress = { _, _ -> })
                 assertArrayEquals(payload, file.readBytes())
 
-                // 验证并发双路峰值：1 host，2 真实正文连接
                 assertNotNull(snapshotAtPeak)
                 assertEquals(2, snapshotAtPeak!!.connectionCount)
                 assertEquals(1, snapshotAtPeak!!.nodeCount)
                 val expectedHost = server.hostName.lowercase()
                 assertEquals(listOf(expectedHost, expectedHost), snapshotAtPeak!!.hosts)
 
-                // 验证下载结束后完全归零
                 val finalSnapshot = tracker.snapshot.value
                 assertEquals(0, finalSnapshot.connectionCount)
                 assertEquals(0, finalSnapshot.nodeCount)
                 assertTrue(finalSnapshot.hosts.isEmpty())
 
-                // 验证关闭后拒绝迟到登记
                 tracker.close()
                 assertFalse(tracker.register(Any(), expectedHost))
             }
@@ -233,10 +233,8 @@ class SegmentedDownloaderTest {
             seed(file, listOf(0L to 15L, 48L to 63L))
             assertEquals(64L, file.length())
             assertEquals(32L, DownloadRangeStore.completedBytes(file))
-            assertTrue(
-                SegmentedDownloader(client, 16)
-                    .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
-            )
+            RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
             assertArrayEquals(payload, file.readBytes())
             val ranges = (0 until 3).map { server.takeRequest().getHeader("Range") }
             assertEquals(listOf("bytes=0-0", "bytes=16-31", "bytes=32-47"), ranges)
@@ -247,7 +245,7 @@ class SegmentedDownloaderTest {
         runBlocking<Unit> {
             val file = temporary.newFile()
             seed(file, listOf(0L to 15L, 48L to 63L))
-            ResumableDownloader(client).download(url, file, etag, 64, onProgress = { _, _ -> })
+            RangeDownloader(client).download(url, file, etag, 64, onProgress = { _, _ -> })
             assertArrayEquals(payload, file.readBytes())
             assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
             assertEquals("bytes=16-47", server.takeRequest().getHeader("Range"))
@@ -260,10 +258,8 @@ class SegmentedDownloaderTest {
             val file = temporary.newFile()
             seed(file, listOf(0L to 63L))
             file.writeBytes(ByteArray(64))
-            assertTrue(
-                SegmentedDownloader(client, 16)
-                    .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
-            )
+            RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
             assertEquals(5, server.requestCount)
             assertArrayEquals(payload, file.readBytes())
         }
@@ -272,17 +268,8 @@ class SegmentedDownloaderTest {
     fun untrustedSequentialPrefixCannotBeMixedWithNewResource() =
         runBlocking<Unit> {
             val file = temporary.newFile().apply { writeText("BAD_PREFIX") }
-            assertTrue(
-                SegmentedDownloader(client, 16)
-                    .download(
-                        url,
-                        file,
-                        "\"old-etag\"",
-                        64,
-                        connections = 1,
-                        onProgress = { _, _ -> },
-                    )
-            )
+            RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                .download(url, file, "\"old-etag\"", 64, connections = 1, onProgress = { _, _ -> })
             assertArrayEquals(payload, file.readBytes())
         }
 
@@ -290,10 +277,8 @@ class SegmentedDownloaderTest {
     fun matchingSequentialPrefixIsUpgradedAndPreserved() =
         runBlocking<Unit> {
             val file = temporary.newFile().apply { writeBytes(payload.copyOfRange(0, 16)) }
-            assertTrue(
-                SegmentedDownloader(client, 16)
-                    .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
-            )
+            RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
             assertEquals(4, server.requestCount)
             assertEquals("bytes=0-0", server.takeRequest().getHeader("Range"))
             assertEquals("bytes=16-31", server.takeRequest().getHeader("Range"))
@@ -308,7 +293,7 @@ class SegmentedDownloaderTest {
                 lateinit var task: Job
                 task =
                     launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
-                        SegmentedDownloader(client, 16)
+                        RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
                             .download(
                                 url,
                                 file,
@@ -326,10 +311,8 @@ class SegmentedDownloaderTest {
                 assertTrue(task.isCancelled)
                 assertEquals(16L, DownloadRangeStore.completedBytes(file))
                 val countBeforeResume = server.requestCount
-                assertTrue(
-                    SegmentedDownloader(client, 16)
-                        .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
-                )
+                RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                    .download(url, file, etag, 64, connections = 1, onProgress = { _, _ -> })
                 assertArrayEquals(payload, file.readBytes())
                 repeat(countBeforeResume) { server.takeRequest() }
                 val resumedRanges = (0 until 4).map { server.takeRequest().getHeader("Range") }
@@ -337,7 +320,6 @@ class SegmentedDownloaderTest {
             }
         }
 
-    /** 暂停不仅保留数字：协程取消和直接取消 Call 都必须把已接收前缀保存为可恢复区间。 */
     @Test
     fun pausingMidChunkRetainsDisplayedBytesAndResumesOnlyTheRemainder() =
         runBlocking<Unit> {
@@ -347,7 +329,7 @@ class SegmentedDownloaderTest {
                     val file = temporary.newFile()
                     var displayed = 0L
                     lateinit var task: Job
-                    lateinit var activeCall: okhttp3.Call
+                    lateinit var activeCall: Call
                     dispatch { request ->
                         responseFor(request).apply {
                             if (request.getHeader("Range") != "bytes=0-0") {
@@ -358,7 +340,7 @@ class SegmentedDownloaderTest {
                     task =
                         launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
                             try {
-                                SegmentedDownloader(client, 64)
+                                RangeDownloader(okHttpClient = client, blockSizeBytes = 64)
                                     .download(
                                         url,
                                         file,
@@ -389,17 +371,15 @@ class SegmentedDownloaderTest {
                         assertNotNull(server.takeRequest(1, TimeUnit.SECONDS))
                     }
                     dispatch { responseFor(it) }
-                    assertTrue(
-                        SegmentedDownloader(client, 64)
-                            .download(
-                                url,
-                                file,
-                                etag,
-                                64,
-                                connections = 1,
-                                onProgress = { _, _ -> },
-                            )
-                    )
+                    RangeDownloader(okHttpClient = client, blockSizeBytes = 64)
+                        .download(
+                            url,
+                            file,
+                            etag,
+                            64,
+                            connections = 1,
+                            onProgress = { _, _ -> },
+                        )
                     assertEquals(
                         "bytes=0-0",
                         server.takeRequest(1, TimeUnit.SECONDS)!!.getHeader("Range"),
@@ -413,7 +393,6 @@ class SegmentedDownloaderTest {
             }
         }
 
-    /** 双路同时收到部分区间时，两段都要保存；不能只保留逻辑文件长度或其中一路。 */
     @Test
     fun pausingBothConnectionsPersistsTwoPartialRangesWithoutHolesBeingCounted() =
         runBlocking<Unit> {
@@ -435,7 +414,7 @@ class SegmentedDownloaderTest {
                 }
                 task =
                     launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
-                        SegmentedDownloader(client, 32)
+                        RangeDownloader(okHttpClient = client, blockSizeBytes = 32)
                             .download(
                                 url,
                                 file,
@@ -456,28 +435,28 @@ class SegmentedDownloaderTest {
                 assertTrue(saved.completedBytes >= displayed)
                 assertFalse(saved.isComplete)
                 dispatch { responseFor(it) }
-                assertTrue(
-                    SegmentedDownloader(client, 32)
-                        .download(url, file, etag, 64, onProgress = { _, _ -> })
-                )
+                RangeDownloader(okHttpClient = client, blockSizeBytes = 32)
+                    .download(url, file, etag, 64, onProgress = { _, _ -> })
                 assertArrayEquals(payload, file.readBytes())
             }
         }
 
     @Test
-    fun rangeIgnoredOrWeakValidatorReturnsSafeFallback() =
+    fun rangeIgnoredOrWeakValidatorSafelyFallsBackThroughPublicDownload() =
         runBlocking<Unit> {
             val file = temporary.newFile().apply { writeText("prefix") }
             dispatch { MockResponse().setResponseCode(200).setBody("replacement") }
-            assertFalse(
-                SegmentedDownloader(client, 16).download(url, file, etag, onProgress = { _, _ -> })
-            )
-            assertEquals("prefix", file.readText())
-            dispatch { responseFor(it).setHeader("ETag", "W/$etag") }
-            assertFalse(
-                SegmentedDownloader(client, 16).download(url, file, null, onProgress = { _, _ -> })
-            )
+            RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                .download(url, file, etag, onProgress = { _, _ -> })
+            assertEquals("replacement", file.readText())
             assertFalse(DownloadRangeStore.hasState(file))
+
+            val weakFile = temporary.newFile()
+            dispatch { responseFor(it).setHeader("ETag", "W/$etag") }
+            RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
+                .download(url, weakFile, null, onProgress = { _, _ -> })
+            assertArrayEquals(payload, weakFile.readBytes())
+            assertFalse(DownloadRangeStore.hasState(weakFile))
         }
 
     @Test
@@ -485,7 +464,7 @@ class SegmentedDownloaderTest {
         runBlocking<Unit> {
             val file = temporary.newFile()
             dispatch { MockResponse().setResponseCode(200).setBody(Buffer().write(payload)) }
-            ResumableDownloader(client).download(url, file, null, onProgress = { _, _ -> })
+            RangeDownloader(client).download(url, file, null, onProgress = { _, _ -> })
             assertArrayEquals(payload, file.readBytes())
             assertEquals(2, server.requestCount)
         }
@@ -504,7 +483,7 @@ class SegmentedDownloaderTest {
                 val file = temporary.newFile()
                 dispatch { corrupt(responseFor(it)) }
                 try {
-                    SegmentedDownloader(client, 16)
+                    RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
                         .download(url, file, null, onProgress = { _, _ -> })
                     fail("错误探测必须拒绝")
                 } catch (_: IOException) {
@@ -527,7 +506,7 @@ class SegmentedDownloaderTest {
                     }
                 }
                 try {
-                    SegmentedDownloader(client, 16)
+                    RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
                         .download(url, file, null, connections = 1, onProgress = { _, _ -> })
                     fail("不一致分块必须拒绝")
                 } catch (_: IOException) {
@@ -537,7 +516,6 @@ class SegmentedDownloaderTest {
             }
         }
 
-    /** 声明完整长度但实际提前断流的正文，不能进入已完成区间日志。 */
     @Test
     fun truncatedChunkRetainsNoCompletedRange() =
         runBlocking<Unit> {
@@ -554,7 +532,7 @@ class SegmentedDownloaderTest {
                     }
                 }
                 try {
-                    SegmentedDownloader(client, 16)
+                    RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
                         .download(
                             url,
                             file,
@@ -571,13 +549,12 @@ class SegmentedDownloaderTest {
             }
         }
 
-    /** 两路请求同时等待正文时，协程取消应即时触发所有 Call.cancel。 */
     @Test
     fun cancellationStopsBothBlockedRequests() =
         runBlocking<Unit> {
             withTimeout(7000) {
                 val waiting = CountDownLatch(2)
-                val calls = java.util.Collections.synchronizedList(mutableListOf<okhttp3.Call>())
+                val calls = Collections.synchronizedList(mutableListOf<Call>())
                 dispatch { request ->
                     responseFor(request).apply {
                         if (request.getHeader("Range") != "bytes=0-0") {
@@ -589,7 +566,7 @@ class SegmentedDownloaderTest {
                 val file = temporary.newFile()
                 val task =
                     launch(Dispatchers.Default) {
-                        SegmentedDownloader(client, 16)
+                        RangeDownloader(okHttpClient = client, blockSizeBytes = 16)
                             .download(
                                 url,
                                 file,

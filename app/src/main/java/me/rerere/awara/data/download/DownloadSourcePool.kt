@@ -6,11 +6,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -20,6 +17,8 @@ import kotlinx.coroutines.withContext
 import me.rerere.awara.data.cdn.CdnDirectory
 import me.rerere.awara.data.cdn.CdnFailureAction
 import me.rerere.awara.data.cdn.CdnPolicy
+import me.rerere.awara.data.cdn.validateMediaResponseHeaders
+import me.rerere.awara.data.cdn.withCancellableCall
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import me.rerere.awara.util.await
@@ -442,7 +441,7 @@ internal class DownloadSourcePool(
             expectedValidator: String?,
             onBind: ((Call) -> Unit)?,
             onUnbind: ((Call) -> Unit)?,
-        ): Pair<String, ByteArray> = coroutineScope {
+        ): Pair<String, ByteArray> {
             val request =
                 Request.Builder()
                     .url(url)
@@ -452,16 +451,7 @@ internal class DownloadSourcePool(
                     .apply { expectedValidator?.let { header("If-Range", it) } }
                     .build()
             val call = client.newCall(request)
-            val watcher =
-                launch(start = CoroutineStart.UNDISPATCHED) {
-                    try {
-                        awaitCancellation()
-                    } finally {
-                        call.cancel()
-                    }
-                }
-            try {
-                onBind?.invoke(call)
+            return withCancellableCall(call = call, onBindCall = onBind, onUnbindCall = onUnbind) {
                 call.await().use { response ->
                     if (response.code != 206) throw DownloadCdnHttpException(response.code)
                     val length = (range.last - range.first + 1).toInt()
@@ -470,15 +460,11 @@ internal class DownloadSourcePool(
                         response.header("Content-Range") !=
                             "bytes ${range.first}-${range.last}/$total" ||
                             !CdnPolicy.isStrongValidator(etag) ||
-                            (expectedValidator != null && etag != expectedValidator) ||
-                            response.header("Content-Encoding", "identity")!!.lowercase() !=
-                                "identity" ||
-                            response.header("Content-Type").orEmpty().lowercase().let {
-                                it.contains("text/html") || it.contains("application/json")
-                            }
+                            (expectedValidator != null && etag != expectedValidator)
                     ) {
                         throw DownloadCdnIntegrityException()
                     }
+                    response.validateMediaResponseHeaders { DownloadCdnIntegrityException() }
                     val body = response.body ?: throw DownloadCdnIntegrityException()
                     if (body.contentLength() != -1L && body.contentLength() != length.toLong())
                         throw DownloadCdnIntegrityException()
@@ -496,12 +482,6 @@ internal class DownloadSourcePool(
                     }
                     etag!! to bytes
                 }
-            } catch (exception: IOException) {
-                currentCoroutineContext().ensureActive()
-                throw exception
-            } finally {
-                watcher.cancel()
-                onUnbind?.invoke(call)
             }
         }
     }

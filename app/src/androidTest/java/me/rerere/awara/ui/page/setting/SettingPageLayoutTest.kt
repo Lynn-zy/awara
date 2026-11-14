@@ -1,40 +1,38 @@
 package me.rerere.awara.ui.page.setting
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.PlayCircle
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
-import me.rerere.awara.data.download.DownloadTransferSettings
+import me.rerere.awara.data.download.DownloadManager
+import me.rerere.awara.data.download.DownloadStorage
+import me.rerere.awara.ui.LocalRouterProvider
+import me.rerere.awara.ui.component.common.MessageProvider
+import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_PREVIEW_POSITION
+import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED
 import me.rerere.awara.ui.component.player.SeekPreviewPosition
 import me.rerere.compose_setting.preference.mmkvPreference
-import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -42,306 +40,150 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
+/**
+ * 挂载真实 [SettingPage] 与 [VersionInfoDialog] 验证窄屏大字号布局边界、关键偏好持久化及交互语义。
+ */
 @RunWith(AndroidJUnit4::class)
 class SettingPageLayoutTest {
     @get:Rule val compose = createComposeRule()
 
-    /** 实验性 CDN 连接调试开关默认关闭，标题不含“临时”字样，整行切换后持久化。 */
     @Test
-    fun cdnDebugPreferenceDefaultsOffAndPersists() {
+    fun settingPageCoreSectionsRenderInteractAndPersistPreferences() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val existed = mmkvPreference.contains(PREFERENCE_KEY_CDN_CONNECTION_DEBUG)
-        val previous = mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
-        val generation = mutableStateOf(0)
+        val keysToRestore =
+            listOf(
+                SettingKeys.DARK_MODE,
+                SettingKeys.WORK_MODE,
+                PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED,
+                PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
+                PREFERENCE_KEY_CDN_CONNECTION_DEBUG,
+                SettingKeys.DOWNLOAD_PLAYER,
+                DownloadManager.KEY_MULTI_CDN_ENABLED,
+            )
+        val snapshot = capturePreferenceSnapshot(keysToRestore)
+
         try {
+            mmkvPreference.remove(SettingKeys.DARK_MODE)
+            mmkvPreference.remove(SettingKeys.WORK_MODE)
+            mmkvPreference.remove(PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED)
+            mmkvPreference.remove(PREFERENCE_KEY_SEEK_PREVIEW_POSITION)
             mmkvPreference.remove(PREFERENCE_KEY_CDN_CONNECTION_DEBUG)
+            mmkvPreference.remove(SettingKeys.DOWNLOAD_PLAYER)
+            mmkvPreference.remove(DownloadManager.KEY_MULTI_CDN_ENABLED)
+
+            val containerWidth = 320.dp
             compose.setContent {
-                MaterialTheme {
-                    Column(Modifier.width(320.dp)) {
-                        key(generation.value) {
-                            CdnConnectionDebugSetting(
-                                rememberBooleanPreference(
-                                    PREFERENCE_KEY_CDN_CONNECTION_DEBUG,
-                                    false,
-                                )
-                            )
+                val density = LocalDensity.current
+                val router = rememberNavController()
+                CompositionLocalProvider(
+                    LocalRouterProvider provides router,
+                    LocalDensity provides Density(density.density, fontScale = 1.3f),
+                ) {
+                    MaterialTheme {
+                        MessageProvider {
+                            Box(modifier = Modifier.width(containerWidth)) {
+                                SettingPage(downloadStorage = DownloadStorage(context))
+                            }
                         }
                     }
                 }
             }
-            val title = context.getString(R.string.setting_cdn_connection_debug_title)
-            assertFalse(title.contains("临时"))
-            assertFalse(title.contains("temporary", ignoreCase = true))
+
+            // 1. 外观分组：深色模式枚举切换 + 工作模式开关及 48dp/窄屏边界校验
+            val darkModeTitle = context.getString(R.string.setting_look_darkmode_title)
+            val darkOptionLabel = context.getString(R.string.setting_look_darkmode_dark_mode)
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(darkModeTitle))
+            val darkModeNode = compose.onNodeWithText(darkModeTitle)
+            darkModeNode.assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            assertTrue(darkModeNode.getUnclippedBoundsInRoot().right <= containerWidth)
+            darkModeNode.performClick()
+            compose.onNodeWithText(darkOptionLabel).performClick()
             compose.runOnIdle {
                 assertEquals(
-                    false,
-                    mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false),
+                    DarkModeOption.DARK.value,
+                    mmkvPreference.getInt(SettingKeys.DARK_MODE, -1),
                 )
             }
-            compose.onNodeWithText(title).performClick()
+
+            val workModeTitle = context.getString(R.string.setting_look_work_mode_title)
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(workModeTitle))
+            compose.onNodeWithText(workModeTitle).assertHeightIsAtLeast(48.dp).performClick()
+            compose.runOnIdle {
+                assertTrue(mmkvPreference.getBoolean(SettingKeys.WORK_MODE, false))
+            }
+
+            // 2. 播放器分组：拖动缩略图闭合保留位置偏好 + CDN 调试开关持久化 + 下载播放器枚举切换
+            val seekPositionTitle =
+                context.getString(R.string.setting_player_seek_preview_position)
+            val seekCenterLabel = context.getString(R.string.setting_player_seek_preview_center)
+            val seekSwitchTitle = context.getString(R.string.setting_player_seek_thumbnail)
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(seekPositionTitle))
+            compose.onNodeWithText(seekPositionTitle).performClick()
+            compose.onNodeWithText(seekCenterLabel).performClick()
             compose.runOnIdle {
                 assertEquals(
-                    true,
-                    mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false),
+                    SeekPreviewPosition.Center.key,
+                    mmkvPreference.getString(PREFERENCE_KEY_SEEK_PREVIEW_POSITION, ""),
                 )
-                generation.value++
             }
-            compose.onNodeWithText(title).assertIsDisplayed().performClick()
+            compose.onNodeWithText(seekSwitchTitle).performClick()
+            compose.onNodeWithText(seekPositionTitle).assertDoesNotExist()
+            compose.onNodeWithText(seekSwitchTitle).performClick()
+            compose.onNodeWithText(seekCenterLabel).assertIsDisplayed()
+
+            val cdnDebugTitle = context.getString(R.string.setting_cdn_connection_debug_title)
+            assertFalse(cdnDebugTitle.contains("临时"))
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(cdnDebugTitle))
+            compose.onNodeWithText(cdnDebugTitle).performClick()
+            compose.runOnIdle {
+                assertTrue(mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false))
+            }
+
+            val downloadPlayerTitle =
+                context.getString(R.string.setting_player_download_player_title)
+            val externalPlayerLabel = context.getString(R.string.setting_player_external)
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(downloadPlayerTitle))
+            compose.onNodeWithText(downloadPlayerTitle).performClick()
+            compose.onNodeWithText(externalPlayerLabel).performClick()
             compose.runOnIdle {
                 assertEquals(
-                    false,
-                    mmkvPreference.getBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, true),
+                    DownloadPlayerMode.EXTERNAL.key,
+                    mmkvPreference.getString(SettingKeys.DOWNLOAD_PLAYER, ""),
                 )
             }
+
+            // 3. 下载分组：多 CDN 下载开关在窄屏下无溢出并正确持久化
+            val multiCdnDownloadTitle =
+                context.getString(R.string.setting_download_multi_cdn_title)
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(multiCdnDownloadTitle))
+            val multiCdnNode = compose.onNodeWithText(multiCdnDownloadTitle)
+            multiCdnNode.assertIsDisplayed()
+            assertTrue(multiCdnNode.getUnclippedBoundsInRoot().right <= containerWidth)
+            multiCdnNode.performClick()
+            compose.runOnIdle {
+                assertTrue(
+                    mmkvPreference.getBoolean(DownloadManager.KEY_MULTI_CDN_ENABLED, false)
+                )
+            }
+
+            // 4. 关于分组：点击“版本信息”打开真实弹窗并可关闭
+            val versionTitle = context.getString(R.string.setting_about_version_title)
+            compose.onNode(hasScrollAction()).performScrollToNode(hasText(versionTitle))
+            compose.onNodeWithText(versionTitle).assertIsDisplayed().performClick()
+            compose.onNodeWithText(ORIGINAL_REPO_DISPLAY_NAME).assertIsDisplayed()
+            compose.onNodeWithText(CURRENT_REPO_DISPLAY_NAME).assertIsDisplayed()
+            compose.onNodeWithText(context.getString(R.string.close)).performClick()
+            compose.onNodeWithText(ORIGINAL_REPO_DISPLAY_NAME).assertDoesNotExist()
         } finally {
-            if (existed) mmkvPreference.putBoolean(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, previous)
-            else mmkvPreference.remove(PREFERENCE_KEY_CDN_CONNECTION_DEBUG)
+            restorePreferenceSnapshot(snapshot)
         }
     }
 
     @Test
-    fun thumbnailSettingRetainsChosenPositionWhenDisabled() {
+    fun versionInfoDialogShowsBothRepositoriesWithDistinctClickSemantics() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val enabled = mutableStateOf(true)
-        val position = mutableStateOf(SeekPreviewPosition.FollowSlider.key)
-        compose.setContent {
-            val density = LocalDensity.current
-            CompositionLocalProvider(
-                LocalDensity provides Density(density.density, fontScale = 1.3f)
-            ) {
-                MaterialTheme {
-                    Column(Modifier.width(320.dp).testTag("thumbnail_settings")) {
-                        SeekThumbnailSettings(enabled, position)
-                    }
-                }
-            }
-        }
-        val switchTitle = context.getString(R.string.setting_player_seek_thumbnail)
-        val positionTitle = context.getString(R.string.setting_player_seek_preview_position)
-        compose.onNodeWithText(positionTitle).performClick()
-        compose
-            .onNodeWithText(context.getString(R.string.setting_player_seek_preview_center))
-            .performClick()
-        compose.runOnIdle { assertEquals(SeekPreviewPosition.Center.key, position.value) }
-        compose.onNodeWithText(switchTitle).performClick()
-        compose.onNodeWithText(positionTitle).assertDoesNotExist()
-        compose.runOnIdle {
-            assertEquals(false, enabled.value)
-            assertEquals(SeekPreviewPosition.Center.key, position.value)
-        }
-        compose.onNodeWithText(switchTitle).performClick()
-        compose
-            .onNodeWithText(context.getString(R.string.setting_player_seek_preview_center))
-            .assertIsDisplayed()
-        val bounds = compose.onNodeWithTag("thumbnail_settings").getUnclippedBoundsInRoot()
-        val label = compose.onNodeWithText(positionTitle).getUnclippedBoundsInRoot()
-        assertTrue(label.left >= bounds.left && label.right <= bounds.right)
-    }
-
-    @Test
-    fun settingItemsRenderWithinBoundsOnNarrowWidthWithLargeFontScale() {
-        val rootWidth = 320.dp
-        compose.setContent {
-            val density = LocalDensity.current
-            // 模拟 1.3 倍系统字体缩放与 320dp 窄屏容器
-            CompositionLocalProvider(
-                LocalDensity provides Density(density = density.density, fontScale = 1.3f)
-            ) {
-                MaterialTheme {
-                    Box(modifier = Modifier.width(rootWidth).testTag("container")) {
-                        Column {
-                            val darkMode = remember { mutableStateOf(0) }
-                            val autoResume = remember { mutableStateOf(false) }
-
-                            SettingItemCategory(title = { Text("外观") }) {
-                                SettingPickerItem(
-                                    modifier = Modifier.testTag("picker_row"),
-                                    state = darkMode,
-                                    items = listOf(0, 1, 2),
-                                    itemLabel = { mode -> Text(if (mode == 0) "跟随系统" else "其他") },
-                                    title = { Text("已下载视频播放器") },
-                                    icon = { Icon(Icons.Outlined.LightMode, null) },
-                                    text = { Text("针对已下载视频选择内置播放器或调用第三方播放器播放") },
-                                )
-                            }
-
-                            SettingItemCategory(title = { Text("下载") }) {
-                                SettingBooleanItem(
-                                    modifier = Modifier.testTag("switch_row"),
-                                    state = autoResume,
-                                    title = { Text("自动恢复未完成下载任务") },
-                                    icon = { Icon(Icons.Outlined.PlayCircle, null) },
-                                    text = { Text("启动应用时自动恢复上次未完成的下载任务") },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 验证触控区域高度满足至少 48dp
-        compose.onNodeWithTag("picker_row").assertHeightIsAtLeast(48.dp)
-        compose.onNodeWithTag("switch_row").assertHeightIsAtLeast(48.dp)
-
-        // 验证右边界未超出 320dp 根容器宽度
-        val pickerBounds = compose.onNodeWithTag("picker_row").getUnclippedBoundsInRoot()
-        val switchBounds = compose.onNodeWithTag("switch_row").getUnclippedBoundsInRoot()
-        assertTrue(pickerBounds.right <= rootWidth)
-        assertTrue(switchBounds.right <= rootWidth)
-
-        // 验证文本节点正常呈现
-        compose.onNodeWithText("已下载视频播放器").assertIsDisplayed()
-        compose.onNodeWithText("自动恢复未完成下载任务").assertIsDisplayed()
-    }
-
-    @Test
-    fun settingBooleanItemTogglesStateOnRowClick() {
-        val stateHolder = mutableStateOf(false)
-        compose.setContent {
-            MaterialTheme {
-                SettingBooleanItem(
-                    modifier = Modifier.testTag("boolean_item"),
-                    state = stateHolder,
-                    title = { Text("开关测试") },
-                )
-            }
-        }
-
-        assertEquals(false, stateHolder.value)
-        compose.onNodeWithTag("boolean_item").performClick()
-        assertEquals(true, stateHolder.value)
-        compose.onNodeWithTag("boolean_item").performClick()
-        assertEquals(false, stateHolder.value)
-    }
-
-    @Test
-    fun settingPickerItemExpandsDropdownOnRowClick() {
-        val pickerState = mutableStateOf(0)
-        compose.setContent {
-            MaterialTheme {
-                SettingPickerItem(
-                    modifier = Modifier.testTag("picker_item"),
-                    state = pickerState,
-                    items = listOf(0, 1),
-                    itemLabel = { mode -> Text(if (mode == 0) "选项零" else "选项一") },
-                    title = { Text("下拉测试") },
-                )
-            }
-        }
-
-        compose.onNodeWithText("选项一").assertDoesNotExist()
-        compose.onNodeWithTag("picker_item").performClick()
-        compose.onNodeWithText("选项一").assertIsDisplayed()
-    }
-
-    /**
-     * 测试生产组件 PlayerMinimalProgressSetting：
-     * 1. 验证设置项标题与开关正常渲染并显示
-     * 2. 验证点击组件整行可操作切换状态（true -> false -> true）
-     * 3. 验证状态在多次交互中的保持与响应
-     */
-    @Test
-    fun playerMinimalProgressSettingTogglesAndRetainsState() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        // 初始化开关状态包装对象，默认设置为 true
-        val enabledState = mutableStateOf(true)
-        val testTag = "player_minimal_progress_setting"
-
-        compose.setContent {
-            MaterialTheme {
-                PlayerMinimalProgressSetting(
-                    enabled = enabledState,
-                    modifier = Modifier.testTag(testTag),
-                )
-            }
-        }
-
-        // 从资源中读取本地化标题文案
-        val titleText = context.getString(R.string.setting_player_minimal_progress)
-
-        // 初始断言：标题正常展示且状态为 true
-        compose.onNodeWithText(titleText).assertIsDisplayed()
-        assertEquals(true, enabledState.value)
-
-        // 首次点击：整行可点击切换，状态从 true 切换为 false
-        compose.onNodeWithTag(testTag).performClick()
-        compose.runOnIdle { assertEquals(false, enabledState.value) }
-
-        // 再次点击：从 false 恢复为 true，验证状态可操作性与状态保持
-        compose.onNodeWithTag(testTag).performClick()
-        compose.runOnIdle { assertEquals(true, enabledState.value) }
-    }
-
-    /**
-     * 测试下载传输配置组件 DownloadTransferPreferenceSettings：
-     * 1. 验证默认多 CDN 开关状态为关闭 (false)
-     * 2. 验证多 CDN 开关标题与说明正常展示
-     * 3. 验证旧的两个设置（分块下载与下载连接数）标签不再显示
-     * 4. 验证点击整行可操作切换状态（false -> true -> false），开关状态保持与响应
-     * 5. 验证在 320dp 窄屏与 1.3 倍字体下，多 CDN 设置项边界在容器范围内（无溢出）
-     */
-    @Test
-    fun downloadTransferSettingsMultiCdnToggleAndRetainState() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val multiCdnEnabled = mutableStateOf(DownloadTransferSettings.DEFAULT_MULTI_CDN_ENABLED)
-        val containerTag = "download_transfer_settings"
-
-        compose.setContent {
-            val density = LocalDensity.current
-            CompositionLocalProvider(
-                LocalDensity provides Density(density.density, fontScale = 1.3f)
-            ) {
-                MaterialTheme {
-                    Column(Modifier.width(320.dp).testTag(containerTag)) {
-                        DownloadTransferPreferenceSettings(enabled = multiCdnEnabled)
-                    }
-                }
-            }
-        }
-
-        val multiCdnTitle = context.getString(R.string.setting_download_multi_cdn_title)
-        val multiCdnText = context.getString(R.string.setting_download_multi_cdn_text)
-
-        // 1. 验证初始状态：默认关闭 (false)，多 CDN 开关与说明文本可见展示
-        assertEquals(false, multiCdnEnabled.value)
-        compose.onNodeWithText(multiCdnTitle).assertIsDisplayed()
-        compose.onNodeWithText(multiCdnText).assertIsDisplayed()
-
-        // 2. 验证旧的两个设置（分块下载与下载连接数相关标签）不再显示
-        compose.onNodeWithText("分块下载").assertDoesNotExist()
-        compose.onNodeWithText("下载连接数").assertDoesNotExist()
-        compose.onNodeWithText("Segmented download").assertDoesNotExist()
-        compose.onNodeWithText("Download connections").assertDoesNotExist()
-
-        // 3. 首次点击整行切换：状态从 false 切换为 true，验证状态响应与保持
-        compose.onNodeWithText(multiCdnTitle).performClick()
-        compose.runOnIdle { assertEquals(true, multiCdnEnabled.value) }
-
-        // 4. 再次点击整行切换：状态从 true 恢复为 false
-        compose.onNodeWithText(multiCdnTitle).performClick()
-        compose.runOnIdle { assertEquals(false, multiCdnEnabled.value) }
-
-        // 5. 验证在 320dp 窄屏与 1.3 倍字体下，设置项边界约束未溢出
-        val containerBounds = compose.onNodeWithTag(containerTag).getUnclippedBoundsInRoot()
-        val labelBounds = compose.onNodeWithText(multiCdnTitle).getUnclippedBoundsInRoot()
-        assertTrue(
-            labelBounds.left >= containerBounds.left && labelBounds.right <= containerBounds.right
-        )
-    }
-
-    /**
-     * 测试“关于 -> 版本信息”分组与版本信息卡片弹窗：
-     * 1. 验证旧的“开发者主页”与“源代码”入口不再展示，仅展示“版本信息”
-     * 2. 点击“版本信息”打开卡片弹窗，展示应用名、版本号及两个仓库项
-     * 3. 验证原作者仓库无点击动作，当前维护仓库可点击并触发跳转回调
-     * 4. 验证卡片在 320dp 窄屏与 1.3 倍字体下不溢出容器边界
-     */
-    @Test
-    fun aboutSectionOpensVersionInfoDialogAndRendersWithinNarrowBounds() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val showDialog = mutableStateOf(true)
         var openRepoClicks = 0
-        val showDialog = mutableStateOf(false)
 
         compose.setContent {
             val density = LocalDensity.current
@@ -349,100 +191,66 @@ class SettingPageLayoutTest {
                 LocalDensity provides Density(density.density, fontScale = 1.3f)
             ) {
                 MaterialTheme {
-                    Column(Modifier.width(320.dp).testTag("about_container")) {
-                        SettingAboutSection(
+                    if (showDialog.value) {
+                        VersionInfoDialog(
                             versionName = "1.2.9",
                             versionCode = 29,
-                            onVersionInfoClick = { showDialog.value = true },
+                            onOpenCurrentRepo = { openRepoClicks++ },
+                            onDismiss = { showDialog.value = false },
                         )
-                        if (showDialog.value) {
-                            VersionInfoCard(
-                                versionName = "1.2.9",
-                                versionCode = 29,
-                                onOpenCurrentRepo = { openRepoClicks++ },
-                                onDismiss = { showDialog.value = false },
-                            )
-                        }
                     }
                 }
             }
         }
 
-        val versionTitle = context.getString(R.string.setting_about_version_title)
-        val closeLabel = context.getString(R.string.close)
-
-        // 验证旧项不存在，新项正常显示
-        compose.onNodeWithText("开发者主页").assertDoesNotExist()
-        compose.onNodeWithText("Author Profile").assertDoesNotExist()
-        compose.onNodeWithText(versionTitle).assertIsDisplayed().performClick()
-
-        // 验证卡片展示软件名称、版本号与双仓库条目
         compose.onNodeWithText(context.getString(R.string.app_name)).assertIsDisplayed()
-        compose.onNodeWithTag(TEST_TAG_ORIGINAL_REPO_ITEM).assertIsDisplayed().assertHasNoClickAction()
-        compose.onNodeWithTag(TEST_TAG_CURRENT_REPO_ITEM).assertIsDisplayed().assertHasClickAction().performClick()
+        compose.onNodeWithText("v1.2.9 (29)").assertIsDisplayed()
+        compose.onNodeWithText(ORIGINAL_REPO_DISPLAY_NAME).assertIsDisplayed().assertHasNoClickAction()
+        compose
+            .onNodeWithText(CURRENT_REPO_DISPLAY_NAME)
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .performClick()
         compose.runOnIdle { assertEquals(1, openRepoClicks) }
 
-        // 验证 320dp 窄屏与 1.3x 字体下卡片内容不越界
-        val containerBounds = compose.onNodeWithTag("about_container").getUnclippedBoundsInRoot()
-        val cardBounds = compose.onNodeWithTag(TEST_TAG_VERSION_INFO_CARD).getUnclippedBoundsInRoot()
-        assertTrue(cardBounds.left >= containerBounds.left && cardBounds.right <= containerBounds.right)
-
-        // 点击关闭收起卡片
-        compose.onNodeWithText(closeLabel).performClick()
-        compose.onNodeWithTag(TEST_TAG_VERSION_INFO_CARD).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.close)).performClick()
+        compose.onNodeWithText(CURRENT_REPO_DISPLAY_NAME).assertDoesNotExist()
     }
 
-    /**
-     * 测试“存储 -> 清除缓存”分组与二次确认弹窗，以及已下载视频顶部元数据进度条在窄屏大字号下的布局与交互。
-     */
-    @Test
-    fun storageClearCacheSectionAndMetadataProgressBarRenderAndConfirmCorrectly() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val showConfirm = mutableStateOf(false)
-        var confirmedCount = 0
+    private sealed interface SavedPref {
+        data object Absent : SavedPref
 
-        compose.setContent {
-            val density = LocalDensity.current
-            CompositionLocalProvider(
-                LocalDensity provides Density(density.density, fontScale = 1.3f)
-            ) {
-                MaterialTheme {
-                    Column(Modifier.width(320.dp).testTag("storage_container")) {
-                        SettingStorageSection(
-                            cacheBytes = 1024L * 1024L * 12L,
-                            onClearCacheClick = { showConfirm.value = true },
-                        )
-                        me.rerere.awara.ui.page.download.MetadataScanProgressBar(
-                            progress =
-                                me.rerere.awara.data.download.MetadataScanProgress(
-                                    completed = 12,
-                                    total = 48,
-                                )
-                        )
-                        if (showConfirm.value) {
-                            ClearCacheConfirmDialog(
-                                cacheBytes = 1024L * 1024L * 12L,
-                                clearing = false,
-                                onConfirm = {
-                                    confirmedCount++
-                                    showConfirm.value = false
-                                },
-                                onDismiss = { showConfirm.value = false },
-                            )
-                        }
-                    }
+        data class Bool(val value: Boolean) : SavedPref
+
+        data class IntVal(val value: Int) : SavedPref
+
+        data class StrVal(val value: String) : SavedPref
+    }
+
+    private fun capturePreferenceSnapshot(keys: List<String>): Map<String, SavedPref> {
+        val intKeys = setOf(SettingKeys.DARK_MODE)
+        val stringKeys = setOf(PREFERENCE_KEY_SEEK_PREVIEW_POSITION, SettingKeys.DOWNLOAD_PLAYER)
+        return keys.associateWith { key ->
+            if (!mmkvPreference.contains(key)) {
+                SavedPref.Absent
+            } else {
+                when (key) {
+                    in intKeys -> SavedPref.IntVal(mmkvPreference.getInt(key, 0))
+                    in stringKeys -> SavedPref.StrVal(mmkvPreference.getString(key, "") ?: "")
+                    else -> SavedPref.Bool(mmkvPreference.getBoolean(key, false))
                 }
             }
         }
+    }
 
-        val clearTitle = context.getString(R.string.setting_clear_cache_title)
-        val confirmAction = context.getString(R.string.setting_clear_cache_confirm_action)
-        val expectedProgressText =
-            context.getString(R.string.download_scan_metadata_progress, 12, 48)
-
-        compose.onNodeWithText(expectedProgressText).assertIsDisplayed()
-        compose.onNodeWithText(clearTitle).assertIsDisplayed().performClick()
-        compose.onNodeWithText(confirmAction).assertIsDisplayed().performClick()
-        compose.runOnIdle { assertEquals(1, confirmedCount) }
+    private fun restorePreferenceSnapshot(snapshot: Map<String, SavedPref>) {
+        for ((key, saved) in snapshot) {
+            when (saved) {
+                SavedPref.Absent -> mmkvPreference.remove(key)
+                is SavedPref.Bool -> mmkvPreference.putBoolean(key, saved.value)
+                is SavedPref.IntVal -> mmkvPreference.putInt(key, saved.value)
+                is SavedPref.StrVal -> mmkvPreference.putString(key, saved.value)
+            }
+        }
     }
 }

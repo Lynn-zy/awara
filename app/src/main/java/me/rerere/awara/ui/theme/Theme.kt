@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import me.rerere.awara.ui.page.setting.DarkModeOption
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.compose_setting.preference.rememberIntPreference
 
 private const val TAG = "Theme"
@@ -37,14 +39,13 @@ fun AwaraTheme(
     content: @Composable () -> Unit
 ) {
     val darkMode by rememberIntPreference(
-        key = "setting.dark_mode",
-        default = 0
+        key = SettingKeys.DARK_MODE,
+        default = DarkModeOption.FOLLOW_SYSTEM.value
     )
-    val lightMode = when (darkMode) {
-        0 -> !isSystemInDarkTheme()
-        1 -> true
-        2 -> false
-        else -> error("Invalid dark mode: $darkMode")
+    val lightMode = when (DarkModeOption.fromValue(darkMode)) {
+        DarkModeOption.FOLLOW_SYSTEM -> !isSystemInDarkTheme()
+        DarkModeOption.LIGHT -> true
+        DarkModeOption.DARK -> false
     }
     val colorScheme = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {

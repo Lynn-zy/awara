@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import me.rerere.awara.data.entity.DownloadTask
+import me.rerere.awara.data.entity.DownloadTaskStatus
 
 @Dao
 interface DownloadTaskDao {
@@ -32,7 +33,7 @@ interface DownloadTaskDao {
     @Query(
         "UPDATE download_tasks SET status = :newStatus WHERE taskId = :taskId AND status IN ('QUEUED', 'RUNNING', 'RETRYING')"
     )
-    suspend fun updateStatusFromQueuedOrRunning(taskId: String, newStatus: String): Int
+    suspend fun updateStatusFromQueuedOrRunning(taskId: String, newStatus: DownloadTaskStatus): Int
 
     // 原子操作：在未开启自动恢复且无授权时，将当前代 QUEUED 或 RUNNING 任务转为 PAUSED
     @Query(
@@ -41,7 +42,11 @@ interface DownloadTaskDao {
     suspend fun pauseQueuedOrRunningTask(taskId: String, workId: String): Int
 
     @Query("UPDATE download_tasks SET status = :newStatus, error = :error WHERE taskId = :taskId")
-    suspend fun updateStatus(taskId: String, newStatus: String, error: String? = null): Int
+    suspend fun updateStatus(
+        taskId: String,
+        newStatus: DownloadTaskStatus,
+        error: String? = null,
+    ): Int
 
     // CAS 状态转换：严格校验当前代 workId 以及期望状态
     @Query(
@@ -50,8 +55,8 @@ interface DownloadTaskDao {
     suspend fun compareAndSetStatus(
         taskId: String,
         workId: String,
-        expectedStatus: String,
-        newStatus: String,
+        expectedStatus: DownloadTaskStatus,
+        newStatus: DownloadTaskStatus,
     ): Int
 
     // 认领排队任务：仅当 workId 匹配当前代且处于 expectedStatus 时转入 newStatus
@@ -60,8 +65,8 @@ interface DownloadTaskDao {
     )
     suspend fun claimTask(
         taskId: String,
-        expectedStatus: String,
-        newStatus: String,
+        expectedStatus: DownloadTaskStatus,
+        newStatus: DownloadTaskStatus,
         workId: String,
     ): Int
 
@@ -105,7 +110,7 @@ interface DownloadTaskDao {
     suspend fun updateWorkerTerminalState(
         taskId: String,
         workId: String,
-        newStatus: String,
+        newStatus: DownloadTaskStatus,
         destinationUri: String,
         error: String?,
     ): Int
@@ -142,10 +147,10 @@ interface DownloadTaskDao {
     suspend fun updateResumeInfo(
         taskId: String,
         url: String,
-        status: String,
+        status: DownloadTaskStatus,
         workId: String,
         previousWorkId: String,
-        expectedStatus: String,
+        expectedStatus: DownloadTaskStatus,
         downloadedBytes: Long,
         totalBytes: Long,
         validator: String?,
@@ -161,7 +166,7 @@ interface DownloadTaskDao {
     suspend fun updateResumeError(
         taskId: String,
         workId: String,
-        status: String,
+        status: DownloadTaskStatus,
         error: String,
     ): Int
 
@@ -186,7 +191,7 @@ interface DownloadTaskDao {
     )
     suspend fun updateOrphanState(
         taskId: String,
-        status: String,
+        status: DownloadTaskStatus,
         destinationUri: String,
         error: String?,
     ): Int

@@ -45,13 +45,14 @@ import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.entity.toAvatarUrl
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.SkeletonBox
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.awara.util.formatRelativeTimeText
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 
 @Composable
 fun MediaCard(modifier: Modifier = Modifier, media: Media) {
     val router = LocalRouterProvider.current
-    val workMode by rememberBooleanPreference(key = "setting.work_mode", default = false)
+    val workMode by rememberBooleanPreference(key = SettingKeys.WORK_MODE, default = false)
     val painter = rememberAsyncImagePainter(model = media.thumbnailUrl())
     Card(
         modifier = modifier,

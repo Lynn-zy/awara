@@ -225,7 +225,7 @@ class DownloadTaskCardTest {
     }
 
     /** 测试不发起下载或图片请求，字节比例由固定总量提供。 */
-    private fun sampleTask(status: String, downloaded: Long): DownloadTask =
+    private fun sampleTask(status: DownloadTaskStatus, downloaded: Long): DownloadTask =
         DownloadTask(
             taskId = "track-test",
             resourceId = "video-test",

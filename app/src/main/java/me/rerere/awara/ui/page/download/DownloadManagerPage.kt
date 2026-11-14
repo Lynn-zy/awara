@@ -408,7 +408,6 @@ internal fun DownloadTaskCard(
                 DownloadTaskStatus.CANCELLING ->
                     stringResource(R.string.download_task_cancelling) to
                         MaterialTheme.colorScheme.error
-                else -> task.status to MaterialTheme.colorScheme.onSurfaceVariant
             }
 
         Card(
@@ -534,13 +533,6 @@ internal fun DownloadTaskCard(
                             progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
                             modifier = Modifier.fillMaxWidth(),
                             color = MaterialTheme.colorScheme.error,
-                            trackColor = progressTrackColor,
-                        )
-                    }
-                    else -> {
-                        LinearProgressIndicator(
-                            progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
-                            modifier = Modifier.fillMaxWidth(),
                             trackColor = progressTrackColor,
                         )
                     }

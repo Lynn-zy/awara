@@ -124,6 +124,8 @@ import me.rerere.awara.ui.component.player.PlayerState
 import me.rerere.awara.ui.component.player.rememberPlayerState
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
+import me.rerere.awara.ui.page.setting.DownloadPlayerMode
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.awara.util.formatDurationMs
 import me.rerere.awara.util.prettyFileSize
 import me.rerere.compose_setting.preference.rememberBooleanPreference
@@ -153,7 +155,10 @@ fun DownloadPage(
     val videoListState = rememberLazyListState()
 
     val internalPlayer by
-        rememberStringPreference(key = "setting.download_player_internal", default = "internal")
+        rememberStringPreference(
+            key = SettingKeys.DOWNLOAD_PLAYER,
+            default = DownloadPlayerMode.INTERNAL.key,
+        )
     var sortKey by
         rememberStringPreference(
             key = PREFERENCE_KEY_DOWNLOAD_SORT,
@@ -452,13 +457,14 @@ fun DownloadPage(
         selectedAuthorId = null
     }
 
-    fun playExternal(item: DownloadItem) {
+    /** 统一解析视频 URI 并核验本地文件存在性，避免内置/外置播放器播放前重复校验。 */
+    fun launchWithValidatedVideoUri(
+        item: DownloadItem,
+        onReady: suspend (Uri) -> Unit,
+    ) {
         val rawUri = item.uri.trim()
-        if (rawUri.isEmpty()) {
-            message.error { Text(stringResource(R.string.download_file_missing)) }
-            return
-        }
-        val contentUri = runCatching { Uri.parse(rawUri) }.getOrNull()
+        val contentUri =
+            rawUri.takeIf { it.isNotEmpty() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
         if (contentUri == null) {
             message.error { Text(stringResource(R.string.download_file_missing)) }
             return
@@ -480,7 +486,12 @@ fun DownloadPage(
                 message.error { Text(stringResource(R.string.download_file_missing)) }
                 return@launch
             }
+            onReady(contentUri)
+        }
+    }
 
+    fun playExternal(item: DownloadItem) {
+        launchWithValidatedVideoUri(item) { contentUri ->
             try {
                 val mimeType =
                     withContext(Dispatchers.IO) {
@@ -510,38 +521,11 @@ fun DownloadPage(
     }
 
     fun playDownloadedItem(item: DownloadItem) {
-        if (internalPlayer == "external") {
+        if (DownloadPlayerMode.fromKey(internalPlayer) == DownloadPlayerMode.EXTERNAL) {
             playExternal(item)
             return
         }
-        val rawUri = item.uri.trim()
-        if (rawUri.isEmpty()) {
-            message.error { Text(stringResource(R.string.download_file_missing)) }
-            return
-        }
-        val contentUri = runCatching { Uri.parse(rawUri) }.getOrNull()
-        if (contentUri == null) {
-            message.error { Text(stringResource(R.string.download_file_missing)) }
-            return
-        }
-        scope.launch {
-            val exists =
-                try {
-                    withContext(Dispatchers.IO) { downloadStorage.exists(contentUri) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    val reason =
-                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                    message.error { Text(stringResource(R.string.download_play_failed, reason)) }
-                    return@launch
-                }
-
-            if (!exists) {
-                message.error { Text(stringResource(R.string.download_file_missing)) }
-                return@launch
-            }
-
+        launchWithValidatedVideoUri(item) { contentUri ->
             try {
                 state.player.setMediaItem(MediaItem.Builder().setUri(contentUri).build())
                 state.player.prepare()

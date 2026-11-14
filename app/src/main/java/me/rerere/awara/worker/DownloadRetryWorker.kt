@@ -8,7 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
-import me.rerere.awara.data.download.MAX_SILENT_DOWNLOAD_RETRIES
 import me.rerere.awara.data.download.sanitizedDownloadErrorMessage
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.di.AppDatabase
@@ -35,7 +34,7 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
             }
             if (
                 !downloadManager.isAutoResumeEnabled() &&
-                    !downloadManager.launchPolicy.hasAuthorization(taskId, id.toString())
+                    !downloadManager.hasExecutionAuthorization(taskId, id.toString())
             ) {
                 database
                     .downloadTaskDao()
@@ -59,14 +58,19 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
             } catch (exception: Exception) {
                 val latest = database.downloadTaskDao().getTask(taskId)
                 if (latest?.status == DownloadTaskStatus.RETRYING && latest.workId == task.workId) {
-                    val nextRetryCount = latest.retryCount + 1
-                    if (nextRetryCount <= MAX_SILENT_DOWNLOAD_RETRIES) {
+                    val decision =
+                        DownloadManager.decideRetry(
+                            autoRetryEnabled = true,
+                            receivedNewData = false,
+                            retryCount = latest.retryCount,
+                        )
+                    if (decision.shouldRetry) {
                         database
                             .downloadTaskDao()
                             .updateRetryCount(
                                 taskId,
                                 task.workId,
-                                nextRetryCount,
+                                decision.nextRetryCount,
                                 exception.sanitizedDownloadErrorMessage(),
                             )
                         downloadManager.grantExecutionAuthorization(taskId, id.toString())

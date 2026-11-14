@@ -76,10 +76,8 @@ import kotlinx.coroutines.withContext
 import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
-import me.rerere.awara.data.download.DownloadLaunchPolicy
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
-import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.data.playback.PlaybackSettings
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.BackButton
@@ -97,445 +95,18 @@ import me.rerere.compose_setting.preference.rememberIntPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.compose.koinInject
 
-/** 复用现有设置行；关闭时保留位置偏好，下次开启仍沿用之前选择。 */
-@Composable
-internal fun SeekThumbnailSettings(enabled: MutableState<Boolean>, position: MutableState<String>) {
-    SettingBooleanItem(
-        state = enabled,
-        title = { Text(stringResource(R.string.setting_player_seek_thumbnail)) },
-        icon = { Icon(Icons.Outlined.Image, null) },
-    )
-    if (enabled.value) {
-        SettingPickerItem(
-            state = position,
-            items = SeekPreviewPosition.entries.map { it.key },
-            itemLabel = { key ->
-                Text(
-                    stringResource(
-                        when (SeekPreviewPosition.fromKey(key)) {
-                            SeekPreviewPosition.Center ->
-                                R.string.setting_player_seek_preview_center
-                            SeekPreviewPosition.FollowSlider ->
-                                R.string.setting_player_seek_preview_follow_slider
-                        }
-                    )
-                )
-            },
-            title = { Text(stringResource(R.string.setting_player_seek_preview_position)) },
-            icon = { Icon(Icons.Outlined.Image, null) },
-        )
-    }
-}
-
-/** 复用整行可点击的开关，偏好由调用方持久化，播放器即时读取更新。 */
-@Composable
-internal fun PlayerMinimalProgressSetting(
-    enabled: MutableState<Boolean>,
-    modifier: Modifier = Modifier,
-) {
-    SettingBooleanItem(
-        modifier = modifier,
-        state = enabled,
-        title = { Text(stringResource(R.string.setting_player_minimal_progress)) },
-        icon = { Icon(Icons.Outlined.LinearScale, null) },
-    )
-}
-
 /**
- * 扩大缓冲区设置项。
+ * 设置页面，集中提供外观、播放器、评论区图片、下载、存储及版本信息配置项。
  *
- * 开启后增加预读数据量以减少卡顿，会消耗更多内存与流量；下次打开视频生效。
- *
- * @param enabled 扩大缓冲区开关状态包装对象
- * @param modifier 外部修饰符
+ * @param downloadStorage 下载目录存储管理器（默认由 Koin 注入，便于界面测试传入隔离实例）
  */
 @Composable
-internal fun PlayerExpandedBufferSetting(
-    enabled: MutableState<Boolean>,
-    modifier: Modifier = Modifier,
-) {
-    SettingBooleanItem(
-        modifier = modifier,
-        state = enabled,
-        title = { Text(stringResource(R.string.setting_player_expanded_buffer_title)) },
-        text = { Text(stringResource(R.string.setting_player_expanded_buffer_text)) },
-        icon = { Icon(Icons.Outlined.Layers, null) },
-    )
-}
-
-/**
- * 多 CDN 播放（实验）设置项。
- *
- * 开启后验证可用节点并在缓冲不足时自动换源，非保证提速；下次打开视频生效。
- *
- * @param enabled 多 CDN 播放开关状态包装对象
- * @param modifier 外部修饰符
- */
-@Composable
-internal fun PlayerMultiCdnSetting(enabled: MutableState<Boolean>, modifier: Modifier = Modifier) {
-    SettingBooleanItem(
-        modifier = modifier,
-        state = enabled,
-        title = { Text(stringResource(R.string.setting_player_multi_cdn_title)) },
-        text = { Text(stringResource(R.string.setting_player_multi_cdn_text)) },
-        icon = { Icon(Icons.Outlined.AltRoute, null) },
-    )
-}
-
-/**
- * CDN 连接调试（实验）设置项。
- *
- * 开启后展示下载与在线播放中已验证的可用 CDN 节点数及当前连接节点。
- *
- * @param enabled 实验性 CDN 连接调试开关状态
- */
-@Composable
-internal fun CdnConnectionDebugSetting(enabled: MutableState<Boolean>) {
-    SettingBooleanItem(
-        state = enabled,
-        title = { Text(stringResource(R.string.setting_cdn_connection_debug_title)) },
-        text = { Text(stringResource(R.string.setting_cdn_connection_debug_text)) },
-        icon = { Icon(Icons.Outlined.Source, null) },
-    )
-}
-
-/**
- * 设置页“存储”分组组件，提供缓存体积展示与清除缓存入口。
- *
- * @param cacheBytes 当前应用缓存总字节数
- * @param onClearCacheClick 点击“清除缓存”时的回调
- * @param modifier 外部修饰符
- */
-@Composable
-internal fun SettingStorageSection(
-    cacheBytes: Long,
-    onClearCacheClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
-    SettingItemCategory(
-        modifier = modifier,
-        title = { Text(stringResource(R.string.setting_storage)) },
-    ) {
-        SettingLinkItem(
-            title = { Text(stringResource(R.string.setting_clear_cache_title)) },
-            text = { Text(stringResource(R.string.setting_clear_cache_text, formattedSize)) },
-            icon = { Icon(Icons.Outlined.DeleteSweep, null) },
-            onClick = onClearCacheClick,
-        )
-    }
-}
-
-/**
- * 清除缓存二次确认弹窗组件。
- *
- * @param cacheBytes 当前待清理的缓存总字节数
- * @param clearing 是否正在执行清理操作
- * @param onConfirm 点击确认清除回调
- * @param onDismiss 点击取消或外部关闭回调
- */
-@Composable
-internal fun ClearCacheConfirmDialog(
-    cacheBytes: Long,
-    clearing: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
-    AlertDialog(
-        onDismissRequest = { if (!clearing) onDismiss() },
-        title = { Text(text = stringResource(R.string.setting_clear_cache_title)) },
-        text = {
-            Text(
-                text = stringResource(R.string.setting_clear_cache_confirm_message, formattedSize),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !clearing) {
-                Text(
-                    text = stringResource(R.string.setting_clear_cache_confirm_action),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !clearing) {
-                Text(text = stringResource(R.string.cancel))
-            }
-        },
-    )
-}
-
-/**
- * 设置页底部“关于”分组组件。
- *
- * 仅展示“版本信息”入口项，副标题呈现当前版本号，点击后打开版本信息卡片弹窗。
- *
- * @param versionName 当前应用版本名
- * @param versionCode 当前应用构建版本号
- * @param onVersionInfoClick 点击版本信息行时的回调
- * @param modifier 外部修饰符
- */
-@Composable
-internal fun SettingAboutSection(
-    versionName: String,
-    versionCode: Int,
-    onVersionInfoClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SettingItemCategory(
-        modifier = modifier,
-        title = { Text(stringResource(R.string.setting_about)) },
-    ) {
-        SettingLinkItem(
-            title = { Text(stringResource(R.string.setting_about_version_title)) },
-            text = { Text(formatAppVersionDisplay(versionName = versionName, versionCode = versionCode)) },
-            icon = { Icon(Icons.Outlined.Info, null) },
-            onClick = onVersionInfoClick,
-        )
-    }
-}
-
-/**
- * 多 CDN 下载设置项。
- *
- * 遵循原生现有字体密度、图标尺寸与设置项规范。 配置在任务下次启动或恢复时生效。
- *
- * @param enabled 多 CDN 实验性下载开关状态
- * @param modifier 外部修饰符
- */
-@Composable
-internal fun DownloadTransferPreferenceSettings(
-    enabled: MutableState<Boolean>,
-    modifier: Modifier = Modifier,
-) {
-    SettingBooleanItem(
-        modifier = modifier,
-        state = enabled,
-        title = { Text(stringResource(R.string.setting_download_multi_cdn_title)) },
-        text = { Text(stringResource(R.string.setting_download_multi_cdn_text)) },
-        icon = { Icon(Icons.Outlined.AltRoute, null) },
-    )
-}
-
-@Composable
-internal fun SettingItemCategory(
-    modifier: Modifier = Modifier,
-    title: @Composable () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Box(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp)) {
-            ProvideTextStyle(
-                MaterialTheme.typography.labelLarge.copy(
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            ) {
-                title()
-            }
-        }
-        content()
-    }
-}
-
-@Composable
-internal fun SettingBaseItem(
-    title: @Composable () -> Unit,
-    modifier: Modifier = Modifier,
-    text: (@Composable () -> Unit)? = null,
-    icon: (@Composable () -> Unit)? = null,
-    action: (@Composable () -> Unit)? = null,
-    onClick: (() -> Unit)? = null,
-) {
-    Row(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .then(
-                    if (onClick != null) {
-                        Modifier.clickable(onClick = onClick)
-                    } else {
-                        Modifier
-                    }
-                )
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        if (icon != null) {
-            Box(
-                modifier =
-                    Modifier.sizeIn(
-                        minWidth = 24.dp,
-                        minHeight = 24.dp,
-                        maxWidth = 32.dp,
-                        maxHeight = 32.dp,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                CompositionLocalProvider(
-                    LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
-                ) {
-                    icon()
-                }
-            }
-        }
-
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
-            ProvideTextStyle(
-                MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            ) {
-                title()
-            }
-            if (text != null) {
-                Spacer(modifier = Modifier.height(2.dp))
-                ProvideTextStyle(
-                    MaterialTheme.typography.bodySmall.copy(
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                ) {
-                    text()
-                }
-            }
-        }
-
-        if (action != null) {
-            Box(
-                modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                action()
-            }
-        }
-    }
-}
-
-@Composable
-internal fun SettingBooleanItem(
-    state: MutableState<Boolean>,
-    title: @Composable () -> Unit,
-    modifier: Modifier = Modifier,
-    text: (@Composable () -> Unit)? = null,
-    icon: (@Composable () -> Unit)? = null,
-) {
-    SettingBaseItem(
-        title = title,
-        modifier =
-            modifier.toggleable(
-                value = state.value,
-                role = Role.Switch,
-                onValueChange = { state.value = it },
-            ),
-        text = text,
-        icon = icon,
-        action = {
-            Switch(checked = state.value, onCheckedChange = null, modifier = Modifier.scale(0.85f))
-        },
-    )
-}
-
-@Composable
-internal fun <T> SettingPickerItem(
-    state: MutableState<T>,
-    items: List<T>,
-    itemLabel: @Composable (T) -> Unit,
-    title: @Composable () -> Unit,
-    modifier: Modifier = Modifier,
-    icon: (@Composable () -> Unit)? = null,
-    text: (@Composable () -> Unit)? = null,
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    SettingBaseItem(
-        title = title,
-        modifier = modifier,
-        text = text,
-        icon = icon,
-        action = {
-            Box(modifier = Modifier.wrapContentSize(Alignment.TopEnd)) {
-                Surface(
-                    onClick = { expanded = true },
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.defaultMinSize(minHeight = 36.dp).widthIn(max = 140.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Box(modifier = Modifier.weight(1f, fill = false)) {
-                            ProvideTextStyle(
-                                MaterialTheme.typography.labelMedium.copy(
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            ) {
-                                itemLabel(state.value)
-                            }
-                        }
-                        Icon(
-                            imageVector =
-                                if (expanded) Icons.Outlined.KeyboardArrowUp
-                                else Icons.Outlined.KeyboardArrowDown,
-                            contentDescription = "Dropdown",
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    items.forEach { item ->
-                        DropdownMenuItem(
-                            text = {
-                                ProvideTextStyle(
-                                    MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
-                                ) {
-                                    itemLabel(item)
-                                }
-                            },
-                            onClick = {
-                                state.value = item
-                                expanded = false
-                            },
-                        )
-                    }
-                }
-            }
-        },
-        onClick = { expanded = true },
-    )
-}
-
-@Composable
-internal fun SettingLinkItem(
-    title: @Composable () -> Unit,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    text: (@Composable () -> Unit)? = null,
-    icon: (@Composable () -> Unit)? = null,
-) {
-    SettingBaseItem(title = title, modifier = modifier, text = text, icon = icon, onClick = onClick)
-}
-
-@Composable
-fun SettingPage() {
+fun SettingPage(downloadStorage: DownloadStorage = koinInject()) {
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-    val downloadStorage: DownloadStorage = koinInject()
     var showDownloadDirectoryDialog by remember { mutableStateOf(false) }
     var showClearCacheConfirmDialog by remember { mutableStateOf(false) }
     var clearingCache by remember { mutableStateOf(false) }
@@ -622,219 +193,15 @@ fun SettingPage() {
             contentPadding = innerPadding,
             modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
         ) {
+            item { AppearanceSection() }
+            item { PlayerSection() }
+            item { CommentImageSection() }
             item {
-                SettingItemCategory(title = { Text(stringResource(R.string.setting_look)) }) {
-                    val darkMode = rememberIntPreference(key = "setting.dark_mode", default = 0)
-                    val workMode =
-                        rememberBooleanPreference(key = "setting.work_mode", default = false)
-                    val dynamicColor =
-                        rememberBooleanPreference(key = "setting.dynamic_color", default = true)
-                    SettingPickerItem(
-                        state = darkMode,
-                        items = listOf(0, 1, 2),
-                        itemLabel = { mode ->
-                            Text(
-                                text =
-                                    when (mode) {
-                                        0 -> stringResource(R.string.setting_look_darkmode_follow)
-                                        1 ->
-                                            stringResource(
-                                                R.string.setting_look_darkmode_light_mode
-                                            )
-                                        2 ->
-                                            stringResource(R.string.setting_look_darkmode_dark_mode)
-                                        else -> "?"
-                                    },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        title = { Text(stringResource(R.string.setting_look_darkmode_title)) },
-                        icon = { Icon(Icons.Outlined.LightMode, "Light/Dark Mode") },
-                        text = { Text(stringResource(R.string.setting_look_darkmode_text)) },
-                    )
-
-                    SettingBooleanItem(
-                        state = dynamicColor,
-                        title = { Text(stringResource(R.string.setting_look_dynamic_color_title)) },
-                        text = { Text(stringResource(R.string.setting_look_dynamic_color_text)) },
-                        icon = { Icon(Icons.Outlined.ColorLens, null) },
-                    )
-
-                    SettingBooleanItem(
-                        state = workMode,
-                        title = { Text(stringResource(R.string.setting_look_work_mode_title)) },
-                        text = { Text(stringResource(R.string.setting_look_work_mode_text)) },
-                        icon = { Icon(Icons.Outlined.HomeWork, null) },
-                    )
-                }
+                DownloadSection(
+                    directoryLabel = directoryLabel,
+                    onSelectDirectory = { showDownloadDirectoryDialog = true },
+                )
             }
-
-            item {
-                val autoPlay = rememberBooleanPreference(key = "setting.auto_play", default = true)
-                val loopPlay = rememberBooleanPreference(key = "setting.loop_play", default = false)
-                // 下载视频播放器偏好：internal=内置播放器，external=第三方播放器
-                val downloadPlayer =
-                    rememberStringPreference(
-                        key = "setting.download_player_internal",
-                        default = "internal",
-                    )
-                SettingItemCategory(title = { Text(stringResource(R.string.setting_player)) }) {
-                    SettingBooleanItem(
-                        state = autoPlay,
-                        title = { Text(stringResource(R.string.setting_player_auto_play_title)) },
-                        text = { Text(stringResource(R.string.setting_player_auto_play_text)) },
-                        icon = { Icon(Icons.Outlined.AutoMode, null) },
-                    )
-
-                    SettingBooleanItem(
-                        state = loopPlay,
-                        title = { Text(stringResource(R.string.setting_player_loop_title)) },
-                        text = { Text(stringResource(R.string.setting_player_loop_text)) },
-                        icon = { Icon(Icons.Outlined.Replay, null) },
-                    )
-
-                    SeekThumbnailSettings(
-                        enabled =
-                            rememberBooleanPreference(
-                                key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED,
-                                default = true,
-                            ),
-                        position =
-                            rememberStringPreference(
-                                key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
-                                default = SeekPreviewPosition.FollowSlider.key,
-                            ),
-                    )
-
-                    // 收起控件时显示贴底全宽细进度条配置项（默认开启）
-                    PlayerMinimalProgressSetting(
-                        enabled =
-                            rememberBooleanPreference(
-                                key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS,
-                                default = true,
-                            )
-                    )
-
-                    // 扩大缓冲区配置项（默认关闭）
-                    val expandedBuffer =
-                        rememberBooleanPreference(
-                            key = PlaybackSettings.KEY_EXPANDED_BUFFER,
-                            default = false,
-                        )
-                    PlayerExpandedBufferSetting(enabled = expandedBuffer)
-
-                    // 多 CDN 播放（实验）配置项（默认关闭）
-                    val multiCdnPlay =
-                        rememberBooleanPreference(
-                            key = PlaybackSettings.KEY_MULTI_CDN,
-                            default = false,
-                        )
-                    PlayerMultiCdnSetting(enabled = multiCdnPlay)
-
-                    CdnConnectionDebugSetting(
-                        enabled =
-                            rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
-                    )
-
-                    // 下载视频播放器选择：内置（internal）/ 第三方（external）
-                    SettingPickerItem(
-                        state = downloadPlayer,
-                        items = listOf("internal", "external"),
-                        itemLabel = { value ->
-                            Text(
-                                text =
-                                    when (value) {
-                                        "internal" ->
-                                            stringResource(R.string.setting_player_internal)
-                                        "external" ->
-                                            stringResource(R.string.setting_player_external)
-                                        else -> "?"
-                                    },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        title = {
-                            Text(stringResource(R.string.setting_player_download_player_title))
-                        },
-                        icon = { Icon(Icons.Outlined.PlayCircle, null) },
-                        text = {
-                            Text(stringResource(R.string.setting_player_download_player_text))
-                        },
-                    )
-                }
-            }
-
-            item {
-                SettingItemCategory(
-                    title = { Text(stringResource(R.string.setting_comment_image)) }
-                ) {
-                    val autoLoadImages =
-                        rememberBooleanPreference(
-                            key = PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD,
-                            default = false,
-                        )
-                    SettingBooleanItem(
-                        state = autoLoadImages,
-                        title = {
-                            Text(stringResource(R.string.setting_comment_image_auto_load_title))
-                        },
-                        text = {
-                            Text(stringResource(R.string.setting_comment_image_auto_load_text))
-                        },
-                        icon = { Icon(Icons.Outlined.AutoMode, null) },
-                    )
-                }
-            }
-
-            item {
-                SettingItemCategory(title = { Text(stringResource(R.string.setting_download)) }) {
-                    val autoResume =
-                        rememberBooleanPreference(
-                            key = DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME,
-                            default = DownloadLaunchPolicy.DEFAULT_AUTO_RESUME,
-                        )
-                    SettingBooleanItem(
-                        state = autoResume,
-                        title = {
-                            Text(stringResource(R.string.setting_download_auto_resume_title))
-                        },
-                        text = { Text(stringResource(R.string.setting_download_auto_resume_text)) },
-                        icon = { Icon(Icons.Outlined.PlayCircle, null) },
-                    )
-
-                    val autoRetry =
-                        rememberBooleanPreference(
-                            key = DownloadManager.PREFERENCE_KEY_AUTO_RETRY,
-                            default = DownloadManager.DEFAULT_AUTO_RETRY,
-                        )
-                    SettingBooleanItem(
-                        state = autoRetry,
-                        title = {
-                            Text(stringResource(R.string.setting_download_auto_retry_title))
-                        },
-                        text = { Text(stringResource(R.string.setting_download_auto_retry_text)) },
-                        icon = { Icon(Icons.Outlined.Replay, null) },
-                    )
-
-                    // 多 CDN 下载设置：下次启动或恢复时生效，默认关闭
-                    val multiCdnEnabled =
-                        rememberBooleanPreference(
-                            key = DownloadTransferSettings.KEY_MULTI_CDN_ENABLED,
-                            default = DownloadTransferSettings.DEFAULT_MULTI_CDN_ENABLED,
-                        )
-                    DownloadTransferPreferenceSettings(enabled = multiCdnEnabled)
-
-                    SettingLinkItem(
-                        title = { Text(stringResource(R.string.download_directory_title)) },
-                        text = { Text(directoryLabel) },
-                        icon = { Icon(Icons.Outlined.Folder, null) },
-                        onClick = { showDownloadDirectoryDialog = true },
-                    )
-                }
-            }
-
             item {
                 SettingStorageSection(
                     cacheBytes = cacheBytes,
@@ -848,7 +215,6 @@ fun SettingPage() {
                     },
                 )
             }
-
             item {
                 SettingAboutSection(
                     versionName = BuildConfig.VERSION_NAME,
@@ -858,4 +224,512 @@ fun SettingPage() {
             }
         }
     }
+}
+
+/** 外观主题与工作模式配置分组。 */
+@Composable
+private fun AppearanceSection() {
+    SettingItemCategory(title = { Text(stringResource(R.string.setting_look)) }) {
+        val darkModePref =
+            rememberIntPreference(
+                key = SettingKeys.DARK_MODE,
+                default = DarkModeOption.FOLLOW_SYSTEM.value,
+            )
+        val workMode = rememberBooleanPreference(key = SettingKeys.WORK_MODE, default = false)
+        val dynamicColor =
+            rememberBooleanPreference(key = SettingKeys.DYNAMIC_COLOR, default = true)
+
+        SettingPickerItem(
+            selected = DarkModeOption.fromValue(darkModePref.value),
+            onSelect = { darkModePref.value = it.value },
+            items = DarkModeOption.entries,
+            itemLabel = { mode ->
+                Text(
+                    text =
+                        stringResource(
+                            when (mode) {
+                                DarkModeOption.FOLLOW_SYSTEM -> R.string.setting_look_darkmode_follow
+                                DarkModeOption.LIGHT -> R.string.setting_look_darkmode_light_mode
+                                DarkModeOption.DARK -> R.string.setting_look_darkmode_dark_mode
+                            }
+                        ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            title = { Text(stringResource(R.string.setting_look_darkmode_title)) },
+            icon = { Icon(Icons.Outlined.LightMode, "Light/Dark Mode") },
+            text = { Text(stringResource(R.string.setting_look_darkmode_text)) },
+        )
+
+        SettingBooleanItem(
+            state = dynamicColor,
+            title = { Text(stringResource(R.string.setting_look_dynamic_color_title)) },
+            text = { Text(stringResource(R.string.setting_look_dynamic_color_text)) },
+            icon = { Icon(Icons.Outlined.ColorLens, null) },
+        )
+
+        SettingBooleanItem(
+            state = workMode,
+            title = { Text(stringResource(R.string.setting_look_work_mode_title)) },
+            text = { Text(stringResource(R.string.setting_look_work_mode_text)) },
+            icon = { Icon(Icons.Outlined.HomeWork, null) },
+        )
+    }
+}
+
+/** 播放器行为、缓冲、预览与实验性链路配置分组。 */
+@Composable
+private fun PlayerSection() {
+    val autoPlay = rememberBooleanPreference(key = SettingKeys.AUTO_PLAY, default = true)
+    val loopPlay = rememberBooleanPreference(key = SettingKeys.LOOP_PLAY, default = false)
+    val downloadPlayerPref =
+        rememberStringPreference(
+            key = SettingKeys.DOWNLOAD_PLAYER,
+            default = DownloadPlayerMode.INTERNAL.key,
+        )
+    SettingItemCategory(title = { Text(stringResource(R.string.setting_player)) }) {
+        SettingBooleanItem(
+            state = autoPlay,
+            title = { Text(stringResource(R.string.setting_player_auto_play_title)) },
+            text = { Text(stringResource(R.string.setting_player_auto_play_text)) },
+            icon = { Icon(Icons.Outlined.AutoMode, null) },
+        )
+
+        SettingBooleanItem(
+            state = loopPlay,
+            title = { Text(stringResource(R.string.setting_player_loop_title)) },
+            text = { Text(stringResource(R.string.setting_player_loop_text)) },
+            icon = { Icon(Icons.Outlined.Replay, null) },
+        )
+
+        val seekThumbnailEnabled =
+            rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
+        val seekPreviewPosition =
+            rememberStringPreference(
+                key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
+                default = SeekPreviewPosition.FollowSlider.key,
+            )
+        SettingBooleanItem(
+            state = seekThumbnailEnabled,
+            title = { Text(stringResource(R.string.setting_player_seek_thumbnail)) },
+            icon = { Icon(Icons.Outlined.Image, null) },
+        )
+        if (seekThumbnailEnabled.value) {
+            SettingPickerItem(
+                selected = SeekPreviewPosition.fromKey(seekPreviewPosition.value),
+                onSelect = { seekPreviewPosition.value = it.key },
+                items = SeekPreviewPosition.entries,
+                itemLabel = { position ->
+                    Text(
+                        stringResource(
+                            when (position) {
+                                SeekPreviewPosition.Center ->
+                                    R.string.setting_player_seek_preview_center
+                                SeekPreviewPosition.FollowSlider ->
+                                    R.string.setting_player_seek_preview_follow_slider
+                            }
+                        )
+                    )
+                },
+                title = { Text(stringResource(R.string.setting_player_seek_preview_position)) },
+                icon = { Icon(Icons.Outlined.Image, null) },
+            )
+        }
+
+        // 收起控件时显示贴底全宽细进度条配置项（默认开启）
+        SettingBooleanItem(
+            state =
+                rememberBooleanPreference(
+                    key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS,
+                    default = true,
+                ),
+            title = { Text(stringResource(R.string.setting_player_minimal_progress)) },
+            icon = { Icon(Icons.Outlined.LinearScale, null) },
+        )
+
+        // 扩大缓冲区配置项（默认关闭）
+        SettingBooleanItem(
+            state =
+                rememberBooleanPreference(key = PlaybackSettings.KEY_EXPANDED_BUFFER, default = false),
+            title = { Text(stringResource(R.string.setting_player_expanded_buffer_title)) },
+            text = { Text(stringResource(R.string.setting_player_expanded_buffer_text)) },
+            icon = { Icon(Icons.Outlined.Layers, null) },
+        )
+
+        // 多 CDN 播放（实验）配置项（默认关闭）
+        SettingBooleanItem(
+            state = rememberBooleanPreference(key = PlaybackSettings.KEY_MULTI_CDN, default = false),
+            title = { Text(stringResource(R.string.setting_player_multi_cdn_title)) },
+            text = { Text(stringResource(R.string.setting_player_multi_cdn_text)) },
+            icon = { Icon(Icons.Outlined.AltRoute, null) },
+        )
+
+        // CDN 连接调试（实验）配置项（默认关闭）
+        SettingBooleanItem(
+            state = rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false),
+            title = { Text(stringResource(R.string.setting_cdn_connection_debug_title)) },
+            text = { Text(stringResource(R.string.setting_cdn_connection_debug_text)) },
+            icon = { Icon(Icons.Outlined.Source, null) },
+        )
+
+        // 下载视频播放器选择：内置（internal）/ 第三方（external）
+        SettingPickerItem(
+            selected = DownloadPlayerMode.fromKey(downloadPlayerPref.value),
+            onSelect = { downloadPlayerPref.value = it.key },
+            items = DownloadPlayerMode.entries,
+            itemLabel = { mode ->
+                Text(
+                    text =
+                        stringResource(
+                            when (mode) {
+                                DownloadPlayerMode.INTERNAL -> R.string.setting_player_internal
+                                DownloadPlayerMode.EXTERNAL -> R.string.setting_player_external
+                            }
+                        ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            title = { Text(stringResource(R.string.setting_player_download_player_title)) },
+            icon = { Icon(Icons.Outlined.PlayCircle, null) },
+            text = { Text(stringResource(R.string.setting_player_download_player_text)) },
+        )
+    }
+}
+
+/** 评论区图片自动加载配置分组。 */
+@Composable
+private fun CommentImageSection() {
+    SettingItemCategory(title = { Text(stringResource(R.string.setting_comment_image)) }) {
+        val autoLoadImages =
+            rememberBooleanPreference(key = PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD, default = false)
+        SettingBooleanItem(
+            state = autoLoadImages,
+            title = { Text(stringResource(R.string.setting_comment_image_auto_load_title)) },
+            text = { Text(stringResource(R.string.setting_comment_image_auto_load_text)) },
+            icon = { Icon(Icons.Outlined.AutoMode, null) },
+        )
+    }
+}
+
+/** 下载队列恢复、重试、多 CDN 及目录配置分组。 */
+@Composable
+private fun DownloadSection(directoryLabel: String, onSelectDirectory: () -> Unit) {
+    SettingItemCategory(title = { Text(stringResource(R.string.setting_download)) }) {
+        SettingBooleanItem(
+            state =
+                rememberBooleanPreference(
+                    key = DownloadManager.PREFERENCE_KEY_AUTO_RESUME,
+                    default = DownloadManager.DEFAULT_AUTO_RESUME,
+                ),
+            title = { Text(stringResource(R.string.setting_download_auto_resume_title)) },
+            text = { Text(stringResource(R.string.setting_download_auto_resume_text)) },
+            icon = { Icon(Icons.Outlined.PlayCircle, null) },
+        )
+
+        SettingBooleanItem(
+            state =
+                rememberBooleanPreference(
+                    key = DownloadManager.PREFERENCE_KEY_AUTO_RETRY,
+                    default = DownloadManager.DEFAULT_AUTO_RETRY,
+                ),
+            title = { Text(stringResource(R.string.setting_download_auto_retry_title)) },
+            text = { Text(stringResource(R.string.setting_download_auto_retry_text)) },
+            icon = { Icon(Icons.Outlined.Replay, null) },
+        )
+
+        SettingBooleanItem(
+            state =
+                rememberBooleanPreference(
+                    key = DownloadManager.KEY_MULTI_CDN_ENABLED,
+                    default = DownloadManager.DEFAULT_MULTI_CDN_ENABLED,
+                ),
+            title = { Text(stringResource(R.string.setting_download_multi_cdn_title)) },
+            text = { Text(stringResource(R.string.setting_download_multi_cdn_text)) },
+            icon = { Icon(Icons.Outlined.AltRoute, null) },
+        )
+
+        SettingBaseItem(
+            title = { Text(stringResource(R.string.download_directory_title)) },
+            text = { Text(directoryLabel) },
+            icon = { Icon(Icons.Outlined.Folder, null) },
+            onClick = onSelectDirectory,
+        )
+    }
+}
+
+/** 设置页“存储”分组组件，提供缓存体积展示与清除缓存入口。 */
+@Composable
+private fun SettingStorageSection(
+    cacheBytes: Long,
+    onClearCacheClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
+    SettingItemCategory(
+        modifier = modifier,
+        title = { Text(stringResource(R.string.setting_storage)) },
+    ) {
+        SettingBaseItem(
+            title = { Text(stringResource(R.string.setting_clear_cache_title)) },
+            text = { Text(stringResource(R.string.setting_clear_cache_text, formattedSize)) },
+            icon = { Icon(Icons.Outlined.DeleteSweep, null) },
+            onClick = onClearCacheClick,
+        )
+    }
+}
+
+/** 清除缓存二次确认弹窗组件。 */
+@Composable
+private fun ClearCacheConfirmDialog(
+    cacheBytes: Long,
+    clearing: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
+    AlertDialog(
+        onDismissRequest = { if (!clearing) onDismiss() },
+        title = { Text(text = stringResource(R.string.setting_clear_cache_title)) },
+        text = {
+            Text(
+                text = stringResource(R.string.setting_clear_cache_confirm_message, formattedSize),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = !clearing) {
+                Text(
+                    text = stringResource(R.string.setting_clear_cache_confirm_action),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !clearing) {
+                Text(text = stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
+/** 设置页底部“关于”分组组件，展示版本信息入口项。 */
+@Composable
+private fun SettingAboutSection(
+    versionName: String,
+    versionCode: Int,
+    onVersionInfoClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SettingItemCategory(
+        modifier = modifier,
+        title = { Text(stringResource(R.string.setting_about)) },
+    ) {
+        SettingBaseItem(
+            title = { Text(stringResource(R.string.setting_about_version_title)) },
+            text = { Text(formatAppVersionDisplay(versionName = versionName, versionCode = versionCode)) },
+            icon = { Icon(Icons.Outlined.Info, null) },
+            onClick = onVersionInfoClick,
+        )
+    }
+}
+
+@Composable
+private fun SettingItemCategory(
+    modifier: Modifier = Modifier,
+    title: @Composable () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp)) {
+            ProvideTextStyle(
+                MaterialTheme.typography.labelLarge.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            ) {
+                title()
+            }
+        }
+        content()
+    }
+}
+
+@Composable
+private fun SettingBaseItem(
+    title: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    text: (@Composable () -> Unit)? = null,
+    icon: (@Composable () -> Unit)? = null,
+    action: (@Composable () -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
+) {
+    Row(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .then(
+                    if (onClick != null) {
+                        Modifier.clickable(onClick = onClick)
+                    } else {
+                        Modifier
+                    }
+                )
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        if (icon != null) {
+            Box(
+                modifier =
+                    Modifier.sizeIn(
+                        minWidth = 24.dp,
+                        minHeight = 24.dp,
+                        maxWidth = 32.dp,
+                        maxHeight = 32.dp,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                CompositionLocalProvider(
+                    LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
+                ) {
+                    icon()
+                }
+            }
+        }
+
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            ProvideTextStyle(
+                MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            ) {
+                title()
+            }
+            if (text != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                ProvideTextStyle(
+                    MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                ) {
+                    text()
+                }
+            }
+        }
+
+        if (action != null) {
+            Box(
+                modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                action()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingBooleanItem(
+    state: MutableState<Boolean>,
+    title: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    text: (@Composable () -> Unit)? = null,
+    icon: (@Composable () -> Unit)? = null,
+) {
+    SettingBaseItem(
+        title = title,
+        modifier =
+            modifier.toggleable(
+                value = state.value,
+                role = Role.Switch,
+                onValueChange = { state.value = it },
+            ),
+        text = text,
+        icon = icon,
+        action = {
+            Switch(checked = state.value, onCheckedChange = null, modifier = Modifier.scale(0.85f))
+        },
+    )
+}
+
+@Composable
+private fun <T> SettingPickerItem(
+    selected: T,
+    onSelect: (T) -> Unit,
+    items: List<T>,
+    itemLabel: @Composable (T) -> Unit,
+    title: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: (@Composable () -> Unit)? = null,
+    text: (@Composable () -> Unit)? = null,
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    SettingBaseItem(
+        title = title,
+        modifier = modifier,
+        text = text,
+        icon = icon,
+        action = {
+            Box(modifier = Modifier.wrapContentSize(Alignment.TopEnd)) {
+                Surface(
+                    onClick = { expanded = true },
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.defaultMinSize(minHeight = 36.dp).widthIn(max = 140.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(modifier = Modifier.weight(1f, fill = false)) {
+                            ProvideTextStyle(
+                                MaterialTheme.typography.labelMedium.copy(
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            ) {
+                                itemLabel(selected)
+                            }
+                        }
+                        Icon(
+                            imageVector =
+                                if (expanded) Icons.Outlined.KeyboardArrowUp
+                                else Icons.Outlined.KeyboardArrowDown,
+                            contentDescription = "Dropdown",
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    items.forEach { item ->
+                        DropdownMenuItem(
+                            text = {
+                                ProvideTextStyle(
+                                    MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
+                                ) {
+                                    itemLabel(item)
+                                }
+                            },
+                            onClick = {
+                                onSelect(item)
+                                expanded = false
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        onClick = { expanded = true },
+    )
 }

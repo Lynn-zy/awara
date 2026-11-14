@@ -11,7 +11,7 @@ import org.junit.Test
 class DownloadResumeProgressTest {
     private val initial = DownloadResumeProgress("old-work", 100L)
 
-    private fun task(status: String, bytes: Long = 100L, workId: String = "new-work") =
+    private fun task(status: DownloadTaskStatus, bytes: Long = 100L, workId: String = "new-work") =
         DownloadTask(
             taskId = "task",
             resourceId = "video",

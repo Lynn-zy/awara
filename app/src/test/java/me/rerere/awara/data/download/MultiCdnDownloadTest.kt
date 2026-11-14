@@ -158,17 +158,20 @@ class MultiCdnDownloadTest {
                 val file = temporary.newFile()
                 val tracker = CdnConnectionTracker()
                 val sourcePool = pool(tracker)
-                assertTrue(
-                    SegmentedDownloader(client, block, sourcePool, connectionTracker = tracker)
-                        .download(
-                            url,
-                            file,
-                            null,
-                            onBindCall = ::bound,
-                            onUnbindCall = ::unbound,
-                            onProgress = { _, _ -> },
-                        )
-                )
+                RangeDownloader(
+                        okHttpClient = client,
+                        blockSizeBytes = block,
+                        sourcePoolOverride = sourcePool,
+                        connectionTracker = tracker,
+                    )
+                    .download(
+                        url = url,
+                        targetFile = file,
+                        validator = null,
+                        onBindCall = ::bound,
+                        onUnbindCall = ::unbound,
+                        onProgress = { _, _ -> },
+                    )
                 assertArrayEquals(payload, file.readBytes())
                 val state = DownloadRangeStore.verifiedState(file)!!
                 assertTrue(state.isComplete)
@@ -193,10 +196,12 @@ class MultiCdnDownloadTest {
         runBlocking<Unit> {
             withTimeout(15000) {
                 val file = temporary.newFile()
-                assertTrue(
-                    SegmentedDownloader(client, block, pool())
-                        .download(url, file, null, onProgress = { _, _ -> })
-                )
+                RangeDownloader(
+                        okHttpClient = client,
+                        blockSizeBytes = block,
+                        sourcePoolOverride = pool(),
+                    )
+                    .download(url, file, null, onProgress = { _, _ -> })
                 val state = DownloadRangeStore.verifiedState(file)!!
                 val identity = state.sourceIdentity!!
                 DownloadRangeStore.writeState(
@@ -209,7 +214,7 @@ class MultiCdnDownloadTest {
                 val previousPrimaryRequests = primary.requestCount
                 val previousMirrorRequests = mirror.requestCount
                 val previousCatalogRequests = catalog.requestCount
-                ResumableDownloader(client, DownloadTransferSettings(multiCdnEnabled = false))
+                RangeDownloader(client, multiCdnEnabled = false)
                     .download(
                         url,
                         file,
@@ -237,17 +242,20 @@ class MultiCdnDownloadTest {
                 val file = temporary.newFile()
                 val tracker = CdnConnectionTracker()
                 val sourcePool = pool(tracker)
-                assertTrue(
-                    SegmentedDownloader(client, block, sourcePool, connectionTracker = tracker)
-                        .download(
-                            url,
-                            file,
-                            null,
-                            onBindCall = ::bound,
-                            onUnbindCall = ::unbound,
-                            onProgress = { _, _ -> },
-                        )
-                )
+                RangeDownloader(
+                        okHttpClient = client,
+                        blockSizeBytes = block,
+                        sourcePoolOverride = sourcePool,
+                        connectionTracker = tracker,
+                    )
+                    .download(
+                        url = url,
+                        targetFile = file,
+                        validator = null,
+                        onBindCall = ::bound,
+                        onUnbindCall = ::unbound,
+                        onProgress = { _, _ -> },
+                    )
                 assertTrue(mirrorChunks.get() > 0)
                 assertTrue(mirrorChunks.get() <= CdnPolicy.MAX_FAILURES)
                 assertArrayEquals(payload, file.readBytes())
@@ -270,11 +278,15 @@ class MultiCdnDownloadTest {
                 lateinit var task: Job
                 task =
                     launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
-                        SegmentedDownloader(client, block, pool())
+                        RangeDownloader(
+                                okHttpClient = client,
+                                blockSizeBytes = block,
+                                sourcePoolOverride = pool(),
+                            )
                             .download(
-                                url,
-                                file,
-                                null,
+                                url = url,
+                                targetFile = file,
+                                validator = null,
                                 onBindCall = ::bound,
                                 onUnbindCall = ::unbound,
                                 onProgress = { bytes, _ ->

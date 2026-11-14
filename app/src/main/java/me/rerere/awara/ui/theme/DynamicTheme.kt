@@ -17,6 +17,7 @@ import com.google.android.material.color.utilities.Scheme
 import com.google.android.material.color.utilities.Score
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.awara.util.await
 import me.rerere.compose_setting.preference.mmkvPreference
 import me.rerere.compose_setting.preference.rememberBooleanPreference
@@ -33,7 +34,7 @@ fun DynamicColorTheme(
     content: @Composable () -> Unit
 ) {
     val dynamicColor by rememberBooleanPreference(
-        key = "setting.dynamic_color",
+        key = SettingKeys.DYNAMIC_COLOR,
         default = true
     )
     val darkMode = LocalDarkMode.current
@@ -60,7 +61,7 @@ class DynamicThemeState : KoinComponent {
         url: String
     ) {
         if (url.isEmpty()) return
-        if(mmkvPreference.getBoolean("setting.dynamic_color", true).not()) return
+        if(mmkvPreference.getBoolean(SettingKeys.DYNAMIC_COLOR, true).not()) return
         Log.i(TAG, "updateColorScheme: 开始设置 $url")
         withContext(Dispatchers.IO) {
             kotlin.runCatching {

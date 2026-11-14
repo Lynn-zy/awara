@@ -12,7 +12,6 @@ import androidx.work.WorkManager
 import androidx.work.await
 import androidx.work.workDataOf
 import java.io.File
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -46,7 +45,6 @@ import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.Call
 
 private const val TAG = "DownloadManager"
-private val UUID_REGEX = Regex("^[0-9a-fA-F\\-]{36}$")
 private val SIGNED_URL_REGEX = Regex("""https?://[^\s]+""")
 
 /** 清除文本中携带的 URL 查询签名参数，避免临时签名泄露到数据库与界面。 */
@@ -94,8 +92,9 @@ class DownloadManager(
     private val enqueueMutex = Mutex()
     private val commandLocks = ConcurrentHashMap<String, Mutex>()
     private val transferLocks = ConcurrentHashMap<String, Mutex>()
-    private val activeCalls = ConcurrentHashMap<String, DownloadCallGroup>()
-    val launchPolicy = DownloadLaunchPolicy()
+    private val activeCalls = ConcurrentHashMap<String, ActiveCallGroup>()
+    // 记录 taskId -> 授权执行的新代 workId（或 "*" 表示当前任意授权），消费一次后立即撤销
+    private val manualAuthorizations = ConcurrentHashMap<String, String>()
 
     /** 内存管理的下载活动连接注册中心（按任务及代次隔离） */
     val connectionRegistry = DownloadConnectionRegistry()
@@ -104,24 +103,39 @@ class DownloadManager(
     val connectionSnapshots: StateFlow<Map<String, CdnConnectionSnapshot>>
         get() = connectionRegistry.connections
 
+    /** 读取是否在应用启动时自动恢复未完成下载的偏好设置。 */
     fun isAutoResumeEnabled(): Boolean =
-        mmkvPreference.getBoolean(
-            DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME,
-            DownloadLaunchPolicy.DEFAULT_AUTO_RESUME,
-        )
+        mmkvPreference.getBoolean(PREFERENCE_KEY_AUTO_RESUME, DEFAULT_AUTO_RESUME)
 
+    /** 读取传输失败后是否允许后台静默重试的偏好设置。 */
     fun isAutomaticRetryEnabled(): Boolean =
-        mmkvPreference.getBoolean(
-            PREFERENCE_KEY_DOWNLOAD_AUTO_RETRY,
-            DEFAULT_DOWNLOAD_AUTO_RETRY,
-        )
+        mmkvPreference.getBoolean(PREFERENCE_KEY_AUTO_RETRY, DEFAULT_AUTO_RETRY)
 
-    fun grantExecutionAuthorization(taskId: String, workId: String) {
-        launchPolicy.grantAuthorization(taskId, workId)
+    /** 授予指定任务及工作代次一次性启动执行授权。 */
+    fun grantExecutionAuthorization(taskId: String, workId: String = "*") {
+        manualAuthorizations[taskId] = workId
     }
 
+    /** 消费指定任务与工作代次的一次性启动授权，防止过期 Worker 误认领。 */
     fun consumeExecutionAuthorization(taskId: String, workId: String): Boolean {
-        return launchPolicy.consumeAuthorization(taskId, workId)
+        val expectedWorkId = manualAuthorizations[taskId] ?: return false
+        if (expectedWorkId == "*" || expectedWorkId == workId) {
+            manualAuthorizations.remove(taskId, expectedWorkId)
+            return true
+        }
+        return false
+    }
+
+    /** 检查指定任务或工作代次当前是否仍持有执行授权。 */
+    fun hasExecutionAuthorization(taskId: String, workId: String? = null): Boolean {
+        val expectedWorkId = manualAuthorizations[taskId] ?: return false
+        if (workId == null || expectedWorkId == "*") return true
+        return expectedWorkId == workId
+    }
+
+    /** 撤销指定任务尚未消费的执行授权。 */
+    fun revokeExecutionAuthorization(taskId: String) {
+        manualAuthorizations.remove(taskId)
     }
 
     fun getCommandMutex(taskId: String): Mutex = commandLocks.computeIfAbsent(taskId) { Mutex() }
@@ -130,11 +144,11 @@ class DownloadManager(
 
     /** 在传输锁内开始新一代请求组，旧 Worker 完全退出后才能替换。 */
     fun beginActiveCalls(taskId: String) {
-        activeCalls.put(taskId, DownloadCallGroup())?.cancel()
+        activeCalls.put(taskId, ActiveCallGroup())?.cancel()
     }
 
     fun registerActiveCall(taskId: String, call: Call) {
-        activeCalls.computeIfAbsent(taskId) { DownloadCallGroup() }.register(call)
+        activeCalls.computeIfAbsent(taskId) { ActiveCallGroup() }.register(call)
     }
 
     fun unregisterActiveCall(taskId: String, call: Call) {
@@ -148,14 +162,14 @@ class DownloadManager(
 
     fun cancelActiveCall(taskId: String) {
         connectionRegistry.resetTask(taskId)
-        activeCalls.computeIfAbsent(taskId) { DownloadCallGroup() }.cancel()
+        activeCalls.computeIfAbsent(taskId) { ActiveCallGroup() }.cancel()
     }
 
     suspend fun enqueue(video: Video, source: VideoFile, directoryUri: String) =
         withContext(Dispatchers.IO) {
             val selectedSource = listOf(source).requireDownloadQuality(source.qualityKey)
             val url = selectedSource.src.download.fixUrl()
-            val taskId = UUID.randomUUID().toString()
+            val taskId = DownloadTaskId.random().value
             val authorAvatar = (video.user?.avatar).toAvatarUrl()
 
             val req =
@@ -272,7 +286,7 @@ class DownloadManager(
 
                 withContext(NonCancellable) {
                     // 先取消活跃连接以阻断网络传输，再等待传输锁释放
-                    launchPolicy.revokeAuthorization(taskId)
+                    revokeExecutionAuthorization(taskId)
                     cancelActiveCall(taskId)
                     DownloadNotifications.cancelTaskNotification(context, taskId)
                     WorkManager.getInstance(context)
@@ -286,11 +300,12 @@ class DownloadManager(
                         .await()
 
                     // 等待旧传输彻底关闭后才返回，确保状态安全
+                    val validTaskId = DownloadTaskId.parse(taskId)
                     val transMutex = getTransferMutex(taskId)
                     transMutex.withLock {
                         database
                             .downloadTaskDao()
-                            .updateSettledBytes(taskId, task.workId, parts.completedBytes(taskId))
+                            .updateSettledBytes(taskId, task.workId, parts.completedBytes(validTaskId))
                     }
                 }
             }
@@ -349,12 +364,13 @@ class DownloadManager(
                 grantExecutionAuthorization(taskId, req.id.toString())
 
                 withContext(NonCancellable) {
+                    val validTaskId = DownloadTaskId.parse(taskId)
                     val resumed =
                         transMutex.withLock {
                             val resourceChanged =
                                 task.url.videoDownloadResourceKey() !=
                                     refreshedUrl.videoDownloadResourceKey()
-                            if (resourceChanged) parts.delete(taskId)
+                            if (resourceChanged) parts.delete(validTaskId)
                             database
                                 .downloadTaskDao()
                                 .updateResumeInfo(
@@ -364,7 +380,7 @@ class DownloadManager(
                                     workId = req.id.toString(),
                                     previousWorkId = task.workId,
                                     expectedStatus = task.status,
-                                    downloadedBytes = parts.completedBytes(taskId),
+                                    downloadedBytes = parts.completedBytes(validTaskId),
                                     totalBytes = if (resourceChanged) -1L else task.totalBytes,
                                     validator = if (resourceChanged) null else task.validator,
                                     retryCount =
@@ -482,11 +498,11 @@ class DownloadManager(
         withContext(Dispatchers.IO) {
             val cmdMutex = getCommandMutex(taskId)
             cmdMutex.withLock {
-                val task = database.downloadTaskDao().getTask(taskId) ?: return@withLock
+                database.downloadTaskDao().getTask(taskId) ?: return@withLock
 
                 withContext(NonCancellable) {
                     database.downloadTaskDao().updateStatus(taskId, DownloadTaskStatus.CANCELLING)
-                    launchPolicy.revokeAuthorization(taskId)
+                    revokeExecutionAuthorization(taskId)
                     cancelActiveCall(taskId)
                     connectionRegistry.resetTask(taskId)
                     DownloadNotifications.cancelTaskNotification(context, taskId)
@@ -505,36 +521,23 @@ class DownloadManager(
                     transMutex.withLock {}
 
                     val latestTask = database.downloadTaskDao().getTask(taskId)
-                    var cleanupFailed = false
-                    var cleanupError: String? = null
-
-                    if (latestTask != null && latestTask.destinationUri.isNotBlank()) {
-                        try {
-                            storage.delete(Uri.parse(latestTask.destinationUri))
-                        } catch (e: Exception) {
-                            cleanupFailed = true
-                            cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
-                            Log.e(TAG, "cancel: 清理目标文件失败 taskId=$taskId", e)
-                        }
-                    }
-
-                    try {
-                        parts.delete(taskId)
-                    } catch (exception: Exception) {
-                        cleanupFailed = true
-                        cleanupError = "清理临时文件失败"
-                    }
+                    val cleanup =
+                        cleanupTaskArtifacts(
+                            taskId = taskId,
+                            destinationUri = latestTask?.destinationUri.orEmpty(),
+                            deleteParts = true,
+                        )
 
                     // 仅在物理文件清理成功后删除库记录；失败时保留状态并抛出异常，通知 UI
-                    if (cleanupFailed) {
+                    if (!cleanup.allSucceeded) {
                         database
                             .downloadTaskDao()
                             .updateStatus(
                                 taskId = taskId,
                                 newStatus = DownloadTaskStatus.CANCELLING,
-                                error = cleanupError,
+                                error = cleanup.errorMessage,
                             )
-                        throw IllegalStateException(cleanupError ?: "清理文件失败")
+                        throw IllegalStateException(cleanup.errorMessage ?: "清理文件失败")
                     } else {
                         database.downloadTaskDao().delete(taskId)
                     }
@@ -584,30 +587,20 @@ class DownloadManager(
                                 val transMutex = getTransferMutex(task.taskId)
                                 transMutex.withLock {}
 
-                                var cleanupFailed = false
-                                var cleanupError: String? = null
-                                if (task.destinationUri.isNotBlank()) {
-                                    try {
-                                        storage.delete(Uri.parse(task.destinationUri))
-                                    } catch (e: Exception) {
-                                        cleanupFailed = true
-                                        cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
-                                    }
-                                }
-                                try {
-                                    parts.delete(task.taskId)
-                                } catch (exception: Exception) {
-                                    cleanupFailed = true
-                                    cleanupError = "清理临时文件失败"
-                                }
+                                val cleanup =
+                                    cleanupTaskArtifacts(
+                                        taskId = task.taskId,
+                                        destinationUri = task.destinationUri,
+                                        deleteParts = true,
+                                    )
                                 DownloadNotifications.cancelTaskNotification(context, task.taskId)
-                                if (cleanupFailed) {
+                                if (!cleanup.allSucceeded) {
                                     database
                                         .downloadTaskDao()
                                         .updateStatus(
                                             taskId = task.taskId,
                                             newStatus = DownloadTaskStatus.CANCELLING,
-                                            error = cleanupError,
+                                            error = cleanup.errorMessage,
                                         )
                                 } else {
                                     database.downloadTaskDao().delete(task.taskId)
@@ -620,26 +613,22 @@ class DownloadManager(
                                 val transMutex = getTransferMutex(task.taskId)
                                 transMutex.withLock {}
 
-                                var cleanupSuccess = true
-                                var cleanupError: String? = null
-                                if (task.destinationUri.isNotBlank()) {
-                                    try {
-                                        storage.delete(Uri.parse(task.destinationUri))
-                                    } catch (e: Exception) {
-                                        cleanupSuccess = false
-                                        cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
-                                    }
-                                }
+                                val cleanup =
+                                    cleanupTaskArtifacts(
+                                        taskId = task.taskId,
+                                        destinationUri = task.destinationUri,
+                                        deleteParts = false,
+                                    )
                                 DownloadNotifications.cancelTaskNotification(context, task.taskId)
                                 val destUriToRetain =
-                                    if (cleanupSuccess) "" else task.destinationUri
+                                    if (cleanup.targetDeleted) "" else task.destinationUri
                                 val updated =
                                     database
                                         .downloadTaskDao()
                                         .resetSavingToFailed(
                                             taskId = task.taskId,
                                             destinationUri = destUriToRetain,
-                                            error = cleanupError ?: "保存中断",
+                                            error = cleanup.errorMessage ?: "保存中断",
                                         )
                                 if (updated > 0) {
                                     DownloadNotifications.showFailureNotification(
@@ -660,19 +649,15 @@ class DownloadManager(
                                 val transMutex = getTransferMutex(task.taskId)
                                 transMutex.withLock {}
 
-                                var cleanupSuccess = true
-                                var cleanupError: String? = null
-                                if (task.destinationUri.isNotBlank()) {
-                                    try {
-                                        storage.delete(Uri.parse(task.destinationUri))
-                                    } catch (e: Exception) {
-                                        cleanupSuccess = false
-                                        cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
-                                    }
-                                }
+                                val cleanup =
+                                    cleanupTaskArtifacts(
+                                        taskId = task.taskId,
+                                        destinationUri = task.destinationUri,
+                                        deleteParts = false,
+                                    )
                                 DownloadNotifications.cancelTaskNotification(context, task.taskId)
                                 val destUriToRetain =
-                                    if (cleanupSuccess) "" else task.destinationUri
+                                    if (cleanup.targetDeleted) "" else task.destinationUri
                                 val targetStatus =
                                     if (workInfo?.state == WorkInfo.State.FAILED) {
                                         DownloadTaskStatus.FAILED
@@ -687,7 +672,7 @@ class DownloadManager(
                                             status = targetStatus,
                                             destinationUri = destUriToRetain,
                                             error =
-                                                cleanupError
+                                                cleanup.errorMessage
                                                     ?: if (
                                                         targetStatus == DownloadTaskStatus.FAILED
                                                     )
@@ -703,6 +688,8 @@ class DownloadManager(
                                 }
                             }
                         }
+                        DownloadTaskStatus.PAUSED,
+                        DownloadTaskStatus.FAILED -> Unit
                     }
                 }
             }
@@ -711,12 +698,13 @@ class DownloadManager(
                 if (transferMutex.tryLock()) {
                     try {
                         database.downloadTaskDao().getTask(initialTask.taskId)?.let { latest ->
+                            val parsedId = DownloadTaskId.parseOrNull(latest.taskId) ?: return@let
                             database
                                 .downloadTaskDao()
                                 .updateSettledBytes(
                                     latest.taskId,
                                     latest.workId,
-                                    parts.completedBytes(latest.taskId),
+                                    parts.completedBytes(parsedId),
                                 )
                         }
                     } finally {
@@ -725,13 +713,13 @@ class DownloadManager(
                 }
             }
             // 只回收没有任务记录的分块，活动任务使用同一传输锁保护。
-            for (taskId in parts.taskIds()) {
-                val transferMutex = getTransferMutex(taskId)
+            for (partTaskId in parts.taskIds()) {
+                val transferMutex = getTransferMutex(partTaskId.value)
                 if (transferMutex.tryLock()) {
                     try {
-                        if (database.downloadTaskDao().getTask(taskId) == null) {
-                            parts.delete(taskId)
-                            DownloadNotifications.cancelTaskNotification(context, taskId)
+                        if (database.downloadTaskDao().getTask(partTaskId.value) == null) {
+                            parts.delete(partTaskId)
+                            DownloadNotifications.cancelTaskNotification(context, partTaskId.value)
                         }
                     } finally {
                         transferMutex.unlock()
@@ -740,15 +728,54 @@ class DownloadManager(
             }
         }
 
+    /** 统一清理任务的目标成品与（可选）分块临时文件，并聚合返回目标是否已删除及首个错误提示。 */
+    private suspend fun cleanupTaskArtifacts(
+        taskId: String,
+        destinationUri: String,
+        deleteParts: Boolean,
+    ): ArtifactCleanupOutcome {
+        var targetDeleted = true
+        var errorMessage: String? = null
+        if (destinationUri.isNotBlank()) {
+            try {
+                storage.delete(Uri.parse(destinationUri))
+            } catch (e: Exception) {
+                targetDeleted = false
+                errorMessage = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
+                Log.e(TAG, "cleanupTaskArtifacts: 清理目标文件失败 taskId=$taskId", e)
+            }
+        }
+        if (deleteParts) {
+            try {
+                parts.delete(DownloadTaskId.parse(taskId))
+            } catch (_: Exception) {
+                if (errorMessage == null) {
+                    errorMessage = "清理临时文件失败"
+                }
+            }
+        }
+        return ArtifactCleanupOutcome(targetDeleted = targetDeleted, errorMessage = errorMessage)
+    }
+
     private suspend fun isWorkerActive(workManager: WorkManager, workId: String): Boolean {
         val info = getWorkInfo(workManager, workId) ?: return false
         return !info.state.isFinished
     }
 
     private suspend fun getWorkInfo(workManager: WorkManager, workId: String): WorkInfo? {
-        if (workId.isBlank() || !UUID_REGEX.matches(workId)) return null
-        return workManager.getWorkInfoById(UUID.fromString(workId)).await()
+        val uuid = DownloadTaskId.parseOrNull(workId)?.toUuid() ?: return null
+        return workManager.getWorkInfoById(uuid).await()
     }
+
+    /** 查询启动弹窗需要用户决策的未完成任务清单。 */
+    suspend fun getStartupUnfinishedTasks(): List<DownloadTask> =
+        withContext(Dispatchers.IO) {
+            filterStartupUnfinishedTasks(database.downloadTaskDao().getAllTasksList())
+        }
+
+    /** 批量恢复给定任务列表并收集逐项执行结果（供启动引导恢复调用）。 */
+    suspend fun resumeTasks(tasks: List<DownloadTask>): BatchResult =
+        withContext(Dispatchers.IO) { executeBatch(tasks) { task -> safeResume(task.taskId) } }
 
     suspend fun pauseAll(tasksToPause: List<DownloadTask>? = null): BatchResult =
         withContext(Dispatchers.IO) {
@@ -763,13 +790,90 @@ class DownloadManager(
             executeBatch(targets) { task -> cancel(task.taskId) }
         }
 
-    companion object {
-        const val PREFERENCE_KEY_AUTO_RESUME = DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME
-        const val DEFAULT_AUTO_RESUME = DownloadLaunchPolicy.DEFAULT_AUTO_RESUME
-        const val PREFERENCE_KEY_AUTO_RETRY = PREFERENCE_KEY_DOWNLOAD_AUTO_RETRY
-        const val DEFAULT_AUTO_RETRY = DEFAULT_DOWNLOAD_AUTO_RETRY
+    private data class ArtifactCleanupOutcome(
+        val targetDeleted: Boolean,
+        val errorMessage: String?,
+    ) {
+        val allSucceeded: Boolean
+            get() = targetDeleted && errorMessage == null
+    }
 
-        // pauseAll 仅针对排队或下载中的任务，过滤跳过保存中、已暂停、已失败及取消中任务
+    /** 同一代下载任务的活跃请求集合，保证取消信号与新请求登记原子互斥，阻止迟到请求逃逸。 */
+    internal class ActiveCallGroup {
+        private val calls = mutableSetOf<Call>()
+        private var cancelled = false
+
+        @Synchronized
+        fun register(call: Call) {
+            if (cancelled) call.cancel() else calls.add(call)
+        }
+
+        @Synchronized
+        fun unregister(call: Call) {
+            calls.remove(call)
+        }
+
+        @Synchronized
+        fun cancel() {
+            cancelled = true
+            calls.forEach { it.cancel() }
+            calls.clear()
+        }
+    }
+
+    companion object {
+        const val PREFERENCE_KEY_AUTO_RESUME = "setting.download_auto_resume"
+        const val DEFAULT_AUTO_RESUME = false
+        const val PREFERENCE_KEY_AUTO_RETRY = "setting.download_auto_retry"
+        const val DEFAULT_AUTO_RETRY = false
+        const val KEY_MULTI_CDN_ENABLED = "setting.download_multi_cdn_enabled"
+        const val DEFAULT_MULTI_CDN_ENABLED = false
+        const val MAX_SILENT_DOWNLOAD_RETRIES = 3
+
+        /** 读取多 CDN 实验性并行下载开关快照（在任务启动或恢复时固定到当次执行）。 */
+        fun isMultiCdnEnabled(): Boolean =
+            mmkvPreference.getBoolean(KEY_MULTI_CDN_ENABLED, DEFAULT_MULTI_CDN_ENABLED)
+
+        /** 计算下载失败后是否继续触发后台静默重试及下一轮重试次数。 */
+        fun decideRetry(
+            autoRetryEnabled: Boolean,
+            receivedNewData: Boolean,
+            retryCount: Int,
+        ): DownloadRetryDecision {
+            if (!autoRetryEnabled) {
+                return DownloadRetryDecision(shouldRetry = false, nextRetryCount = 0)
+            }
+            val nextRetryCount = if (receivedNewData) 1 else retryCount + 1
+            return DownloadRetryDecision(
+                shouldRetry = nextRetryCount <= MAX_SILENT_DOWNLOAD_RETRIES,
+                nextRetryCount = nextRetryCount,
+            )
+        }
+
+        /** 判断状态是否属于应用启动弹窗中可恢复确认的未完成下载状态。 */
+        fun isStartupUnfinishedStatus(status: DownloadTaskStatus): Boolean =
+            status == DownloadTaskStatus.QUEUED ||
+                status == DownloadTaskStatus.RUNNING ||
+                status == DownloadTaskStatus.PAUSED ||
+                status == DownloadTaskStatus.RETRYING
+
+        /** 判断任务自动启动（如 WorkManager 重启调度）是否应因未授权且关闭自动恢复而被拦截。 */
+        fun shouldBlockAutomaticStart(
+            status: DownloadTaskStatus,
+            autoResumeEnabled: Boolean,
+            manuallyAuthorized: Boolean,
+        ): Boolean =
+            !autoResumeEnabled &&
+                !manuallyAuthorized &&
+                (status == DownloadTaskStatus.QUEUED ||
+                    status == DownloadTaskStatus.RUNNING ||
+                    status == DownloadTaskStatus.RETRYING)
+
+        /** 筛选应用启动阶段需要向用户确认恢复或暂停的未完成任务。 */
+        fun filterStartupUnfinishedTasks(tasks: List<DownloadTask>): List<DownloadTask> =
+            tasks.filter { isStartupUnfinishedStatus(it.status) }
+
+        /** pauseAll 仅针对排队、下载中或重试等待任务，过滤保存中、已暂停、失败与取消中任务。 */
         fun filterPausableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
             return tasks.filter {
                 it.status == DownloadTaskStatus.QUEUED ||
@@ -778,7 +882,8 @@ class DownloadManager(
             }
         }
 
-        fun filterResumableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
+        /** 筛选下载管理页用户手动“全部恢复”操作的目标任务（仅含已暂停任务）。 */
+        fun filterManualResumableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
             return tasks.filter { it.status == DownloadTaskStatus.PAUSED }
         }
 
@@ -810,6 +915,9 @@ class DownloadManager(
         }
     }
 }
+
+/** 失败重试决策结果（供 Worker 执行或放弃重试）。 */
+data class DownloadRetryDecision(val shouldRetry: Boolean, val nextRetryCount: Int)
 
 data class BatchResult(
     val total: Int,
