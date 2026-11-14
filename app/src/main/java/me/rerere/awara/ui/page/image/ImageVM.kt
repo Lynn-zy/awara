@@ -1,5 +1,6 @@
 package me.rerere.awara.ui.page.image
 
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -7,6 +8,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
@@ -23,6 +25,8 @@ import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.iwara.RefreshRunner
 import me.rerere.awara.ui.component.iwara.UiText
+
+private const val TAG = "ImageVM"
 
 class ImageVM(
     savedStateHandle: SavedStateHandle,
@@ -96,26 +100,29 @@ class ImageVM(
         )
     }
 
+    /** 异步写入图片浏览历史并按保留策略清理过期记录；显式重抛协程取消信号。 */
     private fun writeHistory() {
         viewModelScope.launch {
-            kotlin
-                .runCatching {
-                    appDatabase
-                        .historyDao()
-                        .insertHistory(
-                            HistoryItem(
-                                time = Instant.now(),
-                                type = HistoryType.IMAGE,
-                                resourceId = id,
-                                title = state.state?.title ?: "",
-                                thumbnail = state.state?.thumbnailUrl() ?: "",
-                            )
+            try {
+                appDatabase
+                    .historyDao()
+                    .insertHistory(
+                        HistoryItem(
+                            time = Instant.now(),
+                            type = HistoryType.IMAGE,
+                            resourceId = id,
+                            title = state.state?.title ?: "",
+                            thumbnail = state.state?.thumbnailUrl() ?: "",
                         )
-                    HistoryRetention.current().cutoff()?.let { cutoff ->
-                        appDatabase.historyDao().deleteHistoryBefore(cutoff.epochSecond)
-                    }
+                    )
+                HistoryRetention.current().cutoff()?.let { cutoff ->
+                    appDatabase.historyDao().deleteHistoryBefore(cutoff.epochSecond)
                 }
-                .onFailure { it.printStackTrace() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "writeHistory: $e")
+            }
         }
     }
 

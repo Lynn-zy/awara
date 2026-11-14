@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
+import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,7 +34,7 @@ import org.robolectric.annotation.Config
  * 覆盖场景：
  * 1. 固定限额 LRU：验证默认 1GiB 常量配置与小预算 fixture 下的数据自动淘汰；
  * 2. 有读者延迟清理：活跃租约持有时退出清理被挂起，最后一个租约释放后自动触发清理；
- * 3. open 失败与 close 释放：验证数据源 open 发生异常及 close 时正确解引用，无租约泄漏；
+ * 3. open 失败与 close 释放：验证经 [PlayerCache.get] 构造的数据源在 open 异常及 close 异常时正确解引用，无租约泄漏；
  * 4. finish vs background/config：验证仅最后 Activity finish 且非配置变更触发退出清理，切后台和旋转不清理；
  * 5. 清理仅 play 目录：验证仅清理 player_cache 目录，不触碰 image_cache、download_parts 等目录；
  * 6. 下一启动补清：验证进程异常终止后的磁盘残留能够在冷启动初始化前被正确清空；
@@ -57,12 +58,8 @@ class PlayerCacheTest {
         PlayerCache.resetForTesting()
     }
 
-    /** 写入测试数据到 SimpleCache 的辅助工具函数。 */
-    private fun writeBytesToCache(
-        cache: androidx.media3.datasource.cache.SimpleCache,
-        key: String,
-        bytes: ByteArray,
-    ) {
+    /** 写入测试数据到 [SimpleCache] 的辅助工具函数。 */
+    private fun writeBytesToCache(cache: SimpleCache, key: String, bytes: ByteArray) {
         val length = bytes.size.toLong()
         cache.startReadWrite(key, 0L, length)
         val file = cache.startFile(key, 0L, length)
@@ -70,72 +67,68 @@ class PlayerCacheTest {
         cache.commitFile(file, length)
     }
 
+    /** 轮询等待异步清理任务在超时前满足断言条件。 */
+    private fun waitUntil(message: String, timeoutMs: Long = 5_000L, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return
+            Thread.sleep(20)
+        }
+        assertTrue(message, condition())
+    }
+
     /** 场景 1：固定限额 (LRU 可小预算 fixture)。验证默认 1GiB 与小预算下多资源写入自动淘汰。 */
     @Test
     fun fixedCacheQuotaAndLruEvictionWithSmallFixture() {
-        // 验证默认最大缓存限额为 1GiB
         assertEquals(1024L * 1024L * 1024L, PlayerCache.MAX_CACHE_BYTES)
 
-        // 使用 1000 字节的小预算 fixture 初始化缓存
         val customDir = File(context.cacheDir, "test_lru_cache")
         val cache = PlayerCache.initForTesting(context, maxBytes = 1000L, customDir = customDir)
 
-        // 写入资源 1：600 字节
         writeBytesToCache(cache, "key_item_1", ByteArray(600))
-
         assertEquals(600L, cache.cacheSpace)
         assertTrue(cache.keys.contains("key_item_1"))
 
-        // 写入资源 2：600 字节，总数据量 1200 字节超过 1000 字节预算，触发 LRU 淘汰旧数据
+        // 写入资源 2 后总容量超出 1000B 预算，触发 LRU 淘汰旧资源
         writeBytesToCache(cache, "key_item_2", ByteArray(600))
-
-        // 验证总缓存空间被限制在 1000 字节以内，旧资源 key_item_1 的数据已被淘汰清空
         assertTrue(cache.cacheSpace <= 1000L)
         assertFalse(cache.getCachedSpans("key_item_2").isEmpty())
         assertTrue(cache.getCachedSpans("key_item_1").isEmpty())
     }
 
-    /** 场景 2：有读者延迟清理。验证在存在活跃租约时延迟清理，租约释放后自动触发清理。 */
+    /** 场景 2：有读者延迟清理。验证活跃租约存在时退出清理被挂起，租约释放后自动完成清理。 */
     @Test
-    fun delayedCleanupWhenReadersActive() = runBlocking {
+    fun delayedCleanupWhenReadersActive() {
         val cache = PlayerCache.initForTesting(context)
-
-        // 写入测试缓存数据
         writeBytesToCache(cache, "active_video_key", ByteArray(400))
         assertEquals(400L, cache.cacheSpace)
+        assertEquals(400L, PlayerCache.getCachedBytes(context))
 
-        // 申请租约，模拟正在播放或提取预览
         val lease = PlayerCache.acquireLease()
-        assertEquals(1, PlayerCache.getActiveLeaseCount())
-
-        // 触发应用退出
         PlayerCache.onAppExit(context)
 
-        // 验证此时清理被延迟，活跃租约计数为 1，pendingCleanup 为 true，缓存数据仍未被删除
+        // 存在活跃租约期间，退出清理必须保持挂起，缓存数据不得被删除
+        Thread.sleep(50)
         assertTrue(PlayerCache.isPendingCleanup())
-        assertEquals(1, PlayerCache.getActiveLeaseCount())
         assertEquals(400L, cache.cacheSpace)
+        assertEquals(400L, PlayerCache.getCachedBytes(context))
 
-        // 释放租约
+        // 释放最后租约后应自动在后台触发并完成清理
         lease.close()
-
-        // 验证租约归零
-        assertEquals(0, PlayerCache.getActiveLeaseCount())
-
-        // 同步等待或确认清理逻辑执行完毕
-        PlayerCache.cleanUpNow(context)
-        assertFalse(PlayerCache.isPendingCleanup())
-        assertEquals(0L, cache.cacheSpace)
+        waitUntil("释放最后一个活跃租约后应自动清空播放缓存") {
+            !PlayerCache.isPendingCleanup() &&
+                cache.cacheSpace == 0L &&
+                PlayerCache.getCachedBytes(context) == 0L
+        }
         assertTrue(cache.getCachedSpans("active_video_key").isEmpty())
     }
 
-    /** 场景 3：open 失败释放。验证数据源在 open 失败以及 close 时均正确解引用，无泄漏。 */
+    /** 场景 3：open 失败释放。验证经 [PlayerCache.get] 构造的数据源在 open 失败与重复 close 后不泄漏或破坏租约。 */
     @Test
     fun openFailureReleasesLeaseCorrectly() {
-        PlayerCache.initForTesting(context)
-        assertEquals(0, PlayerCache.getActiveLeaseCount())
+        val cache = PlayerCache.initForTesting(context)
+        writeBytesToCache(cache, "lease_guard_key", ByteArray(400))
 
-        // 构造一个在 open 时抛出异常的模拟 upstream 数据源
         val closeCalled = AtomicBoolean(false)
         val failingUpstreamFactory =
             DataSource.Factory {
@@ -156,58 +149,57 @@ class PlayerCacheTest {
                 }
             }
 
-        val cachedFactory = PlayerCache.get(context, failingUpstreamFactory)
-        val dataSource = cachedFactory.createDataSource()
-
-        // 执行 open，预期抛出 IOException
+        val dataSource = PlayerCache.get(context, failingUpstreamFactory).createDataSource()
         try {
             dataSource.open(DataSpec(Uri.parse("https://example.com/mock.mp4")))
             fail("Expected IOException")
         } catch (e: IOException) {
             assertEquals("Simulated network open failure", e.message)
         }
-
-        // 验证 open 失败后底层 delegate.close 确实被调用
         assertTrue(closeCalled.get())
 
-        // 验证 open 失败后，租约已正确归还，活跃计数恢复为 0
-        assertEquals(0, PlayerCache.getActiveLeaseCount())
-
-        // 即使再次调用 close，也不会重复释放导致负数
+        // 重复 close 不应使租约计数变成负数从而绕过新租约保护
         dataSource.close()
-        assertEquals(0, PlayerCache.getActiveLeaseCount())
+        val guardLease = PlayerCache.acquireLease()
+        PlayerCache.onAppExit(context)
+        Thread.sleep(50)
+        assertEquals(400L, cache.cacheSpace)
+
+        // 释放保护租约后立刻清空缓存，证实此前 open 失败未发生租约泄漏
+        guardLease.close()
+        waitUntil("open 失败释放租约后，释放最后保护租约应立即清空缓存") {
+            cache.cacheSpace == 0L && PlayerCache.getCachedBytes(context) == 0L
+        }
     }
 
-    /** 场景 3b：open 失败且底层 close 抛出异常时，使用 suppressed 附加异常，租约依然归零且重复 close 安全。 */
+    /** 场景 3b：通过公开 [PlayerCache.get] 构造时，open 与底层 close 均异常仍附加 suppressed 并完整释放租约。 */
     @Test
     fun openFailureWithFailingCloseSuppressesCloseExceptionAndClearsLease() {
-        var leaseCount = 0
-        val mockDelegate =
-            object : DataSource {
-                override fun addTransferListener(transferListener: TransferListener) {}
+        val cache = PlayerCache.initForTesting(context)
+        writeBytesToCache(cache, "suppressed_lease_key", ByteArray(400))
 
-                override fun open(dataSpec: DataSpec): Long {
-                    throw IOException("Primary open failure")
-                }
+        val failingUpstreamFactory =
+            DataSource.Factory {
+                object : DataSource {
+                    override fun addTransferListener(transferListener: TransferListener) {}
 
-                override fun read(buffer: ByteArray, offset: Int, length: Int): Int = -1
+                    override fun open(dataSpec: DataSpec): Long {
+                        throw IOException("Primary open failure")
+                    }
 
-                override fun getUri(): Uri? = null
+                    override fun read(buffer: ByteArray, offset: Int, length: Int): Int = -1
 
-                override fun close() {
-                    throw IOException("Secondary close failure")
+                    override fun getUri(): Uri? = null
+
+                    override fun close() {
+                        throw IOException("Secondary close failure")
+                    }
                 }
             }
 
-        val leasedDataSource =
-            PlayerCache.LeasedDataSource(
-                onOpen = { leaseCount++ },
-                onClose = { leaseCount-- },
-                delegateProvider = { mockDelegate },
-            )
-
+        val dataSource = PlayerCache.get(context, failingUpstreamFactory).createDataSource()
         try {
-            leasedDataSource.open(DataSpec(Uri.parse("https://example.com/mock.mp4")))
+            dataSource.open(DataSpec(Uri.parse("https://example.com/mock-failing-close.mp4")))
             fail("Expected primary open IOException")
         } catch (e: IOException) {
             assertEquals("Primary open failure", e.message)
@@ -215,26 +207,26 @@ class PlayerCacheTest {
             assertEquals("Secondary close failure", e.suppressed[0].message)
         }
 
-        // 验证租约依然归零
-        assertEquals(0, leaseCount)
-
-        // 重复调用 close 不会减成负数
-        leasedDataSource.close()
-        assertEquals(0, leaseCount)
+        // 重复 close 后触发退出清理，验证租约正常归零不被阻塞
+        dataSource.close()
+        PlayerCache.onAppExit(context)
+        waitUntil("open 与 close 均异常后仍应正常释放租约并完成退出清理") {
+            cache.cacheSpace == 0L && PlayerCache.getCachedBytes(context) == 0L
+        }
     }
 
-    /** 未调用 open 直接 read 必须立即抛出 IllegalStateException 快速失败，禁止返回 EOF。 */
+    /** 验证经 [PlayerCache.get] 构造的缓存数据源未调用 open 直接 read 时立即抛 [IllegalStateException] 快速失败。 */
     @Test
     fun leasedDataSourceReadBeforeOpenFailsFast() {
-        val leasedDataSource =
-            PlayerCache.LeasedDataSource(
-                onOpen = {},
-                onClose = {},
-                delegateProvider = { error("未 open 前不应创建 delegate") },
-            )
+        val dataSource =
+            PlayerCache.get(
+                    context,
+                    DataSource.Factory { error("未调用 open 前不应构造底层数据源") },
+                )
+                .createDataSource()
 
         assertThrows(IllegalStateException::class.java) {
-            leasedDataSource.read(ByteArray(16), 0, 16)
+            dataSource.read(ByteArray(16), 0, 16)
         }
     }
 
@@ -254,7 +246,7 @@ class PlayerCacheTest {
         callbacks.onActivityStopped(activity)
         assertFalse(exitTriggered.get())
 
-        // 2. 屏幕旋转配置变更：重建时销毁旧 Activity，但 isChangingConfigurations = true，不清理
+        // 2. 屏幕旋转配置变更：isChangingConfigurations = true，不清理
         val changingActivity =
             object : Activity() {
                 override fun isFinishing(): Boolean = true
@@ -264,7 +256,7 @@ class PlayerCacheTest {
         callbacks.onActivityDestroyed(changingActivity)
         assertFalse(exitTriggered.get())
 
-        // 3. 正常退出：isFinishing = true，isChangingConfigurations = false
+        // 3. 正常退出：isFinishing = true 且非配置变更
         val finishingActivity =
             object : Activity() {
                 override fun isFinishing(): Boolean = true
@@ -292,14 +284,10 @@ class PlayerCacheTest {
         assertTrue(imageFile.exists())
         assertTrue(partFile.exists())
 
-        // 执行清理
-        PlayerCache.cleanUpNow(context)
+        PlayerCache.performCleanup(context)
 
-        // 验证 player_cache 内资源已被清空
         assertEquals(0L, cache.cacheSpace)
         assertTrue(cache.getCachedSpans("video_stream_key").isEmpty())
-
-        // 验证 image_cache 和 download_parts 依然完好无损
         assertTrue(imageFile.exists())
         assertEquals("image_data", imageFile.readText())
         assertTrue(partFile.exists())
@@ -309,23 +297,18 @@ class PlayerCacheTest {
     /** 场景 6：下一启动补清。验证异常强杀留下的磁盘残留，在冷启动首次初始化前被补清。 */
     @Test
     fun purgeOnStartupCleansRemnantsBeforeInstanceInitialization() = runBlocking {
-        // 模拟进程处于未初始化状态
         PlayerCache.resetForTesting()
 
-        // 模拟上次被杀进程留下的 player_cache 残留
         val playerCacheDir = File(context.cacheDir, PlayerCache.CACHE_DIR_NAME).apply { mkdirs() }
         val orphanFile =
             File(playerCacheDir, "killed_process_remnant.exo").apply { writeBytes(ByteArray(1024)) }
         assertTrue(orphanFile.exists())
 
-        // 调用冷启动补清并在协程中等待执行完成
         val job = PlayerCache.purgeOnStartup(context)
         job.join()
 
-        // 验证残留已被清空（文件不存在）
         assertFalse(orphanFile.exists())
 
-        // 初始化 SimpleCache 实例，验证其完全干净可用
         val cache = PlayerCache.initForTesting(context)
         assertEquals(0L, cache.cacheSpace)
         assertTrue(cache.keys.isEmpty())
@@ -335,83 +318,68 @@ class PlayerCacheTest {
     @Test
     fun reEntryWorksNormallyAfterCleanupWithoutReleasedException() {
         val cache = PlayerCache.initForTesting(context)
-
-        // 第一次使用：写入数据
         writeBytesToCache(cache, "first_video", ByteArray(300))
         assertEquals(300L, cache.cacheSpace)
 
-        // 触发退出清理
-        PlayerCache.cleanUpNow(context)
+        PlayerCache.performCleanup(context)
         assertEquals(0L, cache.cacheSpace)
 
-        // 重新进入应用：再次调用 get 并写入新数据
         val factory = PlayerCache.get(context)
         assertNotNull(factory)
 
-        // 验证当前 SimpleCache 实例依然正常存活，没有被 release()
         writeBytesToCache(cache, "second_video", ByteArray(500))
-
-        // 验证新数据正常写入并缓存
         assertEquals(500L, cache.cacheSpace)
         assertTrue(cache.keys.contains("second_video"))
     }
 
-    /** 场景 8：get 与 purgeOnStartup 不阻塞调用线程，且 get 绝不提前创建 SimpleCache 实例或执行磁盘 IO。 */
+    /** 场景 8：验证 [PlayerCache.get] 不提前创建 SimpleCache 索引或阻断 [PlayerCache.purgeOnStartup] 异步补清。 */
     @Test
     fun getAndPurgeOnStartupDoNotBlockCallingThreadOrTriggerDisk() = runBlocking {
         PlayerCache.resetForTesting()
 
-        // 制造磁盘残留
         val playerCacheDir = File(context.cacheDir, PlayerCache.CACHE_DIR_NAME).apply { mkdirs() }
         val remnant = File(playerCacheDir, "stale.exo").apply { writeBytes(ByteArray(256)) }
         assertTrue(remnant.exists())
 
-        // 1. purgeOnStartup 在调用瞬间异步分发到 appScope IO，不阻塞当前调用线程同步删除
-        val job = PlayerCache.purgeOnStartup(context)
-        assertNotNull(job)
-
-        // 2. PlayerCache.get 只构造轻量工厂，不触发磁盘 IO，SimpleCache 实例保持为 null
+        // PlayerCache.get 只构造轻量工厂：既不落盘生成 .exi 索引，也不占用全局实例从而阻碍冷启动补清
         val factory = PlayerCache.get(context)
         assertNotNull(factory)
-        assertEquals(null, PlayerCache.getCacheInstance())
+        assertTrue(remnant.exists())
+        assertTrue(
+            playerCacheDir.listFiles().orEmpty().none {
+                it.name.endsWith(".exi", ignoreCase = true)
+            }
+        )
 
-        // 等待异步补清完成，确认残留最终被删除
+        val job = PlayerCache.purgeOnStartup(context)
+        assertNotNull(job)
         job.join()
         assertFalse(remnant.exists())
     }
 
-    /** 场景 9：复用同一锁保证异步启动补清晚到时已存在活跃 cacheInstance 时不删现有会话。 */
+    /** 场景 9：复用同一锁保证异步启动补清晚到时已存在活跃会话时绝不误删现有缓存。 */
     @Test
     fun lateStartupPurgeDoesNotDeleteActiveSessionWhenCacheInstanceNotNull() = runBlocking {
-        // 先建立一个活跃的 SimpleCache 会话
         val cache = PlayerCache.initForTesting(context)
         writeBytesToCache(cache, "current_playing_session", ByteArray(400))
         assertEquals(400L, cache.cacheSpace)
-        assertNotNull(PlayerCache.getCacheInstance())
 
-        // 晚到的启动补清触发并等待
         val job = PlayerCache.purgeOnStartup(context)
         job.join()
 
-        // 验证当前正在播放的会话数据依然存在，未被误删
         assertEquals(400L, cache.cacheSpace)
         assertFalse(cache.getCachedSpans("current_playing_session").isEmpty())
     }
 
-    /** 场景 10：清理失败或删除没成功不能当 clean 成功，保持 pendingCleanup 状态以供重试。 */
+    /** 场景 10：清理失败时不能误判成功，必须保持 pending 状态以便后续重试。 */
     @Test
     fun failedCleanupLeavesPendingFlagForRetry() {
-        // 已释放实例拒绝访问缓存索引，稳定触发异常，不依赖操作系统的文件权限语义。
         val cache = PlayerCache.initForTesting(context)
         cache.release()
 
-        // 执行清理
-        PlayerCache.cleanUpNow(context)
+        PlayerCache.performCleanup(context)
 
-        // 删除没成功不能当 clean 成功，必须保持 pending 状态以便后续重试
         assertTrue(PlayerCache.isPendingCleanup())
-
-        // 清理现场
         PlayerCache.resetForTesting()
     }
 }

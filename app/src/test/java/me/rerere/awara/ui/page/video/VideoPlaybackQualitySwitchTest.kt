@@ -1,10 +1,6 @@
 package me.rerere.awara.ui.page.video
 
 import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import java.lang.reflect.InvocationHandler
-import java.lang.reflect.Method
-import java.lang.reflect.Proxy
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import me.rerere.awara.data.entity.DownloadItem
@@ -13,82 +9,13 @@ import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.VideoSrc
 import me.rerere.awara.ui.component.player.PlayerState
+import me.rerere.awara.ui.component.player.createMockPlayer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoPlaybackQualitySwitchTest {
-
-    private class MockPlayerInvocationHandler : InvocationHandler {
-        var currentPositionValue: Long = 10000L
-        var playWhenReadyValue: Boolean = false
-        var lastSetMediaItem: MediaItem? = null
-        var lastSetPositionMs: Long? = null
-        var lastSeekPositionMs: Long? = null
-        var prepareCount: Int = 0
-
-        override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
-            val name = method.name
-            val argCount = args?.size ?: 0
-            when {
-                name == "getCurrentPosition" && argCount == 0 -> return currentPositionValue
-                name == "getPlayWhenReady" && argCount == 0 -> return playWhenReadyValue
-                name == "setPlayWhenReady" && argCount == 1 -> {
-                    playWhenReadyValue = args!![0] as Boolean
-                    return null
-                }
-                name == "setMediaItem" && argCount == 1 -> {
-                    lastSetMediaItem = args!![0] as MediaItem
-                    lastSetPositionMs = null
-                    return null
-                }
-                name == "setMediaItem" &&
-                    argCount == 2 &&
-                    method.parameterTypes[1] == java.lang.Long.TYPE -> {
-                    lastSetMediaItem = args!![0] as MediaItem
-                    lastSetPositionMs = args[1] as Long
-                    return null
-                }
-                name == "seekTo" &&
-                    argCount == 1 &&
-                    method.parameterTypes[0] == java.lang.Long.TYPE -> {
-                    lastSeekPositionMs = args!![0] as Long
-                    currentPositionValue = args[0] as Long
-                    return null
-                }
-                name == "prepare" && argCount == 0 -> {
-                    prepareCount++
-                    return null
-                }
-                name == "getDuration" && argCount == 0 -> return 120000L
-                name == "toString" -> return "MockPlayer"
-                name == "hashCode" -> return 1
-                name == "equals" -> return proxy === (args?.getOrNull(0))
-            }
-            val returnType = method.returnType
-            return when {
-                returnType == java.lang.Boolean.TYPE -> false
-                returnType == java.lang.Integer.TYPE -> 0
-                returnType == java.lang.Long.TYPE -> 0L
-                returnType == java.lang.Float.TYPE -> 0f
-                returnType == java.lang.Double.TYPE -> 0.0
-                returnType == java.lang.Void.TYPE -> null
-                else -> null
-            }
-        }
-    }
-
-    private fun createMockPlayer(): Pair<Player, MockPlayerInvocationHandler> {
-        val handler = MockPlayerInvocationHandler()
-        val player =
-            Proxy.newProxyInstance(
-                Player::class.java.classLoader,
-                arrayOf(Player::class.java),
-                handler,
-            ) as Player
-        return player to handler
-    }
 
     private class SwitchingDataSource(
         private val localItem: DownloadItem?,
@@ -162,10 +89,10 @@ class VideoPlaybackQualitySwitchTest {
         assertEquals(2, requestedUrls.size)
     }
 
+    /** 验证本地和在线播放源切换时保留当前进度、播放意图且仅触发一次 prepare。 */
     @Test
     fun switchingBetweenLocalAndOnlinePreservesPositionAndPlayState() {
-        val (player, handler) = createMockPlayer()
-        handler.currentPositionValue = 35000L
+        val (player, handler) = createMockPlayer(currentPositionValue = 35000L, durationValue = 120000L)
         handler.playWhenReadyValue = false
 
         val state =

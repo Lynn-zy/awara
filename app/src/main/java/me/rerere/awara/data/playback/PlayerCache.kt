@@ -303,13 +303,7 @@ object PlayerCache {
         }
     }
 
-    /** 供测试直接同步执行清理并等待完成。 */
-    @VisibleForTesting
-    internal fun cleanUpNow(context: Context) {
-        performCleanup(context.applicationContext)
-    }
-
-    /** 供测试使用的自定义初始化。 */
+    /** 供测试使用的自定义初始化（如小预算 LRU 夹具）。 */
     @VisibleForTesting
     internal fun initForTesting(
         context: Context,
@@ -323,7 +317,7 @@ object PlayerCache {
         }
     }
 
-    /** 供测试重置全局状态。 */
+    /** 供测试重置全局状态，避免不同测试用例与 Robolectric cacheDir 相互污染。 */
     @VisibleForTesting
     internal fun resetForTesting() {
         synchronized(lock) {
@@ -341,18 +335,12 @@ object PlayerCache {
         }
     }
 
-    @VisibleForTesting
-    internal fun getActiveLeaseCount(): Int = synchronized(lock) { activeLeaseCount }
-
+    /** 查询当前是否存在待处理的延迟或失败重试清理标记，供测试校验失败恢复状态。 */
     @VisibleForTesting
     internal fun isPendingCleanup(): Boolean = synchronized(lock) { pendingCleanup }
 
-    @VisibleForTesting
-    internal fun getCacheInstance(): SimpleCache? = synchronized(lock) { cacheInstance }
-
     /** 包装 DataSource，在 open 时自动登记租约，在 open 失败或 close 时正确释放租约并关闭底层资源。 */
-    @VisibleForTesting
-    internal class LeasedDataSource(
+    private class LeasedDataSource(
         private val onOpen: () -> Unit,
         private val onClose: () -> Unit,
         private val delegateProvider: () -> DataSource,

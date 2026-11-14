@@ -62,26 +62,12 @@ class PlaybackCdnDataSourceTest {
         server.shutdown()
     }
 
+    /** 验证同一数据源实例关闭重开后精确按偏移续读并保证 TransferListener 回调成对触发。 */
     @Test
     fun sameInstanceCloseAndReopenReadsExactRangeAndBalancesTransferCallbacks() {
         val totalBytes = 1000L
         val testData = ByteArray(totalBytes.toInt()) { (it % 127).toByte() }
-
-        val rawUrl = "https://acheron.iwara.tv/view?filename=test_Source.mp4&path=2026/10/28"
-        val httpUrl = rawUrl.toHttpUrl()
-        val uri = Uri.parse(rawUrl)
-
-        val cancelledScope = CoroutineScope(Dispatchers.IO + Job().apply { cancel() })
-        val directory = CdnDirectory(client = client)
-
-        val resourceKey = PlaybackResourceKey.normalizeKey(httpUrl)
-        val session =
-            PlaybackCdnSession(
-                resourceKey = resourceKey,
-                initialHost = httpUrl.host,
-                initialUrl = httpUrl,
-                trustedHostPredicate = PlaybackResourceKey::defaultTrustedHost,
-            )
+        val uri = Uri.parse(TEST_URL)
 
         val events = mutableListOf<String>()
         val transferListener =
@@ -120,27 +106,7 @@ class PlaybackCdnDataSourceTest {
                 }
             }
 
-        val httpClients = PlaybackCdnDataSource.createHttpClients(client)
-        val dataSource =
-            PlaybackCdnDataSource(
-                    mediaClient = httpClients.mediaClient,
-                    probeClient = httpClients.probeClient,
-                    directory = directory,
-                    sessionProvider = { session },
-                    sourceRefresher = PlaybackSourceRefresher(),
-                    defaultHttpDataSourceFactory = { error("Unexpected fallback call") },
-                    trustedHostPredicate = PlaybackResourceKey::defaultTrustedHost,
-                    now = { System.currentTimeMillis() },
-                    coroutineScope = cancelledScope,
-                    onDataSourceClosed = {},
-                    urlResolver = { url ->
-                        val pathAndQuery =
-                            url.encodedPath +
-                                (if (url.encodedQuery != null) "?${url.encodedQuery}" else "")
-                        server.url(pathAndQuery)
-                    },
-                )
-                .apply { addTransferListener(transferListener) }
+        val dataSource = createSource().apply { addTransferListener(transferListener) }
 
         // 第 1 次响应：Range 0-99
         val chunk1 = testData.sliceArray(0 until 100)
@@ -323,10 +289,11 @@ class PlaybackCdnDataSourceTest {
         }
     }
 
-    /** 可用数量基于验证结果，排除冷却和退役；换网络后旧代次响应不得恢复旧集合。 */
+    /** 综合验证会话节点准入：排除未提交指纹、冷却中及退役节点，拒绝旧网络代次回写并遵守冷却防抖动与换源预算。 */
     @Test
-    fun availableHostsExcludeUnverifiedCoolingRetiredAndOldNetworkResults() {
+    fun sessionExcludesCoolingRetiredStaleGenerationAndRespectsSwitchBudget() {
         val url = TEST_URL.toHttpUrl()
+        val mirror = "silverwolf.iwara.tv"
         val session =
             PlaybackCdnSession(
                 playbackResourceKey(url),
@@ -344,22 +311,43 @@ class PlaybackCdnDataSourceTest {
             rawEtag = "\"primary\"",
             isStrongEtag = true,
         )
+        session.recordThroughput(url.host, 1_000L, 1000L)
+        session.recordThroughput(mirror, 10_000L, 1000L)
+
+        // 指纹尚未提交前，不能开放备选镜像
         assertEquals(listOf(url.host), session.availableHosts(0))
-        // 指纹尚未提交就绪前，仅 recordVerifiedBackup 不开放备用主机；就绪后一并开放
+        assertEquals(url.host, session.selectOpeningHost(1000))
+
+        // 提交指纹后记录已验证镜像；冷却期内不可选，冷却期结束后恢复可用
         session.commitPrimaryFingerprints(0, mapOf(0 to "h0", 1 to "h1", 2 to "h2"))
-        session.recordVerifiedBackup(0, "hime.iwara.tv", "\"m1\"")
-        session.recordVerifiedBackup(0, "silverwolf.iwara.tv", "\"m2\"")
-        assertEquals(3, session.availableHosts(0).size)
-        session.setCooldown("hime.iwara.tv", 1000, 0)
-        assertEquals(2, session.availableHosts(500).size)
-        assertEquals(3, session.availableHosts(1000).size)
-        session.retireHost("silverwolf.iwara.tv")
-        assertEquals(2, session.availableHosts(1000).size)
+        session.recordVerifiedBackup(0, mirror, "\"mirror\"")
+        session.setCooldown(mirror, 1000, 1000)
+        assertEquals(listOf(url.host), session.availableHosts(1500))
+        assertEquals("冷却中的镜像不能选用", url.host, session.selectOpeningHost(1500))
+        assertEquals(listOf(url.host, mirror).sorted(), session.availableHosts(2000))
+
+        // 切换至更快镜像后，在全局换源冷却窗口内保持稳定不来回抖动
+        assertEquals(mirror, session.selectOpeningHost(2500))
+        session.recordMediaConnection(mirror, 0)
+        session.recordThroughput(url.host, 100_000L, 1000L)
+        assertEquals("换源冷却内不来回切换", mirror, session.selectOpeningHost(2600))
+
+        // 耗尽换源预算（切换到 primary 再切回 mirror）并退役最后持有的 mirror 后抛出预算耗尽异常
+        assertEquals(url.host, session.selectOpeningHost(20_000))
+        session.recordMediaConnection(url.host, 0)
+        session.recordThroughput(mirror, 1_000_000L, 1000L)
+        assertEquals(mirror, session.selectOpeningHost(40_000))
+        session.recordMediaConnection(mirror, 0)
+        session.retireHost(mirror)
+        assertTrue(runCatching { session.selectOpeningHost(60_000) }.isFailure)
+
+        // 换网络后旧代次响应不得回写，仅当前网络代次可登记有效节点
         session.invalidateNetwork()
         session.markVerifiedHost(url.host, 0)
-        assertTrue(session.availableHosts(1000).isEmpty())
+        assertTrue(session.availableHosts(70_000).isEmpty())
+        assertEquals("网络变化后回退当前主源重验", url.host, session.selectOpeningHost(70_000))
         session.markVerifiedHost(url.host, session.currentNetworkGeneration())
-        assertEquals(listOf(url.host), session.availableHosts(1000))
+        assertEquals(listOf(url.host), session.availableHosts(70_000))
     }
 
     /** 主源流式传输中完成备选镜像探测后主动切源，严格从已交付偏移续传且携带独立 ETag。 */
@@ -433,7 +421,7 @@ class PlaybackCdnDataSourceTest {
             )
 
         val directory =
-            CdnDirectory(client = client, directoryUrl = server.url("/directory"))
+            CdnDirectory(client = client, directoryUrl = serverUrl("/directory"))
 
         val snapshots =
             CopyOnWriteArrayList<me.rerere.awara.data.diagnostics.CdnConnectionSnapshot>()
@@ -448,7 +436,7 @@ class PlaybackCdnDataSourceTest {
                     val query =
                         (if (url.encodedQuery != null) "${url.encodedQuery}&" else "") +
                             "host=${url.host}"
-                    server.url("${url.encodedPath}?$query")
+                    serverUrl("${url.encodedPath}?$query")
                 },
             )
 
@@ -584,9 +572,9 @@ class PlaybackCdnDataSourceTest {
             createSource(
                 session = session,
                 scope = testScope,
-                directory = CdnDirectory(client = client, directoryUrl = server.url("/directory")),
+                directory = CdnDirectory(client = client, directoryUrl = serverUrl("/directory")),
                 urlResolver = { original ->
-                    server.url(
+                    serverUrl(
                         "${original.encodedPath}?${original.encodedQuery}&host=${original.host}"
                     )
                 },
@@ -619,85 +607,6 @@ class PlaybackCdnDataSourceTest {
             source.close()
             testScope.cancel()
         }
-    }
-
-    /** 定位重开不把高吞吐的未验证、冷却或退役节点纳入候选，也不突破已有换源预算。 */
-    @Test
-    fun openingSelectionExcludesUnverifiedCoolingRetiredAndOverBudgetNodes() {
-        val url = TEST_URL.toHttpUrl()
-        val mirror = "silverwolf.iwara.tv"
-        val session =
-            PlaybackCdnSession(
-                playbackResourceKey(url),
-                url.host,
-                url,
-                PlaybackResourceKey::defaultTrustedHost,
-            )
-        session.recordHttp206Response(
-            targetHost = url.host,
-            generation = 0,
-            parsedTotal = 65536L,
-            isIdentity = true,
-            encoding = "identity",
-            rawEtag = "\"primary\"",
-            isStrongEtag = true,
-        )
-        session.recordThroughput(url.host, 1_000L, 1000L)
-        session.recordThroughput(mirror, 10_000L, 1000L)
-        assertEquals(url.host, session.selectOpeningHost(1000))
-        session.commitPrimaryFingerprints(0, mapOf(0 to "h0", 1 to "h1", 2 to "h2"))
-        assertEquals("目录候选未验证不能选用", url.host, session.selectOpeningHost(1000))
-        session.recordVerifiedBackup(0, mirror, "\"mirror\"")
-        session.setCooldown(mirror, 2000, 1000)
-        assertEquals("冷却中的镜像不能选用", url.host, session.selectOpeningHost(1500))
-        // 消耗满换源预算（切换到 mirror 再切回 primary 再切到 mirror）
-        assertEquals(mirror, session.selectOpeningHost(4000))
-        session.recordMediaConnection(mirror, 0)
-        session.recordThroughput(url.host, 100_000L, 1000L)
-        assertEquals(url.host, session.selectOpeningHost(20_000))
-        session.recordMediaConnection(url.host, 0)
-        session.recordThroughput(mirror, 1_000_000L, 1000L)
-        assertEquals(mirror, session.selectOpeningHost(40_000))
-        session.recordMediaConnection(mirror, 0)
-        session.recordThroughput(url.host, 10_000_000L, 1000L)
-        assertEquals("预算用尽不能新换源", mirror, session.selectOpeningHost(60_000))
-        session.retireHost(mirror)
-        assertEquals("退役镜像不能选用且会失败抛出预算耗尽", true, runCatching { session.selectOpeningHost(70_000) }.isFailure)
-    }
-
-    /** 最近节点在全局换源冷却内保持稳定，换网络则必须回主源重验且拒绝旧代次回写。 */
-    @Test
-    fun openingSelectionKeepsRecentHostDuringCooldownAndRevalidatesOnNetworkChange() {
-        val url = TEST_URL.toHttpUrl()
-        val mirror = "silverwolf.iwara.tv"
-        val session =
-            PlaybackCdnSession(
-                playbackResourceKey(url),
-                url.host,
-                url,
-                PlaybackResourceKey::defaultTrustedHost,
-            )
-        session.recordHttp206Response(
-            targetHost = url.host,
-            generation = 0,
-            parsedTotal = 65536L,
-            isIdentity = true,
-            encoding = "identity",
-            rawEtag = "\"primary\"",
-            isStrongEtag = true,
-        )
-        session.commitPrimaryFingerprints(0, mapOf(0 to "h0", 1 to "h1", 2 to "h2"))
-        session.recordVerifiedBackup(0, mirror, "\"mirror\"")
-        session.recordThroughput(mirror, 8192, 100)
-        // 在 t=1000 首次切换至高吞吐镜像，建立上次活跃节点与换源冷却窗口
-        assertEquals(mirror, session.selectOpeningHost(1000))
-        session.recordMediaConnection(mirror, 0)
-        session.recordThroughput(url.host, 16384, 100)
-        assertEquals("换源冷却内不来回切换", mirror, session.selectOpeningHost(1100))
-        session.invalidateNetwork()
-        session.recordMediaConnection(mirror, 0)
-        assertEquals("网络变化后不复用旧镜像", url.host, session.selectOpeningHost(1200))
-        assertTrue(session.availableHosts(1200).isEmpty())
     }
 
     /** 定位重开应使用已验证且吞吐更优的节点，重复打开同一节点不消耗额外换源预算。 */
@@ -746,10 +655,10 @@ class PlaybackCdnDataSourceTest {
             createSource(
                 session = session,
                 scope = testScope,
-                directory = CdnDirectory(client = client, directoryUrl = server.url("/directory")),
+                directory = CdnDirectory(client = client, directoryUrl = serverUrl("/directory")),
                 now = { clockMs.addAndGet(20) },
                 urlResolver = { original ->
-                    server.url(
+                    serverUrl(
                         "${original.encodedPath}?${original.encodedQuery}&host=${original.host}"
                     )
                 },
@@ -892,10 +801,10 @@ class PlaybackCdnDataSourceTest {
                 scope = scope,
                 baseClient = observedClient,
                 directory =
-                    CdnDirectory(client = client, directoryUrl = server.url("/directory")),
+                    CdnDirectory(client = client, directoryUrl = serverUrl("/directory")),
                 connectionTracker = tracker,
                 urlResolver = { original ->
-                    server.url(
+                    serverUrl(
                         "${original.encodedPath}?${original.encodedQuery}&host=${original.host}"
                     )
                 },
@@ -1029,6 +938,10 @@ class PlaybackCdnDataSourceTest {
         }
     }
 
+    /** 构造显式绑定 `127.0.0.1` 的回环测试服务端 URL，防止双栈环境切入未监听的 `[::1]`。 */
+    private fun serverUrl(pathAndQuery: String): HttpUrl =
+        server.url(pathAndQuery).newBuilder().host("127.0.0.1").build()
+
     /** 测试仅走回环服务器，支持注入会话、作用域、目录与网络解析器，默认取消探测以禁止任何外网访问。 */
     private fun createSource(
         session: PlaybackCdnSession? = null,
@@ -1038,7 +951,7 @@ class PlaybackCdnDataSourceTest {
         now: () -> Long = System::currentTimeMillis,
         // MockWebServer.url() 会通过 canonicalHostName 反向解析为 localhost，显式固定为 127.0.0.1 防止双栈环境切入 [::1]
         urlResolver: (HttpUrl) -> HttpUrl = {
-            server.url(it.encodedPath + "?" + it.encodedQuery).newBuilder().host("127.0.0.1").build()
+            serverUrl(it.encodedPath + "?" + it.encodedQuery)
         },
         connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
         refresh: suspend (String) -> String? = { null },
