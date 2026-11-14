@@ -644,7 +644,7 @@ class VideoVM(
     /** 传输层鉴权失败时只刷新相同文件和画质，不更新 urls 以免重建媒体、丢失已有缓冲。 */
     internal suspend fun refreshPlaybackSource(oldUrl: String): String? =
         withContext(Dispatchers.Main.immediate) {
-            if (state.isLocalPlayback || state.video == null || state.onlineUrlsLoading)
+            if (state.isLocalPlayback || state.onlineUrlsLoading)
                 return@withContext null
             val resourceKey = playbackResourceKey(oldUrl)
             val previous =
@@ -653,8 +653,10 @@ class VideoVM(
                 } ?: return@withContext null
             state = state.copy(onlineUrlsLoading = true, onlineUrlsError = null)
             try {
-                val refreshed = mediaRepo.parseVideoUrl(mediaRepo.getVideo(id)).playableVideoFiles()
+                val refreshedVideo = mediaRepo.getVideo(id)
+                val refreshed = mediaRepo.parseVideoUrl(refreshedVideo).playableVideoFiles()
                 if (state.isLocalPlayback) return@withContext null
+                state = state.copy(video = refreshedVideo)
                 refreshed
                     .firstOrNull {
                         it.qualityKey == previous.qualityKey &&
@@ -674,10 +676,9 @@ class VideoVM(
             }
         }
 
-    // 仅在用户主动请求或切换在线清晰度时按需拉取网络源
+    /** 按需拉取在线清晰度地址；若当前缓存的视频 `fileUrl` 已失效或为空，则先刷新视频详情再重试解析。 */
     fun requestOnlineUrls(onSuccess: (() -> Unit)? = null) {
         if (state.onlineUrlsLoading) return
-        val currentVideo = state.video ?: return
         if (state.urls.isNotEmpty()) {
             onSuccess?.invoke()
             return
@@ -685,7 +686,25 @@ class VideoVM(
         viewModelScope.launch {
             state = state.copy(onlineUrlsLoading = true, onlineUrlsError = null)
             try {
-                runAPICatching { mediaRepo.parseVideoUrl(currentVideo) }
+                val currentVideo = state.video
+                val result =
+                    if (currentVideo != null && !currentVideo.fileUrl.isNullOrBlank()) {
+                        val firstAttempt = runAPICatching { mediaRepo.parseVideoUrl(currentVideo) }
+                        if (firstAttempt is APIResult.Success) {
+                            firstAttempt
+                        } else {
+                            if (
+                                firstAttempt is APIResult.Exception &&
+                                    firstAttempt.exception is CancellationException
+                            ) {
+                                throw firstAttempt.exception
+                            }
+                            fetchVideoAndParseUrls()
+                        }
+                    } else {
+                        fetchVideoAndParseUrls()
+                    }
+                result
                     .onSuccess { urls ->
                         state = state.copy(urls = urls, onlineUrlsError = null, sourceError = null)
                         onSuccess?.invoke()
@@ -710,6 +729,14 @@ class VideoVM(
             }
         }
     }
+
+    /** 拉取最新视频详情并重新解析可用清晰度列表，避免已下载详情页持有的 `fileUrl` 过期。 */
+    private suspend fun fetchVideoAndParseUrls() =
+        runAPICatching {
+            val latestVideo = mediaRepo.getVideo(id)
+            state = state.copy(video = latestVideo)
+            mediaRepo.parseVideoUrl(latestVideo)
+        }
 
     fun selectOnlinePlayback() {
         if (!state.isLocalPlayback) return

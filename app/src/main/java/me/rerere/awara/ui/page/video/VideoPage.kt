@@ -36,6 +36,8 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
+import me.rerere.awara.data.entity.DownloadItem
+import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.fixUrl
 import me.rerere.awara.data.entity.playableVideoFiles
 import me.rerere.awara.data.entity.qualityKey
@@ -141,47 +143,29 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     ) {
         val local = vm.state.localDownload
         if (vm.state.isLocalPlayback && local != null) {
-            val localUri = runCatching { Uri.parse(local.uri) }.getOrNull()
-            if (localUri != null) {
-                val localQualityKey = local.quality.ifBlank { "local" }
-                val playerItem =
-                    PlayerState.PlayerItem(
-                        quality = localQualityKey,
-                        mediaItem =
-                            MediaItem.Builder()
-                                .setMediaId(vm.id)
-                                .setUri(localUri)
-                                .setMediaMetadata(
-                                    MediaMetadata.Builder()
-                                        .setTitle(vm.state.video?.title ?: local.title)
-                                        .build()
-                                )
-                                .build(),
-                    )
+            val playerItem =
+                buildLocalPlayerItem(
+                    videoId = vm.id,
+                    title = vm.state.video?.title ?: local.title,
+                    localDownload = local,
+                )
+            if (playerItem != null) {
                 val isSameLocalItem =
                     state.playerItems.size == 1 &&
-                        state.playerItems.first().quality == localQualityKey &&
-                        state.currentMediaItem?.localConfiguration?.uri == localUri
+                        state.playerItems.first().quality == playerItem.quality &&
+                        state.currentMediaItem?.localConfiguration?.uri ==
+                            playerItem.mediaItem.localConfiguration?.uri
                 if (!isSameLocalItem) {
                     state.updatePlayerItems(listOf(playerItem))
                 }
             }
         } else if (!vm.state.isLocalPlayback && vm.state.urls.isNotEmpty()) {
-            val playable = vm.state.urls.playableVideoFiles()
             val onlineItems =
-                playable.map {
-                    PlayerState.PlayerItem(
-                        quality = it.name,
-                        mediaItem =
-                            MediaItem.Builder()
-                                .setMediaId(vm.id)
-                                .setUri(it.src.view.fixUrl())
-                                .setMediaMetadata(
-                                    MediaMetadata.Builder().setTitle(vm.state.video?.title).build()
-                                )
-                                .build(),
-                    )
-                }
+                buildOnlinePlayerItems(
+                    videoId = vm.id,
+                    title = vm.state.video?.title,
+                    files = vm.state.urls.playableVideoFiles(),
+                )
             val isSameOnlineItems =
                 state.playerItems.size == onlineItems.size &&
                     state.playerItems.zip(onlineItems).all { (current, next) ->
@@ -324,44 +308,35 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                             onClick = {
                                                 expandedVideoQuality = false
                                                 if (!vm.state.isLocalPlayback) {
-                                                    val localUri =
-                                                        runCatching { Uri.parse(localDownload.uri) }
-                                                            .getOrNull()
-                                                    if (localUri != null) {
+                                                    val localItem =
+                                                        buildLocalPlayerItem(
+                                                            videoId = vm.id,
+                                                            title =
+                                                                vm.state.video?.title
+                                                                    ?: localDownload.title,
+                                                            localDownload = localDownload,
+                                                        )
+                                                    if (localItem != null) {
                                                         val currentPos =
                                                             state.player.currentPosition
                                                                 .coerceAtLeast(0L)
-                                                        val wasPlaying = state.player.playWhenReady
+                                                        val targetPlayWhenReady =
+                                                            state.playbackError != null ||
+                                                                state.player.playWhenReady
                                                         vm.selectLocalPlayback()
-                                                        val localItem =
-                                                            PlayerState.PlayerItem(
-                                                                quality =
-                                                                    localDownload.quality.ifBlank {
-                                                                        "local"
-                                                                    },
-                                                                mediaItem =
-                                                                    MediaItem.Builder()
-                                                                        .setMediaId(vm.id)
-                                                                        .setUri(localUri)
-                                                                        .setMediaMetadata(
-                                                                            MediaMetadata.Builder()
-                                                                                .setTitle(
-                                                                                    vm.state.video
-                                                                                        ?.title
-                                                                                        ?: localDownload
-                                                                                            .title
-                                                                                )
-                                                                                .build()
-                                                                        )
-                                                                        .build(),
-                                                            )
-                                                        state.updatePlayerItems(listOf(localItem))
-                                                        state.seekTo(currentPos)
-                                                        state.player.playWhenReady = wasPlaying
-                                                        state.prepare()
+                                                        switchPlayerQuality(
+                                                            state = state,
+                                                            items = listOf(localItem),
+                                                            targetQuality = localItem.quality,
+                                                            persistQualitySelection = false,
+                                                            preservePositionMs = currentPos,
+                                                            targetPlayWhenReady =
+                                                                targetPlayWhenReady,
+                                                        )
                                                     }
+                                                } else {
+                                                    state.controllerState.hide()
                                                 }
-                                                state.controllerState.hide()
                                             },
                                             text = { Text(localItemLabel) },
                                             trailingIcon =
@@ -391,34 +366,24 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                         state.player.currentPosition.coerceAtLeast(
                                                             0L
                                                         )
-                                                    val wasPlaying = state.player.playWhenReady
+                                                    val targetPlayWhenReady =
+                                                        state.playbackError != null ||
+                                                            state.player.playWhenReady
                                                     vm.selectOnlinePlayback()
                                                     val items =
-                                                        playableUrls.map {
-                                                            PlayerState.PlayerItem(
-                                                                quality = it.name,
-                                                                mediaItem =
-                                                                    MediaItem.Builder()
-                                                                        .setMediaId(vm.id)
-                                                                        .setUri(
-                                                                            it.src.view.fixUrl()
-                                                                        )
-                                                                        .setMediaMetadata(
-                                                                            MediaMetadata.Builder()
-                                                                                .setTitle(
-                                                                                    vm.state.video
-                                                                                        ?.title
-                                                                                )
-                                                                                .build()
-                                                                        )
-                                                                        .build(),
-                                                            )
-                                                        }
-                                                    state.updatePlayerItems(items)
-                                                    state.updateCurrentQuality(url.name)
-                                                    state.seekTo(currentPos)
-                                                    state.player.playWhenReady = wasPlaying
-                                                    state.prepare()
+                                                        buildOnlinePlayerItems(
+                                                            videoId = vm.id,
+                                                            title = vm.state.video?.title,
+                                                            files = playableUrls,
+                                                        )
+                                                    switchPlayerQuality(
+                                                        state = state,
+                                                        items = items,
+                                                        targetQuality = url.name,
+                                                        persistQualitySelection = true,
+                                                        preservePositionMs = currentPos,
+                                                        targetPlayWhenReady = targetPlayWhenReady,
+                                                    )
                                                 },
                                                 text = { Text(videoQualityDisplayName(url.name)) },
                                                 trailingIcon =
@@ -478,5 +443,65 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     )
             }
         }
+    }
+}
+
+/** 构造本地已下载视频的播放器条目。 */
+private fun buildLocalPlayerItem(
+    videoId: String,
+    title: String?,
+    localDownload: DownloadItem,
+): PlayerState.PlayerItem? {
+    val localUri = runCatching { Uri.parse(localDownload.uri) }.getOrNull() ?: return null
+    val qualityKey = localDownload.quality.ifBlank { "local" }
+    return PlayerState.PlayerItem(
+        quality = qualityKey,
+        mediaItem =
+            MediaItem.Builder()
+                .setMediaId(videoId)
+                .setUri(localUri)
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+                .build(),
+    )
+}
+
+/** 构造在线视频清晰度列表对应的播放器条目集合。 */
+private fun buildOnlinePlayerItems(
+    videoId: String,
+    title: String?,
+    files: List<VideoFile>,
+): List<PlayerState.PlayerItem> =
+    files.map { file ->
+        PlayerState.PlayerItem(
+            quality = file.name,
+            mediaItem =
+                MediaItem.Builder()
+                    .setMediaId(videoId)
+                    .setUri(file.src.view.fixUrl())
+                    .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+                    .build(),
+        )
+    }
+
+/** 一次性应用用户选择的清晰度/本地源并同步播控栏显隐状态。 */
+private fun switchPlayerQuality(
+    state: PlayerState,
+    items: List<PlayerState.PlayerItem>,
+    targetQuality: String,
+    persistQualitySelection: Boolean,
+    preservePositionMs: Long,
+    targetPlayWhenReady: Boolean,
+) {
+    state.updatePlayerItems(
+        items = items,
+        targetQuality = targetQuality,
+        persistQualitySelection = persistQualitySelection,
+        preservePositionMs = preservePositionMs,
+        targetPlayWhenReady = targetPlayWhenReady,
+    )
+    if (targetPlayWhenReady) {
+        state.controllerState.hide()
+    } else if (state.hasStartedPlayback) {
+        state.controllerState.show()
     }
 }

@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.component.player
 
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import java.lang.reflect.InvocationHandler
@@ -750,7 +751,6 @@ class PlayerStateQualityTest {
         assertFalse(state.controllerState.bottomVisible)
         val idlePrompt =
             shouldShowInitialPlayPrompt(
-                renderedFirstFrame = state.renderedFirstFrame,
                 playing = state.playing,
                 playWhenReady = state.playWhenReady,
                 hasStartedPlayback = state.hasStartedPlayback,
@@ -775,7 +775,6 @@ class PlayerStateQualityTest {
         assertTrue(state.showLoading)
         val bufferingWithFirstFramePrompt =
             shouldShowInitialPlayPrompt(
-                renderedFirstFrame = state.renderedFirstFrame,
                 playing = state.playing,
                 playWhenReady = state.playWhenReady,
                 hasStartedPlayback = state.hasStartedPlayback,
@@ -797,7 +796,6 @@ class PlayerStateQualityTest {
         assertFalse(state.showLoading)
         val readyPrompt =
             shouldShowInitialPlayPrompt(
-                renderedFirstFrame = state.renderedFirstFrame,
                 playing = state.playing,
                 playWhenReady = state.playWhenReady,
                 hasStartedPlayback = state.hasStartedPlayback,
@@ -820,7 +818,6 @@ class PlayerStateQualityTest {
         assertTrue(state.hasStartedPlayback)
         val playingPrompt =
             shouldShowInitialPlayPrompt(
-                renderedFirstFrame = state.renderedFirstFrame,
                 playing = state.playing,
                 playWhenReady = state.playWhenReady,
                 hasStartedPlayback = state.hasStartedPlayback,
@@ -843,7 +840,6 @@ class PlayerStateQualityTest {
         assertTrue(state.hasStartedPlayback)
         val pausedPrompt =
             shouldShowInitialPlayPrompt(
-                renderedFirstFrame = state.renderedFirstFrame,
                 playing = state.playing,
                 playWhenReady = state.playWhenReady,
                 hasStartedPlayback = state.hasStartedPlayback,
@@ -876,7 +872,6 @@ class PlayerStateQualityTest {
         assertFalse(state.controllerState.bottomVisible)
         val autoPlayBufferingPrompt =
             shouldShowInitialPlayPrompt(
-                renderedFirstFrame = state.renderedFirstFrame,
                 playing = state.playing,
                 playWhenReady = state.playWhenReady,
                 hasStartedPlayback = state.hasStartedPlayback,
@@ -941,5 +936,105 @@ class PlayerStateQualityTest {
                 playbackState = PlayerState.State.READY,
             )
         )
+    }
+
+    @Test
+    fun readyWithoutFirstFrameShowsPromptAndErrorStateUnblocksInteraction() {
+        val readyPrompt =
+            shouldShowInitialPlayPrompt(
+                playing = false,
+                playWhenReady = false,
+                hasStartedPlayback = false,
+                showLoading = false,
+                playbackState = PlayerState.State.READY,
+            )
+        assertTrue("READY 且非自动播放时无需等待首帧渲染即展示待播按钮", readyPrompt)
+        assertFalse(
+            "READY 待播阶段不应阻断点击",
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = false,
+                playing = false,
+                initialPlayPromptReady = readyPrompt,
+                playbackState = PlayerState.State.READY,
+            ),
+        )
+
+        val error =
+            PlayerState.PlaybackError(
+                errorCode = PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                message = "HTTP 403",
+                isHttpAuthError = true,
+            )
+        val errorPrompt =
+            shouldShowInitialPlayPrompt(
+                playing = false,
+                playWhenReady = false,
+                hasStartedPlayback = false,
+                showLoading = false,
+                playbackState = PlayerState.State.IDLE,
+                playbackError = error,
+            )
+        assertFalse("错误态下不展示待播按钮", errorPrompt)
+        assertFalse(
+            "错误态必须放开控件交互，允许点击重试或顶部切清晰度",
+            shouldBlockInitialLoadingInteraction(
+                hasStartedPlayback = false,
+                playing = false,
+                initialPlayPromptReady = errorPrompt,
+                playbackState = PlayerState.State.IDLE,
+                playbackError = error,
+            ),
+        )
+        assertFalse(
+            "错误态不启用双击检测",
+            shouldEnableDoubleTapGesture(
+                hasStartedPlayback = false,
+                playing = false,
+                initialPlayPromptReady = errorPrompt,
+                playbackState = PlayerState.State.IDLE,
+                playbackError = error,
+            ),
+        )
+    }
+
+    @Test
+    fun atomicUpdatePlayerItemsPreservesTargetQualityAndResetsEndedPosition() {
+        val (player, handler) = createMockPlayer()
+        val savedQualities = mutableListOf<String>()
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = { savedQualities.add(it) },
+            )
+        val localItem = MediaItem.Builder().setMediaId("vid_ended").build()
+        state.updatePlayerItems(listOf(PlayerState.PlayerItem("Source", localItem)))
+        val preparesBeforeSwitch = handler.prepareCount
+
+        val endedPos = 120_000L
+        state.duration = endedPos
+        handler.currentPositionValue = endedPos
+        handler.playbackStateValue = Player.STATE_ENDED
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_ENDED)
+
+        val sourceItem = MediaItem.Builder().setMediaId("vid_ended").build()
+        val item540 = MediaItem.Builder().setMediaId("vid_ended").build()
+        state.updatePlayerItems(
+            items =
+                listOf(
+                    PlayerState.PlayerItem("Source", sourceItem),
+                    PlayerState.PlayerItem("540", item540),
+                ),
+            targetQuality = "540",
+            persistQualitySelection = true,
+            preservePositionMs = endedPos,
+            targetPlayWhenReady = false,
+        )
+
+        assertEquals("540", state.currentQuality)
+        assertEquals(item540, handler.lastSetMediaItem)
+        assertEquals("从 ENDED 切换在线源时应从 0ms 重播而非停留在片尾", 0L, handler.lastSetPositionMs)
+        assertEquals("原子切换只能触发一次 prepare", preparesBeforeSwitch + 1, handler.prepareCount)
+        assertEquals(listOf("540"), savedQualities)
     }
 }

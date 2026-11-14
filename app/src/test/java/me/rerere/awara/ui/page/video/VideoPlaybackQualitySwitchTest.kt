@@ -193,31 +193,42 @@ class VideoPlaybackQualitySwitchTest {
                 PlayerState.PlayerItem("Source", onlineSourceMediaItem),
             )
 
-        // 切至在线源并选中 1080
-        state.updatePlayerItems(onlineItems)
-        state.updateCurrentQuality("1080")
+        // 切至在线源并一次性原子选中 1080（仅触发一次 setMediaItem 与 prepare）
+        val preparesBeforeOnlineSwitch = handler.prepareCount
+        state.updatePlayerItems(
+            items = onlineItems,
+            targetQuality = "1080",
+            persistQualitySelection = true,
+            preservePositionMs = 45000L,
+            targetPlayWhenReady = false,
+        )
 
         assertEquals("1080", state.currentQuality)
         assertEquals(online1080MediaItem, handler.lastSetMediaItem)
         assertEquals(45000L, handler.lastSetPositionMs)
+        assertEquals(preparesBeforeOnlineSwitch + 1, handler.prepareCount)
         assertFalse("保持暂停状态", handler.playWhenReadyValue)
 
         // 模拟在线播放推进到了 60000ms 且正在播放
         handler.currentPositionValue = 60000L
         handler.playWhenReadyValue = true
 
-        // 3. 用户从在线源切回本地源
+        // 3. 用户从在线源切回本地源（同样一次原子切换，避免重复 prepare）
         val currentPos = state.player.currentPosition.coerceAtLeast(0L)
         val wasPlaying = state.player.playWhenReady
-        state.updatePlayerItems(listOf(localPlayerItem))
-        state.seekTo(currentPos)
-        state.player.playWhenReady = wasPlaying
-        state.prepare()
+        val preparesBeforeLocalSwitch = handler.prepareCount
+        state.updatePlayerItems(
+            items = listOf(localPlayerItem),
+            targetQuality = "720p",
+            persistQualitySelection = false,
+            preservePositionMs = currentPos,
+            targetPlayWhenReady = wasPlaying,
+        )
 
         assertEquals("720p", state.currentQuality)
         assertEquals(localMediaItem, handler.lastSetMediaItem)
-        assertEquals(60000L, handler.lastSeekPositionMs)
+        assertEquals(60000L, handler.lastSetPositionMs)
         assertTrue("保持播放状态", handler.playWhenReadyValue)
-        assertTrue(handler.prepareCount > 0)
+        assertEquals(preparesBeforeLocalSwitch + 1, handler.prepareCount)
     }
 }

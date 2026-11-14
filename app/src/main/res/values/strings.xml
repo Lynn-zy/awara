@@ -13,6 +13,7 @@
     <string name="setting_player_minimal_progress">Show slim progress bar at bottom when controls are hidden</string>
     <string name="player_seek_keyframe">Nearby keyframe preview</string>
     <string name="player_seek_thumbnail_unavailable">Preview unavailable</string>
+    <string name="player_playback_failed">Playback failed: %1$s</string>
     <string name="comment_action_more">Comment actions</string>
     <string name="comment_reply">Reply</string>
     <string name="comment_reply_to">Reply to %1$s</string>

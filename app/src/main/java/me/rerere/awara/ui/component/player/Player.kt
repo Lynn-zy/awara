@@ -43,11 +43,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Brightness6
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -102,6 +105,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
@@ -155,22 +159,21 @@ internal fun playerBufferedProgressFraction(
 }
 
 /**
- * 判断播放器当前是否处于「初始缓冲已完成、首帧已显示、等待用户首次单击播放」的引导状态。
+ * 判断播放器当前是否处于「初始加载已完成、待用户首次单击播放」的引导状态。
  *
- * 仅当底层播放器进入就绪态（[PlayerState.State.READY]）、中心 loading 已停止（`!showLoading`）、
- * 视频首帧已实际渲染上屏，且当前尚未开始播放或自动起播时，才展示右下角播放按钮并响应首次单击播放。
- * 在初始 loading 转圈期间（如 [PlayerState.State.IDLE] 或 [PlayerState.State.BUFFERING]），
- * 即使首帧画面已经提前解码显示在播放器区域中，也不展示播放按钮。
+ * 当未处于失败态（`playbackError == null`）、底层进入就绪态（[PlayerState.State.READY]）、
+ * 中心 loading 已停止（`!showLoading`），且当前尚未开始播放或自动起播时展示右下角播放按钮并响应首次单击播放；
+ * 即使切换清晰度/本地与在线源时首帧解码回调尚未抵达，也确保就绪态下不会陷入无按钮可点的黑屏。
  */
 internal fun shouldShowInitialPlayPrompt(
-    renderedFirstFrame: Boolean,
     playing: Boolean,
     playWhenReady: Boolean,
     hasStartedPlayback: Boolean,
     showLoading: Boolean,
     playbackState: PlayerState.State,
+    playbackError: PlayerState.PlaybackError? = null,
 ): Boolean =
-    renderedFirstFrame &&
+    playbackError == null &&
         playbackState == PlayerState.State.READY &&
         !showLoading &&
         !playing &&
@@ -180,19 +183,23 @@ internal fun shouldShowInitialPlayPrompt(
 /**
  * 判断当前是否处于进入视频页后的「初始加载未就绪阶段」。
  *
- * 在视频尚未实际开始过播放（`!hasStartedPlayback`）、尚未满足首帧就绪待播条件（`!initialPlayPromptReady`）、
- * 且未处于播放结束态（`playbackState != ENDED`）时，说明仍在请求资源或初始缓存 loading 中；
- * 此时点击、双击或拖动播放器区域均不应呼出底部进度条控件，也不应提前触发无效播放。
+ * 仅在未发生播放错误（`playbackError == null`）、视频尚未实际开始过播放（`!hasStartedPlayback`）、
+ * 尚未满足就绪待播条件（`!initialPlayPromptReady`），且处于 [PlayerState.State.IDLE] 或
+ * [PlayerState.State.BUFFERING] 时拦截点击、双击和手势；进入 [PlayerState.State.READY]、
+ * [PlayerState.State.ENDED] 或错误态后立即放开交互，避免黑屏死锁。
  */
 internal fun shouldBlockInitialLoadingInteraction(
     hasStartedPlayback: Boolean,
     playing: Boolean,
     initialPlayPromptReady: Boolean,
     playbackState: PlayerState.State,
+    playbackError: PlayerState.PlaybackError? = null,
 ): Boolean =
-    !hasStartedPlayback &&
+    playbackError == null &&
+        !hasStartedPlayback &&
         !playing &&
         !initialPlayPromptReady &&
+        playbackState != PlayerState.State.READY &&
         playbackState != PlayerState.State.ENDED
 
 /**
@@ -208,13 +215,17 @@ internal fun shouldEnableDoubleTapGesture(
     playing: Boolean,
     initialPlayPromptReady: Boolean,
     playbackState: PlayerState.State,
+    playbackError: PlayerState.PlaybackError? = null,
 ): Boolean =
-    !initialPlayPromptReady &&
+    playbackError == null &&
+        playbackState != PlayerState.State.IDLE &&
+        !initialPlayPromptReady &&
         !shouldBlockInitialLoadingInteraction(
             hasStartedPlayback = hasStartedPlayback,
             playing = playing,
             initialPlayPromptReady = initialPlayPromptReady,
             playbackState = playbackState,
+            playbackError = playbackError,
         )
 
 @Composable
@@ -481,12 +492,12 @@ internal fun PlayerController(
 
     val awaitingInitialPlay =
         shouldShowInitialPlayPrompt(
-            renderedFirstFrame = state.renderedFirstFrame,
             playing = state.playing,
             playWhenReady = state.playWhenReady,
             hasStartedPlayback = state.hasStartedPlayback,
             showLoading = state.showLoading,
             playbackState = state.state,
+            playbackError = state.playbackError,
         )
     val doubleTapEnabled =
         shouldEnableDoubleTapGesture(
@@ -494,6 +505,7 @@ internal fun PlayerController(
             playing = state.playing,
             initialPlayPromptReady = awaitingInitialPlay,
             playbackState = state.state,
+            playbackError = state.playbackError,
         )
 
     val systemBars = WindowInsets.systemBarsIgnoringVisibility
@@ -545,12 +557,12 @@ internal fun PlayerController(
                             }
                             val initialPrompt =
                                 shouldShowInitialPlayPrompt(
-                                    renderedFirstFrame = state.renderedFirstFrame,
                                     playing = state.playing,
                                     playWhenReady = state.playWhenReady,
                                     hasStartedPlayback = state.hasStartedPlayback,
                                     showLoading = state.showLoading,
                                     playbackState = state.state,
+                                    playbackError = state.playbackError,
                                 )
                             if (
                                 shouldBlockInitialLoadingInteraction(
@@ -558,6 +570,7 @@ internal fun PlayerController(
                                     playing = state.playing,
                                     initialPlayPromptReady = initialPrompt,
                                     playbackState = state.state,
+                                    playbackError = state.playbackError,
                                 )
                             ) {
                                 // 初始 loading 转圈期间（即使首帧已提前显示）点击播放器区域不显示底部进度条
@@ -583,12 +596,12 @@ internal fun PlayerController(
                     canInteract = {
                         val initialPrompt =
                             shouldShowInitialPlayPrompt(
-                                renderedFirstFrame = state.renderedFirstFrame,
                                 playing = state.playing,
                                 playWhenReady = state.playWhenReady,
                                 hasStartedPlayback = state.hasStartedPlayback,
                                 showLoading = state.showLoading,
                                 playbackState = state.state,
+                                playbackError = state.playbackError,
                             )
                         foreground &&
                             windowInfo.isWindowFocused &&
@@ -598,6 +611,7 @@ internal fun PlayerController(
                                 playing = state.playing,
                                 initialPlayPromptReady = initialPrompt,
                                 playbackState = state.state,
+                                playbackError = state.playbackError,
                             )
                     },
                     canBoost = {
@@ -905,9 +919,11 @@ internal fun PlayerController(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // 延迟 350ms 后显示缓冲指示；一旦底层脱离 loading 态立即移除，且手势预览期间不遮盖提示
+            val activeError = state.playbackError
+            // 延迟 350ms 后显示缓冲指示；一旦底层脱离 loading 或发生失败立即移除，且手势预览期间不遮盖提示
             if (
-                state.showLoading &&
+                activeError == null &&
+                    state.showLoading &&
                     delayedLoading &&
                     !previewState.isActive &&
                     controls.feedback == null
@@ -915,8 +931,53 @@ internal fun PlayerController(
                 CircularProgressIndicator(color = Color.White)
             }
 
+            if (activeError != null && !previewState.isActive && controls.feedback == null) {
+                Column(
+                    modifier =
+                        Modifier.widthIn(max = 320.dp)
+                            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .testTag("player_error_overlay"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ErrorOutline,
+                        contentDescription = null,
+                        tint = Color.White,
+                    )
+                    Text(
+                        text = stringResource(R.string.player_playback_failed, activeError.message),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    TextButton(
+                        onClick = { state.retry() },
+                        colors =
+                            ButtonDefaults.textButtonColors(
+                                containerColor = Color.White.copy(alpha = 0.16f),
+                                contentColor = Color.White,
+                            ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.testTag("player_retry_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text(text = stringResource(R.string.retry))
+                    }
+                }
+            }
+
             if (
-                state.state == PlayerState.State.ENDED &&
+                activeError == null &&
+                    state.state == PlayerState.State.ENDED &&
                     state.duration > 0 &&
                     !previewState.isActive &&
                     controls.feedback == null

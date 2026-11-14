@@ -419,8 +419,9 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                         Text(text = stringResource(R.string.num_views, video.numViews))
                     }
 
-                    if (vm.state.isLocalPlayback) {
-                        val quality = vm.state.localDownload?.quality.orEmpty()
+                    val localDownload = vm.state.localDownload
+                    if (shouldShowLocalVideoBadge(vm.state)) {
+                        val quality = localDownload?.quality.orEmpty()
                         Surface(
                             color = MaterialTheme.colorScheme.secondaryContainer,
                             shape = MaterialTheme.shapes.small,
@@ -693,6 +694,12 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
         }
     }
 }
+
+/**
+ * 只要当前视频存在可用的本地已下载记录，即便用户切至在线清晰度播放，详情卡片也应保持展示本地视频标识。
+ */
+internal fun shouldShowLocalVideoBadge(state: VideoVM.VideoState): Boolean =
+    state.localDownload != null
 
 // 专门展示本地已下载视频信息的独立组件，避免伪造远端统计数据
 @Composable
