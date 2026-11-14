@@ -1,7 +1,6 @@
 package me.rerere.awara.ui.page.index.layout
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.rememberPagerState
@@ -34,7 +33,6 @@ import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.NamedHorizontalPager
-import me.rerere.awara.ui.component.common.TodoStatus
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.page.index.IndexDrawer
 import me.rerere.awara.ui.page.index.IndexVM
@@ -163,10 +161,6 @@ fun IndexPagePhoneLayout(vm: IndexVM) {
 
                     "image" -> {
                         IndexImagePage(vm)
-                    }
-
-                    "forum" -> {
-                        Box(modifier = Modifier.fillMaxSize()) { TodoStatus() }
                     }
                 }
             }

@@ -11,10 +11,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import me.rerere.awara.data.dto.FriendRequestDto
 import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.repo.UserRepo
+import me.rerere.awara.data.source.APIResult
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
@@ -31,6 +34,8 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
 
     private var friendsJob: Job? = null
     private var requestsJob: Job? = null
+    private val eventChannel = Channel<FriendsEvent>(Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
 
     init {
         loadFriends()
@@ -176,27 +181,51 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
         return deferred
     }
 
-    fun addFriends(userId: String) {
+    /**
+     * 执行好友关系变更请求并在失败时发送提示事件，同时透传协程取消异常
+     */
+    private fun executeFriendAction(
+        action: suspend () -> Unit,
+        onSuccessAction: () -> Unit,
+    ) {
         viewModelScope.launch {
             state = state.copy(loadingFriendChange = true)
-            kotlin
-                .runCatching { userRepo.addFriend(userId) }
-                .onSuccess {
-                    loadFriends(force = true)
-                    loadRequests(force = true)
-                }
-            state = state.copy(loadingFriendChange = false)
+            try {
+                runAPICatching { action() }
+                    .onSuccess { onSuccessAction() }
+                    .onError { eventChannel.send(FriendsEvent.ActionError(it)) }
+                    .onException {
+                        // 取消异常必须继续向外抛出，避免静默吞掉协程取消
+                        if (it.exception is CancellationException) throw it.exception
+                        eventChannel.send(
+                            FriendsEvent.ActionException(
+                                it.exception.localizedMessage ?: "Unknown Error"
+                            )
+                        )
+                    }
+            } finally {
+                state = state.copy(loadingFriendChange = false)
+            }
         }
     }
 
+    /** 接受好友申请并在成功后刷新好友与申请列表。 */
+    fun addFriends(userId: String) {
+        executeFriendAction(
+            action = { userRepo.addFriend(userId) },
+            onSuccessAction = {
+                loadFriends(force = true)
+                loadRequests(force = true)
+            },
+        )
+    }
+
+    /** 拒绝或取消好友申请，并在成功后刷新申请列表。 */
     fun removeFriends(userId: String) {
-        viewModelScope.launch {
-            state = state.copy(loadingFriendChange = true)
-            kotlin
-                .runCatching { userRepo.removeFriend(userId) }
-                .onSuccess { loadRequests(force = true) }
-            state = state.copy(loadingFriendChange = false)
-        }
+        executeFriendAction(
+            action = { userRepo.removeFriend(userId) },
+            onSuccessAction = { loadRequests(force = true) },
+        )
     }
 
     fun jumpFriendsPage(page: Int) {
@@ -226,4 +255,10 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
         val requestsData: List<FriendRequestDto> = emptyList(),
         val loadingFriendChange: Boolean = false,
     )
+
+    sealed class FriendsEvent {
+        data class ActionError(val error: APIResult.Error) : FriendsEvent()
+
+        data class ActionException(val message: String) : FriendsEvent()
+    }
 }

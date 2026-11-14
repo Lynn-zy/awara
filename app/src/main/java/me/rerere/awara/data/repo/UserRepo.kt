@@ -5,6 +5,7 @@ import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.entity.ConversationCreationDto
 import me.rerere.awara.data.entity.MessageCreationDto
 import me.rerere.awara.data.source.IwaraAPI
+import retrofit2.HttpException
 
 class UserRepo(private val iwaraAPI: IwaraAPI) {
     suspend fun login(email: String, password: String) =
@@ -37,9 +38,17 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
 
     suspend fun getFriendsStatus(userId: String) = iwaraAPI.getFriendStatus(userId)
 
-    suspend fun addFriend(userId: String) = iwaraAPI.addFriend(userId)
+    /** 发送好友申请或同意对方请求；非 2xx 响应抛出 HttpException 交由上层统一处理。 */
+    suspend fun addFriend(userId: String) {
+        val response = iwaraAPI.addFriend(userId)
+        if (!response.isSuccessful) throw HttpException(response)
+    }
 
-    suspend fun removeFriend(userId: String) = iwaraAPI.removeFriend(userId)
+    /** 解除好友关系或拒绝/取消好友申请；非 2xx 响应抛出 HttpException 交由上层统一处理。 */
+    suspend fun removeFriend(userId: String) {
+        val response = iwaraAPI.removeFriend(userId)
+        if (!response.isSuccessful) throw HttpException(response)
+    }
 
     suspend fun getUserFriends(userId: String, page: Int) =
         iwaraAPI.getUserFriends(userId, mapOf("page" to page.toString()))

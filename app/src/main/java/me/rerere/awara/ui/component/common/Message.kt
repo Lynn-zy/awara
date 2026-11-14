@@ -60,7 +60,6 @@ fun MessageProvider(
     }
     LaunchedEffect(Unit) {
         while (true) {
-            print(messageHolder.messages.size)
             delay(50)
             messageHolder.messages.removeAll {
                 System.currentTimeMillis() - it.createTime > it.duration
@@ -191,13 +190,14 @@ class Message(
 class MessageHolder {
     val messages = mutableStateListOf<Message>()
 
+    /** 创建并入队一条消息，保留调用方指定的停留时长 */
     private fun createMessage(
         type: MessageType = MessageType.DEFAULT,
         position: MessagePosition = MessagePosition.BOTTOM,
         duration: Long = 3000,
         content: @Composable () -> Unit
     ) {
-        messages.add(Message(type, position, content))
+        messages.add(Message(type = type, position = position, content = content, duration = duration))
     }
 
     /**

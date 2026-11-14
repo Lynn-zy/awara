@@ -47,61 +47,23 @@ fun Instant.toDateDividerString(): String = dateDividerFormatter.format(this)
 /** 格式化为气泡末端底部的短时间。 */
 fun Instant.toTimeString(): String = timeFormatter.format(this)
 
-/** 格式化秒数为时长文本，容错不抛异常。 */
+/** 格式化秒数为时长文本，非正数返回 null。 */
 fun formatDurationSeconds(seconds: Long?): String? {
     if (seconds == null || seconds <= 0L) return null
-    return try {
-        val hours = seconds / 3600
-        val minutes = (seconds % 3600) / 60
-        val remSec = seconds % 60
-        if (hours > 0) {
-            "%d:%02d:%02d".format(hours, minutes, remSec)
-        } else {
-            "%02d:%02d".format(minutes, remSec)
-        }
-    } catch (_: Exception) {
-        null
+    val hours = seconds / 3600
+    val minutes = (seconds % 3600) / 60
+    val remSec = seconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, remSec)
+    } else {
+        "%02d:%02d".format(minutes, remSec)
     }
 }
 
-/** 格式化毫秒为时长文本，容错不抛异常。 */
+/** 格式化毫秒为时长文本，非正数返回 null。 */
 fun formatDurationMs(durationMs: Long?): String? {
     if (durationMs == null || durationMs <= 0L) return null
     return formatDurationSeconds(durationMs / 1000)
-}
-
-/** 相对发布时间展示，超过 48 小时返回本地日期。 */
-fun formatRelativeTime(instant: Instant?, now: Instant = Instant.now()): String {
-    if (instant == null) return ""
-    return try {
-        val durationSeconds = now.epochSecond - instant.epochSecond
-        if (durationSeconds < 0) {
-            return instant.toLocalDateString()
-        }
-        val minutes = durationSeconds / 60
-        val hours = durationSeconds / 3600
-        val days = durationSeconds / 86400
-
-        when {
-            durationSeconds < 60 -> "刚刚"
-            minutes < 60 -> "${minutes}分钟前"
-            hours < 24 -> "${hours}小时前"
-            hours < 48 -> "${days.coerceAtLeast(1)}天前"
-            else -> instant.toLocalDateString()
-        }
-    } catch (_: Exception) {
-        ""
-    }
-}
-
-/** 基于秒时间戳的相对发布时间展示，超过 48 小时返回本地日期。 */
-fun formatRelativeTime(epochSeconds: Long?, now: Instant = Instant.now()): String {
-    if (epochSeconds == null || epochSeconds <= 0L) return ""
-    return try {
-        formatRelativeTime(Instant.ofEpochSecond(epochSeconds), now)
-    } catch (_: Exception) {
-        ""
-    }
 }
 
 @Composable

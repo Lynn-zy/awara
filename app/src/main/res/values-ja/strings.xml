@@ -18,7 +18,6 @@
     <string name="login_password">パスワード</string>
     <string name="index_nav_video">動画</string>
     <string name="index_nav_image">画像</string>
-    <string name="index_nav_forum">フォーラム</string>
     <string name="errors_not_found">リソースが見つかりません。</string>
     <string name="errors_unknown">不明なエラー %s</string>
     <string name="errors_validation_error">入力が無効です</string>

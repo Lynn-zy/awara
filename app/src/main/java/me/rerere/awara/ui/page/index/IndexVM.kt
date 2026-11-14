@@ -47,7 +47,7 @@ class IndexVM(
 
     var videoSort: String by mutableStateOf(MediaSortOptions.first().name)
     val videoFilters: MutableList<FilterValue> = mutableStateListOf()
-    var imageSort: String = MediaSortOptions.first().name
+    var imageSort: String by mutableStateOf(MediaSortOptions.first().name)
     val imageFilters: MutableList<FilterValue> = mutableStateListOf()
 
     // 采用缓冲单次通道发送更新提示事件，既避免启动初期 UI 未订阅时丢失，又防止返回首页重复弹窗

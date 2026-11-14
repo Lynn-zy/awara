@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.toImageLarge
-import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
@@ -65,7 +64,6 @@ import org.koin.androidx.compose.koinViewModel
 fun ImagePage(vm: ImageVM = koinViewModel()) {
     val state = vm.state
     val context = LocalContext.current
-    val router = LocalRouterProvider.current
     Scaffold(
         topBar = {
             TopAppBar(

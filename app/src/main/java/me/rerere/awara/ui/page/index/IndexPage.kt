@@ -1,7 +1,6 @@
 package me.rerere.awara.ui.page.index
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.outlined.VideoLabel
@@ -109,15 +108,6 @@ val indexNavigations = listOf(
         },
         icon = {
             Icon(Icons.Outlined.Image, "Images")
-        },
-    ),
-    IndexNavigation(
-        name = "forum",
-        title = {
-            Text(stringResource(R.string.index_nav_forum), maxLines = 1)
-        },
-        icon = {
-            Icon(Icons.Outlined.Forum, "Forum")
         },
     ),
 )

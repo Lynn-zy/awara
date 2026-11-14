@@ -35,10 +35,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import me.rerere.awara.data.entity.Tag
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.source.onError
+import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.di.TagI18NResolver
@@ -47,6 +51,9 @@ import me.rerere.awara.ui.component.iwara.param.FilterChipCloseIcon
 import me.rerere.awara.ui.component.iwara.param.FilterValue
 import org.koin.compose.koinInject
 
+/**
+ * 标签筛选器：支持已选标签管理及在线标签联想搜索
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TagFilter(
@@ -56,7 +63,8 @@ fun TagFilter(
 ) {
     val tagI18NResolver = koinInject<TagI18NResolver>()
     val locales = LocalConfiguration.current.locales
-    val currentTags by remember {
+    // 关联 values 作为 key，兼容 SnapshotStateList 就地修改与不可变 List 替换
+    val currentTags by remember(values) {
         derivedStateOf {
             values.filter { it.key == "tags" }
         }
@@ -78,20 +86,40 @@ fun TagFilter(
     val queryResult = remember {
         mutableStateListOf<Tag>()
     }
+    var searchJob by remember {
+        mutableStateOf<Job?>(null)
+    }
     val search = {
-        scope.launch {
-            queryLoading = true
-            queryResult.clear()
-            runAPICatching {
-                val result = mediaRepo.getTagsSuggestions(query)
-                queryResult.addAll(result.results)
-            }.onError {
-                message.error {
-                    Text(stringResource(error = it))
+        searchJob?.cancel()
+        searchJob =
+            scope.launch {
+                queryLoading = true
+                queryResult.clear()
+                try {
+                    runAPICatching {
+                        val result = mediaRepo.getTagsSuggestions(query)
+                        queryResult.addAll(result.results)
+                    }.onError {
+                        message.error {
+                            Text(stringResource(error = it))
+                        }
+                    }.onException {
+                        // 协程取消异常继续向外抛出，其余异常向用户提示反馈
+                        if (it.exception is CancellationException) throw it.exception
+                        message.error {
+                            Text(
+                                it.exception.localizedMessage
+                                    ?: it.exception.javaClass.simpleName
+                            )
+                        }
+                    }
+                } finally {
+                    // 仅当前协程仍有效时复位加载态，避免被新搜索取消后覆盖最新状态
+                    if (isActive) {
+                        queryLoading = false
+                    }
                 }
             }
-            queryLoading = false
-        }
     }
 
     Column(

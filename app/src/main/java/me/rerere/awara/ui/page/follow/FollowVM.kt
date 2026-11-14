@@ -13,7 +13,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import me.rerere.awara.data.entity.Follower
 import me.rerere.awara.data.entity.Following
-import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
@@ -25,7 +24,6 @@ import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 
 class FollowVM(
     savedStateHandle: SavedStateHandle,
-    private val mediaRepo: MediaRepo,
     private val userRepo: UserRepo,
 ) : ViewModel() {
     private val userId = checkNotNull(savedStateHandle.get<String>("userId"))

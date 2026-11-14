@@ -40,6 +40,7 @@ import androidx.navigation.navArgument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadLaunchPolicy
 import me.rerere.awara.data.download.DownloadManager
@@ -411,7 +412,9 @@ class RouterActivity : ComponentActivity() {
                     MessagePage()
                 }
 
-                composable("lab") { LabPage() }
+                if (BuildConfig.DEBUG) {
+                    composable("lab") { LabPage() }
+                }
 
                 composable(
                     "notifications/{userId}",

@@ -17,6 +17,9 @@ import androidx.compose.ui.unit.dp
 import me.rerere.awara.ui.component.iwara.param.FilterValue
 import java.util.Calendar
 
+/**
+ * 日期筛选器：按年份及月份过滤媒体列表
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DateFilter(
@@ -24,15 +27,16 @@ fun DateFilter(
     onValueAdd: (FilterValue) -> Unit,
     onValueRemove: (FilterValue) -> Unit
 ) {
-    val currentValue: FilterValue? by remember {
+    // 关联 values 作为 key，确保无论传入 SnapshotStateList 还是新 List 引用都能同步更新
+    val currentValue: FilterValue? by remember(values) {
         derivedStateOf { values.firstOrNull { it.key == "date" } }
     }
-    val pickedYear: Int? by remember {
+    val pickedYear: Int? by remember(values) {
         derivedStateOf {
             currentValue?.value?.split("-")?.get(0)?.toIntOrNull()
         }
     }
-    val pickedMonth: Int? by remember {
+    val pickedMonth: Int? by remember(values) {
         derivedStateOf {
             currentValue?.value?.split("-")?.getOrNull(1)?.toIntOrNull()
         }
@@ -40,7 +44,7 @@ fun DateFilter(
     val currentYear: Int = remember {
         Calendar.getInstance().get(Calendar.YEAR)
     }
-    val monthOfPickedYear: Int by remember {
+    val monthOfPickedYear: Int by remember(values, currentYear) {
         derivedStateOf {
             if (pickedYear != null) {
                 if (pickedYear == currentYear) {

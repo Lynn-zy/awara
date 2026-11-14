@@ -12,7 +12,6 @@ import me.rerere.awara.di.databaseModule
 import me.rerere.awara.di.networkModule
 import me.rerere.awara.di.repoModule
 import me.rerere.awara.di.tagI18NModule
-import me.rerere.awara.di.userCaseModule
 import me.rerere.awara.di.viewModelModule
 import me.rerere.awara.ui.component.player.PlayerCache
 import me.rerere.awara.ui.component.player.PlayerCacheLifecycleCallbacks
@@ -42,7 +41,6 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
                 repoModule,
                 tagI18NModule,
                 viewModelModule,
-                userCaseModule,
             )
         }
     }

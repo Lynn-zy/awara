@@ -19,6 +19,12 @@ class LoginVM(private val userRepo: UserRepo) : ViewModel() {
         private set
     val events = MutableSharedFlow<LoginEvent>()
 
+    /**
+     * 提交登录凭据并通过事件流回调登录结果
+     *
+     * @param username 用户名或邮箱
+     * @param password 登录密码
+     */
     fun login(username: String, password: String) {
         viewModelScope.launch {
             state = state.copy(
@@ -27,13 +33,7 @@ class LoginVM(private val userRepo: UserRepo) : ViewModel() {
             runAPICatching {
                 userRepo.login(username, password)
             }.onSuccess {
-                events.emit(
-                    LoginEvent.LoginSuccess(
-                        token = it.token
-                    ).also {
-                        println(it.token)
-                    }
-                )
+                events.emit(LoginEvent.LoginSuccess(token = it.token))
             }.onError {
                 events.emit(LoginEvent.LoginFailed(it))
             }.onException {

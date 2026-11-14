@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +38,8 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendRequestDto
 import me.rerere.awara.data.entity.User
+import me.rerere.awara.data.source.stringResource as apiStringResource
+import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
@@ -62,6 +65,19 @@ import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun FriendsPage(vm: FriendsVM = koinViewModel()) {
+    val messageProvider = LocalMessageProvider.current
+    LaunchedEffect(vm) {
+        vm.events.collect { event ->
+            when (event) {
+                is FriendsVM.FriendsEvent.ActionError -> {
+                    messageProvider.error { Text(apiStringResource(error = event.error)) }
+                }
+                is FriendsVM.FriendsEvent.ActionException -> {
+                    messageProvider.error { Text(event.message) }
+                }
+            }
+        }
+    }
     // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
     val appbarBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(

@@ -52,8 +52,10 @@ fun LoginPage(
     val messageProvider = LocalMessageProvider.current
     val router = LocalRouterProvider.current
     var username by rememberStringPreference(key = "login.username", default = "")
-    var password by rememberStringPreference(key = "login.password", default = "")
+    var password by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
+        // 清理历史版本落盘保存的明文密码，避免凭据继续残留在本地偏好存储中
+        mmkvPreference.remove("login.password")
         vm.events.collectLatest {
             when (it) {
                 is LoginEvent.LoginSuccess -> {

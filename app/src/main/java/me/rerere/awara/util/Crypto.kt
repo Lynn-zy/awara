@@ -1,36 +1,21 @@
 package me.rerere.awara.util
 
-private val sha1 by lazy {
-    java.security.MessageDigest.getInstance("SHA-1")
-}
-
-private val sha256 by lazy {
-    java.security.MessageDigest.getInstance("SHA-256")
-}
+import java.security.MessageDigest
 
 /**
- * Convert a byte array to hex string
+ * 将字节数组转换为小写十六进制字符串
  *
- * @return hex string
+ * @return 十六进制字符串
  */
 fun ByteArray.toHex(): String {
     return joinToString("") { "%02x".format(it) }
 }
 
 /**
- * Calculate sha1 of a byte array
+ * 计算字节数组的 SHA-1 摘要；每次调用独立创建 MessageDigest，保证多线程调用安全
  *
- * @return sha1 result
+ * @return SHA-1 摘要字节数组
  */
 fun ByteArray.sha1(): ByteArray {
-    return sha1.digest(this)
-}
-
-/**
- * Calculate sha256 of a byte array
- *
- * @return sha256 result
- */
-fun ByteArray.sha256(): ByteArray {
-    return sha256.digest(this)
+    return MessageDigest.getInstance("SHA-1").digest(this)
 }

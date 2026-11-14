@@ -3,7 +3,6 @@ package me.rerere.awara.ui.component.common
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 
 /**
@@ -21,7 +20,6 @@ fun NamedHorizontalPager(
     pages: List<String>,
     content: @Composable (String) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载，页数由传入的 PagerState 维护
     HorizontalPager(state = state, modifier = modifier) { page -> content(pages[page]) }
 }

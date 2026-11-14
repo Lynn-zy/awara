@@ -16,9 +16,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// 辅助方法：生成播单视频数徽标文案
-fun formatPlaylistCountBadge(count: Int): String = "${count}个"
-
 @Composable
 fun MediaBadge(
     text: String,
