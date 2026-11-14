@@ -6,6 +6,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -833,6 +834,45 @@ class PlaybackCdnDataSourceTest {
             source.close()
             scope.cancel()
             session.cancelProbes()
+        }
+    }
+
+    @Test
+    fun interruptedIoWhileThreadInterruptedTreatsAsCancellationWithoutRetryingOrRetiringHost() {
+        val payload = ByteArray(65536) { 1 }
+        // 第 1 次响应延迟 body 传输，确保 open() 返回后 read() 需再次触发底层读取
+        server.enqueue(
+            rangeResponse(payload, 0, payload.size - 1).setBodyDelay(250, TimeUnit.MILLISECONDS)
+        )
+        // 若误判为普通网络故障而非取消，trySwitchOrRecover 会向 server 发起第 2 次请求
+        server.enqueue(rangeResponse(payload, 0, payload.size - 1))
+
+        val url = TEST_URL.toHttpUrl()
+        val session =
+            PlaybackCdnSession(
+                playbackResourceKey(url),
+                url.host,
+                url,
+                PlaybackResourceKey::defaultTrustedHost,
+            )
+        val source = createSource(session = session)
+        try {
+            source.open(spec(position = 0, length = payload.size.toLong()))
+            assertEquals(1, server.requestCount)
+
+            // 模拟 PlaybackReadAheadDataSource.Session.close() 在 upstream.close() 前先中断读线程
+            Thread.currentThread().interrupt()
+            assertThrows(InterruptedIOException::class.java) {
+                source.read(ByteArray(4096), 0, 4096)
+            }
+            assertEquals("线程中断触发的 I/O 取消绝不能触发重试或二次请求", 1, server.requestCount)
+            assertTrue(
+                "主动取消不得淘汰初始 CDN 节点",
+                session.availableHosts(System.currentTimeMillis()).contains(session.initialHost),
+            )
+        } finally {
+            Thread.interrupted()
+            source.close()
         }
     }
 

@@ -1145,10 +1145,16 @@ internal class PlaybackCdnDataSource(
         return digest.joinToString("") { "%02x".format(it) }
     }
 
+    /** 判断异常是否源于主动取消或线程中断（区别于真实网络超时）。 */
     private fun isCancellationException(e: Throwable): Boolean {
         if (e is CancellationException) return true
-        if (e is InterruptedIOException && e.message?.contains("cancel", ignoreCase = true) == true)
+        if (
+            e is InterruptedIOException &&
+                (Thread.currentThread().isInterrupted ||
+                    e.message?.contains("cancel", ignoreCase = true) == true)
+        ) {
             return true
+        }
         return false
     }
 
