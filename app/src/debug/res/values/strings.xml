@@ -1,0 +1,4 @@
+<resources>
+    <!-- Debug 构建专用应用名称，便于在桌面及系统通知中与正式版区分 -->
+    <string name="app_name" translatable="false">Awara Debug</string>
+</resources>

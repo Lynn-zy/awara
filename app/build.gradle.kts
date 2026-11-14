@@ -62,6 +62,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 为 Debug 构建追加独立包名后缀，支持与正式签名 Release 包共存安装且数据隔离
+            applicationIdSuffix = ".debug"
+        }
         release {
             // 检测到正式签名证书配置时使用 release 签名，未配置证书的开发克隆环境自动回退至 debug 签名
             signingConfig =
