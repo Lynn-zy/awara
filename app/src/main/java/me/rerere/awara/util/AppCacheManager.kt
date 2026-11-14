@@ -17,8 +17,8 @@ import me.rerere.awara.data.playback.PlayerCache
  * 绝不触碰 `filesDir/download_parts`（下载中分块）、已下载视频、Room 数据库及 MMKV 登录与偏好配置。
  */
 object AppCacheManager {
-    internal const val IMAGE_CACHE_DIR_NAME = "image_cache"
-    internal val COIL_JOURNAL_FILES = setOf("journal", "journal.tmp", "journal.bkp")
+    private const val IMAGE_CACHE_DIR_NAME = "image_cache"
+    private val COIL_JOURNAL_FILES = setOf("journal", "journal.tmp", "journal.bkp")
 
     /**
      * 统计指定缓存根目录下普通文件的总字节数，支持排除指定顶层子目录与元数据日志文件名。
@@ -28,7 +28,7 @@ object AppCacheManager {
      * @param excludedFileNames 需要忽略的内部索引/日志文件名集合
      * @return 统计得到的有效缓存字节数
      */
-    internal fun calculateGeneralCacheDirBytes(
+    private fun calculateGeneralCacheDirBytes(
         rootDir: File?,
         excludedTopLevelDirs: Set<String> = emptySet(),
         excludedFileNames: Set<String> = emptySet(),
@@ -43,6 +43,7 @@ object AppCacheManager {
         return total.coerceAtLeast(0L)
     }
 
+    /** 递归累计指定文件或目录内除排除索引外的普通文件总字节数。 */
     private fun sumFileBytesRecursively(target: File, excludedFileNames: Set<String>): Long {
         if (!target.exists()) return 0L
         if (target.isFile) {
@@ -62,7 +63,7 @@ object AppCacheManager {
      * @param rootDir 目标缓存根目录
      * @param preservedTopLevelDirs 需要保留目录结构（由其自身 API 清理内部条目）的顶层目录名集合
      */
-    internal fun clearGeneralCacheDirChildren(
+    private fun clearGeneralCacheDirChildren(
         rootDir: File?,
         preservedTopLevelDirs: Set<String> = emptySet(),
     ) {

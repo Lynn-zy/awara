@@ -59,6 +59,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         )
     }
 
+    /** 执行视频分块下载、有效性校验、目标写入及数据库与通知状态收口。 */
     override suspend fun doWork(): Result {
         val rawTaskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
         val parsedTaskId = DownloadTaskId.parseOrNull(rawTaskId) ?: return Result.failure()
@@ -192,15 +193,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
 
                     // 重试前在传输锁内清理之前尝试残留的持久化目标文件，防止孤儿文件堆积
                     if (task.destinationUri.isNotBlank()) {
-                        val oldUri = Uri.parse(task.destinationUri)
-                        val cleaned =
-                            try {
-                                downloadStorage.delete(oldUri)
-                                true
-                            } catch (e: Exception) {
-                                Log.e(TAG, "doWork: 清理历史目标文件失败 uri=$oldUri", e)
-                                false
-                            }
+                        val cleaned = cleanupPartialDestination(Uri.parse(task.destinationUri))
                         if (cleaned) {
                             appDatabase
                                 .downloadTaskDao()
@@ -260,14 +253,11 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                 downloadManager.refreshActiveSource(taskId, id.toString())
                             },
                             networkIdentity = {
-                                runCatching {
-                                        (appContext.getSystemService(Context.CONNECTIVITY_SERVICE)
-                                                as ConnectivityManager)
-                                            .activeNetwork
-                                            ?.toString()
-                                            .orEmpty()
-                                    }
-                                    .getOrDefault("")
+                                appContext
+                                    .getSystemService(ConnectivityManager::class.java)
+                                    ?.activeNetwork
+                                    ?.toString()
+                                    .orEmpty()
                             },
                             connectionTracker = connectionTracker,
                         )
@@ -333,6 +323,8 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     val videoDurationMs =
                         try {
                             probeValidVideoDurationMs(partFile)
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (exception: Exception) {
                             currentCoroutineContext().ensureActive()
                             withContext(NonCancellable) {
@@ -446,13 +438,20 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                         }
                         committed = saved
                         if (committed) {
-                            runCatching { downloadManager.parts.delete(parsedTaskId) }
-                                .onFailure { Log.w(TAG, "待回收下载分块 taskId=$taskId") }
+                            try {
+                                downloadManager.parts.delete(parsedTaskId)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Log.w(TAG, "待回收下载分块失败 taskId=$taskId", e)
+                            }
                             // 事务成功提交后安全清理旧物理 URI
                             oldUriToClean?.let { oldUri ->
                                 if (oldUri.isNotBlank() && oldUri != createdUri.toString()) {
-                                    runCatching { downloadStorage.delete(Uri.parse(oldUri)) }
-                                        .onFailure { Log.w(TAG, "清理被覆盖的旧下载文件失败: $oldUri, $it") }
+                                    cleanupPartialDestination(
+                                        Uri.parse(oldUri),
+                                        warningOnly = true,
+                                    )
                                 }
                             }
                         }
@@ -561,6 +560,8 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                             retryHandled = true
                                             try {
                                                 downloadManager.scheduleRetry(taskId)
+                                            } catch (scheduleCancel: CancellationException) {
+                                                throw scheduleCancel
                                             } catch (scheduleException: Exception) {
                                                 val scheduleError =
                                                     scheduleException.sanitizedDownloadErrorMessage()
@@ -642,18 +643,38 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         } finally {
             try {
                 metadata.release()
-            } catch (_: Exception) {}
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "probeValidVideoDurationMs: 释放 MediaMetadataRetriever 失败", e)
+            }
         }
     }
 
-    private suspend fun cleanupPartialDestination(uri: Uri?): Boolean {
+    /**
+     * 安全清理半成品或待淘汰的下载目标 URI，避免异常中断导致残留坏文件。
+     *
+     * @param uri 待删除的目标 URI；为空时视为无需清理并直接返回 true。
+     * @param warningOnly 为 true 时仅以警告级别记录失败日志（用于已替换旧文件等非关键清理场景）。
+     */
+    private suspend fun cleanupPartialDestination(
+        uri: Uri?,
+        warningOnly: Boolean = false
+    ): Boolean {
         if (uri == null) return true
         return withContext(NonCancellable) {
             try {
                 downloadStorage.delete(uri)
                 true
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "cleanupPartialDestination: 目标文件清理失败 uri=$uri", e)
+                val message = "cleanupPartialDestination: 目标文件清理失败 uri=$uri"
+                if (warningOnly) {
+                    Log.w(TAG, message, e)
+                } else {
+                    Log.e(TAG, message, e)
+                }
                 false
             }
         }

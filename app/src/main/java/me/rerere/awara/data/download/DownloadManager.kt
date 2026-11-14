@@ -85,6 +85,12 @@ class DownloadManager(
     private val database: AppDatabase,
     private val storage: DownloadStorage,
     private val mediaRepo: MediaRepo,
+    private val readAutoResumeEnabled: () -> Boolean = {
+        mmkvPreference.getBoolean(PREFERENCE_KEY_AUTO_RESUME, DEFAULT_AUTO_RESUME)
+    },
+    private val readAutomaticRetryEnabled: () -> Boolean = {
+        mmkvPreference.getBoolean(PREFERENCE_KEY_AUTO_RETRY, DEFAULT_AUTO_RETRY)
+    },
 ) {
     val tasks: Flow<List<DownloadTask>> = database.downloadTaskDao().getAllTasks()
 
@@ -104,12 +110,10 @@ class DownloadManager(
         get() = connectionRegistry.connections
 
     /** 读取是否在应用启动时自动恢复未完成下载的偏好设置。 */
-    fun isAutoResumeEnabled(): Boolean =
-        mmkvPreference.getBoolean(PREFERENCE_KEY_AUTO_RESUME, DEFAULT_AUTO_RESUME)
+    fun isAutoResumeEnabled(): Boolean = readAutoResumeEnabled()
 
     /** 读取传输失败后是否允许后台静默重试的偏好设置。 */
-    fun isAutomaticRetryEnabled(): Boolean =
-        mmkvPreference.getBoolean(PREFERENCE_KEY_AUTO_RETRY, DEFAULT_AUTO_RETRY)
+    fun isAutomaticRetryEnabled(): Boolean = readAutomaticRetryEnabled()
 
     /** 授予指定任务及工作代次一次性启动执行授权。 */
     fun grantExecutionAuthorization(taskId: String, workId: String = "*") {
