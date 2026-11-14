@@ -40,7 +40,7 @@ class DownloadBatchTest {
     }
 
     @Test
-    fun filterPausableTasksKeepsOnlyQueuedAndRunning() {
+    fun filterPausableTasksKeepsQueuedRunningAndRetrying() {
         val tasks =
             listOf(
                 createTask("1", DownloadTaskStatus.QUEUED),
@@ -49,11 +49,12 @@ class DownloadBatchTest {
                 createTask("4", DownloadTaskStatus.SAVING),
                 createTask("5", DownloadTaskStatus.FAILED),
                 createTask("6", DownloadTaskStatus.CANCELLING),
+                createTask("7", DownloadTaskStatus.RETRYING),
             )
 
         val pausable = DownloadManager.filterPausableTasks(tasks)
 
-        assertEquals(listOf("1", "2"), pausable.map { it.taskId })
+        assertEquals(listOf("1", "2", "7"), pausable.map { it.taskId })
     }
 
     @Test
@@ -67,23 +68,6 @@ class DownloadBatchTest {
             )
 
         assertEquals(listOf("3"), DownloadManager.filterResumableTasks(tasks).map { it.taskId })
-    }
-
-    @Test
-    fun filterCancellableTasksRetainsAllUncompletedTasks() {
-        val tasks =
-            listOf(
-                createTask("1", DownloadTaskStatus.QUEUED),
-                createTask("2", DownloadTaskStatus.RUNNING),
-                createTask("3", DownloadTaskStatus.PAUSED),
-                createTask("4", DownloadTaskStatus.SAVING),
-                createTask("5", DownloadTaskStatus.FAILED),
-                createTask("6", DownloadTaskStatus.CANCELLING),
-            )
-
-        val cancellable = DownloadManager.filterCancellableTasks(tasks)
-
-        assertEquals(listOf("1", "2", "3", "4", "5", "6"), cancellable.map { it.taskId })
     }
 
     @Test

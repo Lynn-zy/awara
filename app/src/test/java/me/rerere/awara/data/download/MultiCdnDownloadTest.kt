@@ -1,5 +1,6 @@
 package me.rerere.awara.data.download
 
+import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -40,14 +41,19 @@ class MultiCdnDownloadTest {
     private var mirrorFailure = false
     private var slowPrimary = false
 
+    /** 返回显式指向 127.0.0.1 的回环地址，规避双栈环境下的 localhost 解析抖动。 */
+    private fun MockWebServer.loopbackUrl(path: String) =
+        url(path).newBuilder().host("127.0.0.1").build()
+
     @Before
     fun setup() {
-        primary.start()
-        mirror.start()
-        catalog.start()
+        val loopback = InetAddress.getByName("127.0.0.1")
+        primary.start(loopback, 0)
+        mirror.start(loopback, 0)
+        catalog.start(loopback, 0)
         url =
             primary
-                .url("/download?filename=${UUID.randomUUID()}_Source.mp4&path=2026/10/28")
+                .loopbackUrl("/download?filename=${UUID.randomUUID()}_Source.mp4&path=2026/10/28")
                 .toString()
         primary.dispatcher = dispatcher(false)
         mirror.dispatcher = dispatcher(true)
@@ -113,11 +119,13 @@ class MultiCdnDownloadTest {
         DownloadSourcePool(
             url,
             client,
-            DownloadCdnDirectory(client, directoryUrl = catalog.url("/distribution")),
+            DownloadCdnDirectory(client, directoryUrl = catalog.loopbackUrl("/distribution")),
             onBind = ::bound,
             onUnbind = ::unbound,
             resolve = { original, host ->
-                val endpoint = if (host == "mirror.iwara.tv") mirror.url("/") else primary.url("/")
+                val endpoint =
+                    if (host == "mirror.iwara.tv") mirror.loopbackUrl("/")
+                    else primary.loopbackUrl("/")
                 endpoint
                     .newBuilder()
                     .encodedPath(original.encodedPath)
@@ -207,7 +215,7 @@ class MultiCdnDownloadTest {
                 assertEquals(previousMirrorRequests, mirror.requestCount)
                 assertEquals(previousPrimaryRequests + 4, primary.requestCount)
                 assertEquals(
-                    primary.url("/").host,
+                    primary.loopbackUrl("/").host,
                     DownloadRangeStore.verifiedState(file)!!.sourceIdentity!!.primaryHost,
                 )
                 assertArrayEquals(payload, file.readBytes())

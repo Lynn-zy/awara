@@ -365,6 +365,13 @@ internal class DownloadCdnDirectory(
 
     companion object {
         private val DIRECTORY_REFRESH_MUTEX = Mutex()
+
+        /**
+         * 匹配 push 环的 `YYYY/MM/DD` 日期或状态表原始 `\d{4}/\d{2}/\d{2}` 表达式，
+         * 避免用裸 `\d{4}` 误伤 `recent=1700GB` 等 fast 节点。
+         */
+        private val PUSH_RING_DATE_REGEX =
+            Regex("""(?:\d{4}|\\d\{4\})/(?:\d{2}|\\d\{2\})/(?:\d{2}|\\d\{2\})""")
         /** 官方内置兜底 CDN 节点列表。 包含 26 个高速节点（fast）与 2 个慢速主备节点（slow）。 */
         val FALLBACK_NODES: List<DownloadCdnNode> =
             listOf(
@@ -442,7 +449,7 @@ internal class DownloadCdnDirectory(
                 if (
                     host == "rin.iwara.tv" ||
                         host.startsWith("rin.") ||
-                        ringType.contains("""\d{4}""")
+                        PUSH_RING_DATE_REGEX.containsMatchIn(ringType)
                 ) {
                     continue
                 }

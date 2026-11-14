@@ -1,6 +1,7 @@
 package me.rerere.awara.data.download
 
 import java.io.File
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -105,10 +106,14 @@ class DownloadCdnDirectoryTest {
     """
             .trimIndent()
 
+    /** 返回显式指向 127.0.0.1 的回环测试地址，避免双栈环境下的 localhost 解析抖动。 */
+    private fun MockWebServer.loopbackUrl(path: String) =
+        url(path).newBuilder().host("127.0.0.1").build()
+
     @Before
     fun setUp() {
         server = MockWebServer()
-        server.start()
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
         okHttpClient = OkHttpClient.Builder().build()
     }
 
@@ -169,6 +174,25 @@ class DownloadCdnDirectoryTest {
         assertFalse("hime.iwara.tv:443" in hostSet)
     }
 
+    /** 验证日期格式的 push 环会被排除，而包含 4 位数字的 recent=1700GB fast 节点不会被误过滤。 */
+    @Test
+    fun parseExcludesDatePushRingsWhileKeeping1700GbFastNodes() {
+        val html =
+            """
+            <html><body><table>
+                <tr><td>kafka.iwara.tv</td><td>recent=1700GB</td><td>Completed</td></tr>
+                <tr><td>push2.iwara.tv</td><td>2026/05/01</td><td>Completed</td></tr>
+                <tr><td>rin.iwara.tv</td><td>^\d{4}/\d{2}/\d{2}$</td><td>Completed</td></tr>
+            </table></body></html>
+            """
+                .trimIndent()
+
+        val nodes = DownloadCdnDirectory.parse(html)
+
+        assertEquals(listOf("kafka.iwara.tv"), nodes.map { it.host })
+        assertEquals("fast", nodes.single().group)
+    }
+
     /**
      * 验证当 originHost 为 fast 节点时：
      * 1. 排除 originHost 本身；
@@ -183,7 +207,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val origin = "kafka.iwara.tv"
@@ -212,7 +236,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val origin = "mikoto.iwara.tv"
@@ -247,7 +271,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                     now = { clock.get() },
                 )
 
@@ -288,7 +312,7 @@ class DownloadCdnDirectoryTest {
                 DownloadCdnDirectory(
                     client = okHttpClient,
                     cacheFile = cacheFile,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                     now = { fixedTime },
                 )
 
@@ -304,7 +328,7 @@ class DownloadCdnDirectoryTest {
                 DownloadCdnDirectory(
                     client = okHttpClient,
                     cacheFile = cacheFile,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                     now = { fixedTime + 1000L },
                 )
 
@@ -328,7 +352,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             // 网络失败时不应抛出异常
@@ -359,7 +383,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val boundCall = AtomicReference<Call?>(null)
@@ -417,7 +441,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val candidates = directory.candidates("sparkle.iwara.tv")
@@ -444,7 +468,7 @@ class DownloadCdnDirectoryTest {
             val directory =
                 DownloadCdnDirectory(
                     client = okHttpClient,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val candidates = directory.candidates("topaz.iwara.tv")
@@ -467,7 +491,7 @@ class DownloadCdnDirectoryTest {
                 DownloadCdnDirectory(
                     client = okHttpClient,
                     cacheFile = impossibleCacheFile,
-                    directoryUrl = server.url("/distribution"),
+                    directoryUrl = server.loopbackUrl("/distribution"),
                 )
 
             val candidates = directory.candidates("swan.iwara.tv")

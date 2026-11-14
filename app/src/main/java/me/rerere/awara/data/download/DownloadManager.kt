@@ -47,6 +47,15 @@ import okhttp3.Call
 
 private const val TAG = "DownloadManager"
 private val UUID_REGEX = Regex("^[0-9a-fA-F\\-]{36}$")
+private val SIGNED_URL_REGEX = Regex("""https?://[^\s]+""")
+
+/** 清除文本中携带的 URL 查询签名参数，避免临时签名泄露到数据库与界面。 */
+internal fun sanitizeDownloadErrorMessage(message: String): String =
+    message.replace(SIGNED_URL_REGEX) { match -> match.value.substringBefore('?') }
+
+/** 提取异常消息并剥离 URL 查询签名参数；异常消息为空时回退至异常类名。 */
+internal fun Throwable.sanitizedDownloadErrorMessage(): String =
+    sanitizeDownloadErrorMessage(message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName)
 
 // 仅当新清晰度高于旧清晰度（旧清晰度为空视为可替换）时允许覆盖下载
 fun canUpgradeDownloadQuality(newQuality: String, oldQuality: String?): Boolean {
@@ -95,25 +104,17 @@ class DownloadManager(
     val connectionSnapshots: StateFlow<Map<String, CdnConnectionSnapshot>>
         get() = connectionRegistry.connections
 
-    fun isAutoResumeEnabled(): Boolean {
-        return runCatching {
-                mmkvPreference.getBoolean(
-                    DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME,
-                    DownloadLaunchPolicy.DEFAULT_AUTO_RESUME,
-                )
-            }
-            .getOrDefault(DownloadLaunchPolicy.DEFAULT_AUTO_RESUME)
-    }
+    fun isAutoResumeEnabled(): Boolean =
+        mmkvPreference.getBoolean(
+            DownloadLaunchPolicy.PREFERENCE_KEY_AUTO_RESUME,
+            DownloadLaunchPolicy.DEFAULT_AUTO_RESUME,
+        )
 
-    fun isAutomaticRetryEnabled(): Boolean {
-        return runCatching {
-                mmkvPreference.getBoolean(
-                    PREFERENCE_KEY_DOWNLOAD_AUTO_RETRY,
-                    DEFAULT_DOWNLOAD_AUTO_RETRY,
-                )
-            }
-            .getOrDefault(DEFAULT_DOWNLOAD_AUTO_RETRY)
-    }
+    fun isAutomaticRetryEnabled(): Boolean =
+        mmkvPreference.getBoolean(
+            PREFERENCE_KEY_DOWNLOAD_AUTO_RETRY,
+            DEFAULT_DOWNLOAD_AUTO_RETRY,
+        )
 
     fun grantExecutionAuthorization(taskId: String, workId: String) {
         launchPolicy.grantAuthorization(taskId, workId)
@@ -231,7 +232,7 @@ class DownloadManager(
                             .updateStatus(
                                 taskId = taskId,
                                 newStatus = DownloadTaskStatus.FAILED,
-                                error = "入队失败: ${e.message}",
+                                error = "入队失败: ${e.sanitizedDownloadErrorMessage()}",
                             )
                         DownloadNotifications.showFailureNotification(context, taskId, task.title)
                         throw e
@@ -328,10 +329,7 @@ class DownloadManager(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    val reason =
-                        e.message?.replace(Regex("https?://[^\\s]+")) { url ->
-                            url.value.substringBefore('?')
-                        } ?: e.javaClass.simpleName
+                    val reason = e.sanitizedDownloadErrorMessage()
                     database
                         .downloadTaskDao()
                         .updateResumeError(taskId, task.workId, task.status, "刷新链接失败: $reason")
@@ -403,7 +401,7 @@ class DownloadManager(
                             .updateStatus(
                                 taskId = taskId,
                                 newStatus = DownloadTaskStatus.FAILED,
-                                error = "恢复调度失败: ${e.message}",
+                                error = "恢复调度失败: ${e.sanitizedDownloadErrorMessage()}",
                             )
                         DownloadNotifications.showFailureNotification(context, taskId, task.title)
                         throw e
@@ -515,7 +513,7 @@ class DownloadManager(
                             storage.delete(Uri.parse(latestTask.destinationUri))
                         } catch (e: Exception) {
                             cleanupFailed = true
-                            cleanupError = "清理目标文件失败: ${e.message}"
+                            cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
                             Log.e(TAG, "cancel: 清理目标文件失败 taskId=$taskId", e)
                         }
                     }
@@ -593,7 +591,7 @@ class DownloadManager(
                                         storage.delete(Uri.parse(task.destinationUri))
                                     } catch (e: Exception) {
                                         cleanupFailed = true
-                                        cleanupError = "清理目标文件失败: ${e.message}"
+                                        cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
                                     }
                                 }
                                 try {
@@ -629,7 +627,7 @@ class DownloadManager(
                                         storage.delete(Uri.parse(task.destinationUri))
                                     } catch (e: Exception) {
                                         cleanupSuccess = false
-                                        cleanupError = "清理目标文件失败: ${e.message}"
+                                        cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
                                     }
                                 }
                                 DownloadNotifications.cancelTaskNotification(context, task.taskId)
@@ -669,7 +667,7 @@ class DownloadManager(
                                         storage.delete(Uri.parse(task.destinationUri))
                                     } catch (e: Exception) {
                                         cleanupSuccess = false
-                                        cleanupError = "清理目标文件失败: ${e.message}"
+                                        cleanupError = "清理目标文件失败: ${e.sanitizedDownloadErrorMessage()}"
                                     }
                                 }
                                 DownloadNotifications.cancelTaskNotification(context, task.taskId)
@@ -761,8 +759,7 @@ class DownloadManager(
 
     suspend fun cancelAll(tasksToCancel: List<DownloadTask>? = null): BatchResult =
         withContext(Dispatchers.IO) {
-            val candidateTasks = tasksToCancel ?: database.downloadTaskDao().getAllTasksList()
-            val targets = filterCancellableTasks(candidateTasks)
+            val targets = tasksToCancel ?: database.downloadTaskDao().getAllTasksList()
             executeBatch(targets) { task -> cancel(task.taskId) }
         }
 
@@ -783,11 +780,6 @@ class DownloadManager(
 
         fun filterResumableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
             return tasks.filter { it.status == DownloadTaskStatus.PAUSED }
-        }
-
-        // cancelAll 针对所有未完成任务
-        fun filterCancellableTasks(tasks: List<DownloadTask>): List<DownloadTask> {
-            return tasks
         }
 
         // 真实批量路径执行器，逐项执行，失败收集并不中断其他任务执行

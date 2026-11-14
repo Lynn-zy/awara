@@ -33,6 +33,7 @@ import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.DownloadTransferSettings
 import me.rerere.awara.data.download.ResumableDownloader
 import me.rerere.awara.data.download.decideDownloadRetry
+import me.rerere.awara.data.download.sanitizedDownloadErrorMessage
 import me.rerere.awara.data.download.shouldBlockAutomaticDownloadStart
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTaskStatus
@@ -325,24 +326,25 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     )
 
                     transferInProgress = false
-                    try {
-                        validateVideoFile(partFile)
-                    } catch (exception: Exception) {
-                        currentCoroutineContext().ensureActive()
-                        withContext(NonCancellable) {
-                            downloadManager.parts.delete(taskId)
-                            appDatabase
-                                .downloadTaskDao()
-                                .updateProgress(taskId, id.toString(), 0L, -1L)
-                            appDatabase
-                                .downloadTaskDao()
-                                .updateValidator(taskId, id.toString(), null)
+                    val videoDurationMs =
+                        try {
+                            probeValidVideoDurationMs(partFile)
+                        } catch (exception: Exception) {
+                            currentCoroutineContext().ensureActive()
+                            withContext(NonCancellable) {
+                                downloadManager.parts.delete(taskId)
+                                appDatabase
+                                    .downloadTaskDao()
+                                    .updateProgress(taskId, id.toString(), 0L, -1L)
+                                appDatabase
+                                    .downloadTaskDao()
+                                    .updateValidator(taskId, id.toString(), null)
+                            }
+                            throw IOException(
+                                appContext.getString(R.string.download_invalid_video),
+                                exception,
+                            )
                         }
-                        throw IOException(
-                            appContext.getString(R.string.download_invalid_video),
-                            exception,
-                        )
-                    }
 
                     // 传输完成，CAS 进入保存阶段
                     val casSaving =
@@ -414,7 +416,6 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     oldUriToClean = existingItem.uri
                                     appDatabase.downloadDao().deleteDownloadItem(existingItem)
                                 }
-                                val durationMs = extractDurationMs(partFile)
                                 appDatabase
                                     .downloadDao()
                                     .insertDownloadItem(
@@ -432,7 +433,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                                 inTxTask.publishedAtEpochSeconds,
                                             sizeBytes = partFile.length(),
                                             quality = inTxTask.quality,
-                                            durationMs = durationMs,
+                                            durationMs = videoDurationMs,
                                         )
                                     )
                                 appDatabase.downloadTaskDao().delete(taskId)
@@ -508,7 +509,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     }
                     throw e
                 } catch (e: Exception) {
-                    val sanitizedMsg = sanitizeErrorMessage(e.message ?: e.javaClass.simpleName)
+                    val sanitizedMsg = e.sanitizedDownloadErrorMessage()
                     Log.e(TAG, "doWork: 下载失败 taskId=$taskId, error=$sanitizedMsg")
                     withContext(NonCancellable) {
                         if (!committed) {
@@ -555,11 +556,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                                 downloadManager.scheduleRetry(taskId)
                                             } catch (scheduleException: Exception) {
                                                 val scheduleError =
-                                                    sanitizeErrorMessage(
-                                                        scheduleException.message
-                                                            ?: scheduleException.javaClass
-                                                                .simpleName
-                                                    )
+                                                    scheduleException.sanitizedDownloadErrorMessage()
                                                 if (
                                                     appDatabase
                                                         .downloadTaskDao()
@@ -625,26 +622,16 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
         }
     }
 
-    private fun validateVideoFile(file: File) {
+    /** 单次打开 MediaMetadataRetriever 同时校验视频轨存在性并提取视频时长（毫秒）。 */
+    private fun probeValidVideoDurationMs(file: File): Long {
         val metadata = MediaMetadataRetriever()
-        try {
+        return try {
             metadata.setDataSource(file.absolutePath)
             if (metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == null) {
                 throw IOException(appContext.getString(R.string.download_invalid_video))
             }
-        } finally {
-            metadata.release()
-        }
-    }
-
-    private fun extractDurationMs(file: File): Long {
-        val metadata = MediaMetadataRetriever()
-        return try {
-            metadata.setDataSource(file.absolutePath)
             metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                 ?: 0L
-        } catch (_: Exception) {
-            0L
         } finally {
             try {
                 metadata.release()
@@ -662,15 +649,6 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                 Log.e(TAG, "cleanupPartialDestination: 目标文件清理失败 uri=$uri", e)
                 false
             }
-        }
-    }
-
-    // 清除错误信息中可能包含的已签名 URL 参数，防止敏感参数泄露到界面与数据库
-    private fun sanitizeErrorMessage(message: String): String {
-        return message.replace(Regex("""https?://[^\s]+""")) { match ->
-            val url = match.value
-            val queryIdx = url.indexOf('?')
-            if (queryIdx != -1) url.substring(0, queryIdx) else url
         }
     }
 

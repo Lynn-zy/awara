@@ -245,7 +245,8 @@ fun DownloadPage(
     val visibleVideoIds = remember(visibleItems) { visibleItems.map { it.id }.toSet() }
     val selectedVisibleIds =
         remember(selectedIds, visibleVideoIds) { selectedIds.intersect(visibleVideoIds) }
-    val allVisibleSelected = isAllVideosSelected(selectedIds, visibleVideoIds)
+    val allVisibleSelected =
+        visibleVideoIds.isNotEmpty() && visibleVideoIds.all { it in selectedIds }
     val isDeleting = vm.state.deletingIds.isNotEmpty()
 
     val highlightedId =
@@ -642,9 +643,9 @@ fun DownloadPage(
                                 onClick = {
                                     selectedIds =
                                         if (!allVisibleSelected) {
-                                            selectAllVideos(selectedIds, visibleVideoIds)
+                                            selectedIds + visibleVideoIds
                                         } else {
-                                            deselectAllVideos(selectedIds, visibleVideoIds)
+                                            selectedIds - visibleVideoIds
                                         }
                                 },
                                 modifier = Modifier.semantics { contentDescription = selectAllDesc },
@@ -949,7 +950,12 @@ fun DownloadPage(
                                         isDeleting = item.id in vm.state.deletingIds,
                                         isHighlighted = item.id == highlightedId,
                                         onToggleSelect = {
-                                            selectedIds = toggleSelection(selectedIds, item.id)
+                                            selectedIds =
+                                                if (item.id in selectedIds) {
+                                                    selectedIds - item.id
+                                                } else {
+                                                    selectedIds + item.id
+                                                }
                                         },
                                         onDelete = { vm.delete(listOf(item)) },
                                         onClick = { playDownloadedItem(item) },
@@ -1343,19 +1349,6 @@ fun DownloadItemRow(
         }
     }
 }
-
-// 纯状态选择管理函数，便于测试与复用
-fun toggleSelection(selectedIds: Set<Int>, id: Int): Set<Int> =
-    if (id in selectedIds) selectedIds - id else selectedIds + id
-
-fun selectAllVideos(selectedIds: Set<Int>, visibleIds: Set<Int>): Set<Int> =
-    selectedIds + visibleIds
-
-fun deselectAllVideos(selectedIds: Set<Int>, visibleIds: Set<Int>): Set<Int> =
-    selectedIds - visibleIds
-
-fun isAllVideosSelected(selectedIds: Set<Int>, visibleIds: Set<Int>): Boolean =
-    visibleIds.isNotEmpty() && visibleIds.all { it in selectedIds }
 
 /**
  * 「已下载视频」页顶部元数据补全进度条组件。

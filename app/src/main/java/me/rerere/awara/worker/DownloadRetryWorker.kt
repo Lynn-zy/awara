@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.MAX_SILENT_DOWNLOAD_RETRIES
+import me.rerere.awara.data.download.sanitizedDownloadErrorMessage
 import me.rerere.awara.data.entity.DownloadTaskStatus
 import me.rerere.awara.di.AppDatabase
 import org.koin.core.component.KoinComponent
@@ -66,12 +67,17 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
                                 taskId,
                                 task.workId,
                                 nextRetryCount,
-                                sanitize(exception),
+                                exception.sanitizedDownloadErrorMessage(),
                             )
                         downloadManager.grantExecutionAuthorization(taskId, id.toString())
                         return@withContext Result.retry()
                     } else {
-                        fail(taskId, task.workId, latest.title, sanitize(exception))
+                        fail(
+                            taskId,
+                            task.workId,
+                            latest.title,
+                            exception.sanitizedDownloadErrorMessage(),
+                        )
                     }
                 }
             }
@@ -84,10 +90,6 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
             DownloadNotifications.showFailureNotification(applicationContext, taskId, title)
         }
     }
-
-    private fun sanitize(exception: Exception): String =
-        exception.message?.replace(Regex("https?://[^\\s]+")) { it.value.substringBefore('?') }
-            ?: exception.javaClass.simpleName
 
     companion object {
         const val KEY_TASK_ID = "download_retry_task_id"

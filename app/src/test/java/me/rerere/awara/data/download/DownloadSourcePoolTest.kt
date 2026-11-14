@@ -1,5 +1,6 @@
 package me.rerere.awara.data.download
 
+import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -73,11 +74,15 @@ class DownloadSourcePoolTest {
     /** 标记是否在镜像服务中注入篡改数据（用于测试 2） */
     @Volatile private var corruptMirrorPayload: Boolean = false
 
+    /** 返回显式指向 127.0.0.1 的回环地址，规避双栈环境下的 localhost 解析抖动。 */
+    private fun MockWebServer.loopbackUrl(path: String = "") =
+        url(path).newBuilder().host("127.0.0.1").build()
+
     /** 将候选主机域名映射为本地对应 MockWebServer 的地址解析函数， 同时完整保留原始请求的路径与查询参数。 */
     private val candidateResolver: (HttpUrl, String) -> HttpUrl = { currentUrl, host ->
         val targetServer = if (host == "mirror.iwara.tv") mirrorServer else primaryServer
         targetServer
-            .url("")
+            .loopbackUrl()
             .newBuilder()
             .encodedPath(currentUrl.encodedPath)
             .encodedQuery(currentUrl.encodedQuery)
@@ -94,9 +99,10 @@ class DownloadSourcePoolTest {
         primaryServer = MockWebServer()
         mirrorServer = MockWebServer()
 
-        directoryServer.start()
-        primaryServer.start()
-        mirrorServer.start()
+        val loopback = InetAddress.getByName("127.0.0.1")
+        directoryServer.start(loopback, 0)
+        primaryServer.start(loopback, 0)
+        mirrorServer.start(loopback, 0)
 
         // 配置目录服务 Dispatcher：返回包含 mirror.iwara.tv (recent=1700GB) 的 HTML
         directoryServer.dispatcher =
@@ -149,7 +155,7 @@ class DownloadSourcePoolTest {
             DownloadCdnDirectory(
                 client = okHttpClient,
                 cacheFile = null,
-                directoryUrl = directoryServer.url("/?page=distribution"),
+                directoryUrl = directoryServer.loopbackUrl("/?page=distribution"),
             )
     }
 
@@ -177,7 +183,7 @@ class DownloadSourcePoolTest {
                 val randomFilename = "${UUID.randomUUID()}.mp4"
                 val initialUrl =
                     primaryServer
-                        .url("/download?filename=$randomFilename&path=2026/10/28")
+                        .loopbackUrl("/download?filename=$randomFilename&path=2026/10/28")
                         .toString()
 
                 val tracker = CdnConnectionTracker()
@@ -251,7 +257,7 @@ class DownloadSourcePoolTest {
                     DownloadSourcePool(
                         originalUrl =
                             primaryServer
-                                .url("/download?filename=${UUID.randomUUID()}.mp4")
+                                .loopbackUrl("/download?filename=${UUID.randomUUID()}.mp4")
                                 .toString(),
                         client = okHttpClient,
                         directory = cdnDirectory,
@@ -300,7 +306,7 @@ class DownloadSourcePoolTest {
                 val randomFilename = "${UUID.randomUUID()}.mp4"
                 val initialUrl =
                     primaryServer
-                        .url("/download?filename=$randomFilename&path=2026/10/28")
+                        .loopbackUrl("/download?filename=$randomFilename&path=2026/10/28")
                         .toString()
 
                 val tracker = CdnConnectionTracker()
@@ -346,7 +352,7 @@ class DownloadSourcePoolTest {
                 val randomFilename = "${UUID.randomUUID()}.mp4"
                 val initialUrl =
                     primaryServer
-                        .url("/download?filename=$randomFilename&path=2026/10/28")
+                        .loopbackUrl("/download?filename=$randomFilename&path=2026/10/28")
                         .toString()
 
                 val tracker = CdnConnectionTracker()
@@ -403,13 +409,13 @@ class DownloadSourcePoolTest {
                 val randomFilename = "${UUID.randomUUID()}.mp4"
                 val initialUrl =
                     primaryServer
-                        .url("/download?filename=$randomFilename&path=2026/10/28&hash=seed_hash")
+                        .loopbackUrl("/download?filename=$randomFilename&path=2026/10/28&hash=seed_hash")
                         .toString()
 
                 val refreshCounter = AtomicInteger(0)
                 val refreshedUrlString =
                     primaryServer
-                        .url("/download?filename=$randomFilename&path=2026/10/28&hash=renewed_hash")
+                        .loopbackUrl("/download?filename=$randomFilename&path=2026/10/28&hash=renewed_hash")
                         .toString()
                 val refreshLinkCallback: suspend () -> String = {
                     refreshCounter.incrementAndGet()
@@ -490,11 +496,12 @@ class DownloadSourcePoolTest {
             withTimeout(10000) {
                 val mirrorServer2 = MockWebServer()
                 val badMirrorServer = MockWebServer()
-                mirrorServer2.start()
-                badMirrorServer.start()
+                val loopback = InetAddress.getByName("127.0.0.1")
+                mirrorServer2.start(loopback, 0)
+                badMirrorServer.start(loopback, 0)
 
                 val multiMirrorDirectoryServer = MockWebServer()
-                multiMirrorDirectoryServer.start()
+                multiMirrorDirectoryServer.start(loopback, 0)
 
                 try {
                     // 配置 mirrorServer2 正常响应
@@ -543,7 +550,7 @@ class DownloadSourcePoolTest {
                                 else -> primaryServer
                             }
                         targetServer
-                            .url("")
+                            .loopbackUrl()
                             .newBuilder()
                             .encodedPath(currentUrl.encodedPath)
                             .encodedQuery(currentUrl.encodedQuery)
@@ -554,7 +561,7 @@ class DownloadSourcePoolTest {
                         DownloadCdnDirectory(
                             client = okHttpClient,
                             cacheFile = null,
-                            directoryUrl = multiMirrorDirectoryServer.url("/?page=distribution"),
+                            directoryUrl = multiMirrorDirectoryServer.loopbackUrl("/?page=distribution"),
                         )
 
                     var currentNetwork = "WIFI"
@@ -563,7 +570,7 @@ class DownloadSourcePoolTest {
                     val randomFilename = "${UUID.randomUUID()}.mp4"
                     val initialUrl =
                         primaryServer
-                            .url("/download?filename=$randomFilename&path=2026/10/28")
+                            .loopbackUrl("/download?filename=$randomFilename&path=2026/10/28")
                             .toString()
 
                     val pool =

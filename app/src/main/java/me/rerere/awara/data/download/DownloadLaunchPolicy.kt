@@ -35,16 +35,6 @@ class DownloadLaunchPolicy {
         manualAuthorizations.remove(taskId)
     }
 
-    // 清空全部授权
-    fun clearAllAuthorizations() {
-        manualAuthorizations.clear()
-    }
-
-    // 决策是否允许执行 Worker
-    fun canExecute(autoResumeEnabled: Boolean, isAuthorized: Boolean): Boolean {
-        return autoResumeEnabled || isAuthorized
-    }
-
     companion object {
         const val PREFERENCE_KEY_AUTO_RESUME = PREFERENCE_KEY_DOWNLOAD_AUTO_RESUME
         const val DEFAULT_AUTO_RESUME = false

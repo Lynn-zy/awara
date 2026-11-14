@@ -71,7 +71,6 @@ internal constructor(
      * @param validator 外部传入的已有强 ETag 校验器（形如 `"..."`），可为空
      * @param expectedTotalBytes 预期的文件完整字节数（-1 表示未知）
      * @param connections 并发连接数（通常 1 或 2）
-     * @param segmented 是否启用分块下载（false 时单路并请求大缺口，若无侧车则直接回退普通模式）
      * @param onBindCall 发起 HTTP 请求绑定 Call 的回调（用于取消绑定）
      * @param onUnbindCall 请求结束解绑 Call 的回调
      * @param onValidatorResolved 解析并确认强 ETag 时的回调
@@ -85,7 +84,6 @@ internal constructor(
         validator: String?,
         expectedTotalBytes: Long = -1L,
         connections: Int = 2,
-        segmented: Boolean = true,
         onBindCall: ((Call) -> Unit)? = null,
         onUnbindCall: ((Call) -> Unit)? = null,
         onValidatorResolved: (suspend (String?) -> Unit)? = null,
@@ -111,12 +109,6 @@ internal constructor(
                     DownloadRangeStore.delete(targetFile)
                     existingState = null
                 }
-            }
-
-            // 若用户配置关闭分块下载，且本地无已有的未完成侧车分块，则直接返回 false 交给普通下载器
-            if (!segmented && existingState == null) {
-                DownloadRangeStore.rollbackToSafeSequentialPrefix(targetFile)
-                return@withContext false
             }
 
             // 发起小 Range bytes=0-0 探测
@@ -158,30 +150,49 @@ internal constructor(
                     sourcePool?.bind(total, resolvedStrongETag)
 
                     // 跨主机恢复不能把旧 ETag 当全局摘要；有旧抽样身份时只核对当前主机，
-                    // 即使实验开关已关闭，也不会探测其他 CDN 或刷新目录。
+                    // 即使多源关闭，也只复用轻量指纹采样而不构造 SourcePool 或 CDN 目录。
                     val previousIdentity = existingState?.sourceIdentity
+                    val activeHttpUrl = activeUrl.toHttpUrl()
                     if (
                         previousIdentity != null &&
-                            previousIdentity.primaryHost != activeUrl.toHttpUrl().host
+                            previousIdentity.primaryHost != activeHttpUrl.host
                     ) {
-                        val verifier =
-                            sourcePool
-                                ?: DownloadSourcePool(
-                                        activeUrl,
-                                        dedicatedClient,
-                                        DownloadCdnDirectory(dedicatedClient),
-                                        onBind = onBindCall,
-                                        onUnbind = onUnbindCall,
+                        val verifiedIdentity =
+                            if (existingState?.total != total) {
+                                null
+                            } else if (sourcePool != null) {
+                                if (sourcePool.matchesFingerprint(previousIdentity.sampleFingerprint)) {
+                                    sourcePool.snapshot()
+                                } else {
+                                    null
+                                }
+                            } else {
+                                val (_, sampledFingerprint) =
+                                    DownloadCdnBudget.withPermit {
+                                        DownloadSourcePool.sampleFingerprint(
+                                            client = dedicatedClient,
+                                            url = activeHttpUrl,
+                                            total = total,
+                                            expectedValidator = resolvedStrongETag,
+                                            onBind = onBindCall,
+                                            onUnbind = onUnbindCall,
+                                        )
+                                    }
+                                if (sampledFingerprint == previousIdentity.sampleFingerprint) {
+                                    DownloadSourceIdentity(
+                                        primaryHost = activeHttpUrl.host,
+                                        sampleFingerprint = sampledFingerprint,
+                                        validators = mapOf(activeHttpUrl.host to resolvedStrongETag),
                                     )
-                                    .also { it.bind(total, resolvedStrongETag) }
-                        if (
-                            existingState?.total == total &&
-                                verifier.matchesFingerprint(previousIdentity.sampleFingerprint)
-                        ) {
+                                } else {
+                                    null
+                                }
+                            }
+                        if (verifiedIdentity != null) {
                             existingState =
                                 existingState?.copy(
                                     strongETag = resolvedStrongETag,
-                                    sourceIdentity = verifier.snapshot(),
+                                    sourceIdentity = verifiedIdentity,
                                 )
                             existingState?.let { DownloadRangeStore.writeState(targetFile, it) }
                         } else {
@@ -256,21 +267,12 @@ internal constructor(
                         )
                     }
 
-                    // 根据 segmented 参数决定切块粒度与并发数
-                    val chunkTasks: List<Pair<Long, Long>>
-                    val workerCount: Int
-                    if (!segmented) {
-                        // 单路模式且尽量请求连续大缺口，不丢弃已有区间
-                        chunkTasks = missingRanges
-                        workerCount = 1
-                    } else {
-                        // 切分成不超过 blockSizeBytes 的小块
-                        chunkTasks =
-                            missingRanges.flatMap {
-                                DownloadRangeStore.splitIntoBlocks(it, blockSizeBytes)
-                            }
-                        workerCount = maxOf(1, minOf(connections, 2))
-                    }
+                    // 将缺失区间切分为不超过 blockSizeBytes 的小块，默认限制最大双并发
+                    val chunkTasks =
+                        missingRanges.flatMap {
+                            DownloadRangeStore.splitIntoBlocks(it, blockSizeBytes)
+                        }
+                    val workerCount = maxOf(1, minOf(connections, 2))
 
                     // 初始化目标文件并以读写模式打开 FileChannel
                     if (!targetFile.exists()) {

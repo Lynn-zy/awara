@@ -212,7 +212,7 @@ class DownloadManagerVM(private val downloadManager: DownloadManager) : ViewMode
 
     fun cancelAll() {
         if (state.isBatchOperating || state.operatingIds.isNotEmpty()) return
-        val cancellable = DownloadManager.filterCancellableTasks(state.tasks)
+        val cancellable = state.tasks
         if (cancellable.isEmpty()) return
         resumeBatchJob?.cancel()
         pendingResumes.keys.toList().forEach(::stopResume)

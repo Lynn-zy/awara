@@ -1,6 +1,7 @@
 package me.rerere.awara.data.download
 
 import java.io.IOException
+import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -41,9 +42,15 @@ class SegmentedDownloaderTest {
     @Before
     fun setup() {
         server = MockWebServer()
-        server.start()
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
         client = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
-        url = server.url("/download?filename=fixture_Source.mp4&path=2026/10/27").toString()
+        url =
+            server
+                .url("/download?filename=fixture_Source.mp4&path=2026/10/27")
+                .newBuilder()
+                .host("127.0.0.1")
+                .build()
+                .toString()
         dispatch { responseFor(it) }
     }
 

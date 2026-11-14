@@ -2,6 +2,7 @@ package me.rerere.awara.data.download
 
 import java.io.EOFException
 import java.io.IOException
+import java.net.InetAddress
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -32,10 +33,14 @@ class ResumableDownloaderTest {
     private lateinit var okHttpClient: OkHttpClient
     private lateinit var downloader: ResumableDownloader
 
+    /** 返回显式指向 127.0.0.1 的回环地址，规避双栈环境下的 localhost 解析抖动。 */
+    private fun MockWebServer.loopbackUrl(path: String) =
+        url(path).newBuilder().host("127.0.0.1").build()
+
     @Before
     fun setUp() {
         server = MockWebServer()
-        server.start()
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
         okHttpClient = OkHttpClient.Builder().build()
         downloader = ResumableDownloader(okHttpClient)
     }
@@ -58,7 +63,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"test-etag\"",
                 onProgress = { _, _ -> },
@@ -78,13 +83,13 @@ class ResumableDownloaderTest {
         runBlocking<Unit> {
             val tracker = me.rerere.awara.data.diagnostics.CdnConnectionTracker()
             val content = ByteArray(32 * 1024) { 3 }
-            val redirected = server.url("/actual.mp4").newBuilder().host("127.0.0.1").build()
+            val redirected = server.loopbackUrl("/actual.mp4")
             server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", redirected))
             server.enqueue(MockResponse().setBody(Buffer().write(content)))
             var observedActiveConnection = false
             ResumableDownloader(okHttpClient, connectionTracker = tracker)
                 .downloadSequential(
-                    url = server.url("/video.mp4?signature=not-for-display").toString(),
+                    url = server.loopbackUrl("/video.mp4?signature=not-for-display").toString(),
                     targetFile = tempFolder.newFile("diagnostic.part"),
                     validator = null,
                     onBytesDownloaded = {
@@ -107,7 +112,7 @@ class ResumableDownloaderTest {
             server.enqueue(MockResponse().setResponseCode(200).setBody("NEW"))
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"old-etag\"",
                 onBytesDownloaded = { receivedBytes += it },
@@ -133,7 +138,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"same-etag\"",
                 expectedTotalBytes = 3L,
@@ -158,7 +163,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"test-etag\"",
                 onProgress = { _, _ -> },
@@ -184,7 +189,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"test-etag\"",
                 onProgress = { _, _ -> },
@@ -217,7 +222,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"test-etag\"",
                 onProgress = { _, _ -> },
@@ -252,7 +257,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = "\"original-etag\"",
                 onProgress = { _, _ -> },
@@ -274,7 +279,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
                 onProgress = { _, _ -> },
@@ -293,7 +298,7 @@ class ResumableDownloaderTest {
             server.enqueue(MockResponse().setResponseCode(200).setChunkedBody("STREAMING_DATA", 4))
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
                 onProgress = { _, _ -> },
@@ -314,7 +319,7 @@ class ResumableDownloaderTest {
                 .setChunkedBody("ABCDEFG", 2)
         )
         downloader.downloadSequential(
-            url = server.url("/video.mp4").toString(),
+            url = server.loopbackUrl("/video.mp4").toString(),
             targetFile = file,
             validator = null,
             onProgress = { bytes, total -> progress.add(bytes to total) },
@@ -339,7 +344,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/download?filename=video_360.mp4&expires=renewed").toString(),
+                url = server.loopbackUrl("/download?filename=video_360.mp4&expires=renewed").toString(),
                 targetFile = file,
                 validator = null,
                 expectedTotalBytes = 7L,
@@ -369,7 +374,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
                 expectedTotalBytes = 7L,
@@ -398,7 +403,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
                 expectedTotalBytes = 7L,
@@ -434,7 +439,7 @@ class ResumableDownloaderTest {
 
             try {
                 downloader.downloadSequential(
-                    url = server.url("/video.mp4").toString(),
+                    url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
                     expectedTotalBytes = 7L,
@@ -460,7 +465,7 @@ class ResumableDownloaderTest {
 
             try {
                 downloader.downloadSequential(
-                    url = server.url("/video.mp4").toString(),
+                    url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
                     expectedTotalBytes = 7L,
@@ -485,7 +490,7 @@ class ResumableDownloaderTest {
             )
 
             downloader.downloadSequential(
-                url = server.url("/video.mp4").toString(),
+                url = server.loopbackUrl("/video.mp4").toString(),
                 targetFile = file,
                 validator = null,
                 expectedTotalBytes = 7L,
@@ -512,7 +517,7 @@ class ResumableDownloaderTest {
 
             try {
                 downloader.downloadSequential(
-                    url = server.url("/video.mp4").toString(),
+                    url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
                     expectedTotalBytes = 7L,
@@ -538,7 +543,7 @@ class ResumableDownloaderTest {
 
             try {
                 downloader.downloadSequential(
-                    url = server.url("/video.mp4").toString(),
+                    url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
                     expectedTotalBytes = 7L,
@@ -567,7 +572,7 @@ class ResumableDownloaderTest {
             )
             val downloading = launch {
                 downloader.downloadSequential(
-                    url = server.url("/download?filename=fixture.mp4&expires=old").toString(),
+                    url = server.loopbackUrl("/download?filename=fixture.mp4&expires=old").toString(),
                     targetFile = file,
                     validator = null,
                     onProgress = { bytes, total ->
@@ -601,7 +606,7 @@ class ResumableDownloaderTest {
             val newDownloader =
                 ResumableDownloader(OkHttpClient.Builder().build(), DownloadTransferSettings())
             newDownloader.downloadSequential(
-                url = server.url("/download?filename=fixture.mp4&expires=new").toString(),
+                url = server.loopbackUrl("/download?filename=fixture.mp4&expires=new").toString(),
                 targetFile = file,
                 validator = null,
                 expectedTotalBytes = savedTotalBytes,
@@ -630,7 +635,7 @@ class ResumableDownloaderTest {
         )
         var resolved: String? = "old"
         downloader.downloadSequential(
-            url = server.url("/video.mp4").toString(),
+            url = server.loopbackUrl("/video.mp4").toString(),
             targetFile = file,
             validator = "Tue, 13 Oct 2026 01:00:00 GMT",
             expectedTotalBytes = 7L,
@@ -661,7 +666,7 @@ class ResumableDownloaderTest {
 
             val job = launch {
                 downloader.downloadSequential(
-                    url = server.url("/video.mp4").toString(),
+                    url = server.loopbackUrl("/video.mp4").toString(),
                     targetFile = file,
                     validator = null,
                     onProgress = { readBytes, _ ->
@@ -691,7 +696,7 @@ class ResumableDownloaderTest {
         server.enqueue(MockResponse().setResponseCode(403))
         try {
             downloader.downloadSequential(
-                server.url("/expired.mp4").toString(),
+                server.loopbackUrl("/expired.mp4").toString(),
                 file,
                 null,
                 onProgress = { _, _ -> },
@@ -720,7 +725,7 @@ class ResumableDownloaderTest {
                 .setBody("NEWFILE")
         )
         downloader.downloadSequential(
-            server.url("/new.mp4").toString(),
+            server.loopbackUrl("/new.mp4").toString(),
             file,
             "\"old\"",
             onProgress = { _, _ -> },

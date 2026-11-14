@@ -384,84 +384,15 @@ internal class DownloadSourcePool(
     }
 
     /** 三个固定范围必须总量相同、节点校验器一致且正文完全消费。 */
-    private suspend fun samples(url: HttpUrl, expectedValidator: String?): Pair<String, String> {
-        var validator = expectedValidator
-        val digest = MessageDigest.getInstance("SHA-256")
-        for (range in DownloadCdnPolicy.sampleRanges(total)) {
-            val sampled = sample(url, range, validator)
-            validator = sampled.first
-            digest.update(range.first.toString().toByteArray(Charsets.UTF_8))
-            digest.update(sampled.second)
-        }
-        return validator!! to digest.digest().joinToString("") { "%02x".format(it) }
-    }
-
-    private suspend fun sample(
-        url: HttpUrl,
-        range: LongRange,
-        expectedValidator: String?,
-    ): Pair<String, ByteArray> = coroutineScope {
-        val request =
-            Request.Builder()
-                .url(url)
-                .header("Range", "bytes=${range.first}-${range.last}")
-                .header("Accept-Encoding", "identity")
-                .header("Referer", "https://www.iwara.tv/")
-                .apply { expectedValidator?.let { header("If-Range", it) } }
-                .build()
-        val call = probeClient.newCall(request)
-        val watcher =
-            launch(start = CoroutineStart.UNDISPATCHED) {
-                try {
-                    awaitCancellation()
-                } finally {
-                    call.cancel()
-                }
-            }
-        try {
-            onBind?.invoke(call)
-            call.await().use { response ->
-                if (response.code != 206) throw DownloadCdnHttpException(response.code)
-                val length = (range.last - range.first + 1).toInt()
-                val etag = response.header("ETag")?.trim()
-                if (
-                    response.header("Content-Range") !=
-                        "bytes ${range.first}-${range.last}/$total" ||
-                        !DownloadRangeStore.isStrongETag(etag) ||
-                        (expectedValidator != null && etag != expectedValidator) ||
-                        response.header("Content-Encoding", "identity")!!.lowercase() !=
-                            "identity" ||
-                        response.header("Content-Type").orEmpty().lowercase().let {
-                            it.contains("text/html") || it.contains("application/json")
-                        }
-                ) {
-                    throw DownloadCdnIntegrityException()
-                }
-                val body = response.body ?: throw DownloadCdnIntegrityException()
-                if (body.contentLength() != -1L && body.contentLength() != length.toLong())
-                    throw DownloadCdnIntegrityException()
-                val bytes = ByteArray(length)
-                withContext(Dispatchers.IO) {
-                    val input = body.byteStream()
-                    var read = 0
-                    while (read < bytes.size) {
-                        currentCoroutineContext().ensureActive()
-                        val count = input.read(bytes, read, bytes.size - read)
-                        if (count < 0) throw DownloadCdnIntegrityException()
-                        read += count
-                    }
-                    if (input.read() != -1) throw DownloadCdnIntegrityException()
-                }
-                etag!! to bytes
-            }
-        } catch (exception: IOException) {
-            currentCoroutineContext().ensureActive()
-            throw exception
-        } finally {
-            watcher.cancel()
-            onUnbind?.invoke(call)
-        }
-    }
+    private suspend fun samples(url: HttpUrl, expectedValidator: String?): Pair<String, String> =
+        sampleFingerprint(
+            client = probeClient,
+            url = url,
+            total = total,
+            expectedValidator = expectedValidator,
+            onBind = onBind,
+            onUnbind = onUnbind,
+        )
 
     private fun unavailableKey(host: String): String = "$network|$resourceKey|$host"
 
@@ -476,5 +407,97 @@ internal class DownloadSourcePool(
 
     companion object {
         private val unavailable = linkedMapOf<String, Long>()
+
+        /** 沿目标地址抽取三个固定区间并计算 SHA-256 身份指纹，供多 CDN 与单源跨主机校验复用。 */
+        internal suspend fun sampleFingerprint(
+            client: OkHttpClient,
+            url: HttpUrl,
+            total: Long,
+            expectedValidator: String?,
+            onBind: ((Call) -> Unit)? = null,
+            onUnbind: ((Call) -> Unit)? = null,
+        ): Pair<String, String> {
+            var validator = expectedValidator
+            val digest = MessageDigest.getInstance("SHA-256")
+            for (range in DownloadCdnPolicy.sampleRanges(total)) {
+                val sampled = sampleRange(client, url, total, range, validator, onBind, onUnbind)
+                validator = sampled.first
+                digest.update(range.first.toString().toByteArray(Charsets.UTF_8))
+                digest.update(sampled.second)
+            }
+            return validator!! to digest.digest().joinToString("") { "%02x".format(it) }
+        }
+
+        /** 读取单个固定样本区间并校验强 ETag 与内容完整性。 */
+        private suspend fun sampleRange(
+            client: OkHttpClient,
+            url: HttpUrl,
+            total: Long,
+            range: LongRange,
+            expectedValidator: String?,
+            onBind: ((Call) -> Unit)?,
+            onUnbind: ((Call) -> Unit)?,
+        ): Pair<String, ByteArray> = coroutineScope {
+            val request =
+                Request.Builder()
+                    .url(url)
+                    .header("Range", "bytes=${range.first}-${range.last}")
+                    .header("Accept-Encoding", "identity")
+                    .header("Referer", "https://www.iwara.tv/")
+                    .apply { expectedValidator?.let { header("If-Range", it) } }
+                    .build()
+            val call = client.newCall(request)
+            val watcher =
+                launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        call.cancel()
+                    }
+                }
+            try {
+                onBind?.invoke(call)
+                call.await().use { response ->
+                    if (response.code != 206) throw DownloadCdnHttpException(response.code)
+                    val length = (range.last - range.first + 1).toInt()
+                    val etag = response.header("ETag")?.trim()
+                    if (
+                        response.header("Content-Range") !=
+                            "bytes ${range.first}-${range.last}/$total" ||
+                            !DownloadRangeStore.isStrongETag(etag) ||
+                            (expectedValidator != null && etag != expectedValidator) ||
+                            response.header("Content-Encoding", "identity")!!.lowercase() !=
+                                "identity" ||
+                            response.header("Content-Type").orEmpty().lowercase().let {
+                                it.contains("text/html") || it.contains("application/json")
+                            }
+                    ) {
+                        throw DownloadCdnIntegrityException()
+                    }
+                    val body = response.body ?: throw DownloadCdnIntegrityException()
+                    if (body.contentLength() != -1L && body.contentLength() != length.toLong())
+                        throw DownloadCdnIntegrityException()
+                    val bytes = ByteArray(length)
+                    withContext(Dispatchers.IO) {
+                        val input = body.byteStream()
+                        var read = 0
+                        while (read < bytes.size) {
+                            currentCoroutineContext().ensureActive()
+                            val count = input.read(bytes, read, bytes.size - read)
+                            if (count < 0) throw DownloadCdnIntegrityException()
+                            read += count
+                        }
+                        if (input.read() != -1) throw DownloadCdnIntegrityException()
+                    }
+                    etag!! to bytes
+                }
+            } catch (exception: IOException) {
+                currentCoroutineContext().ensureActive()
+                throw exception
+            } finally {
+                watcher.cancel()
+                onUnbind?.invoke(call)
+            }
+        }
     }
 }

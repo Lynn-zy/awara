@@ -240,10 +240,7 @@ class DownloadVM(
                         withContext(Dispatchers.IO) {
                             val rawUri = item.uri.trim()
                             if (rawUri.isNotEmpty()) {
-                                val contentUri = Uri.parse(rawUri)
-                                if (downloadStorage.exists(contentUri)) {
-                                    downloadStorage.delete(contentUri)
-                                }
+                                downloadStorage.delete(Uri.parse(rawUri))
                             }
                             // 文件删除成功后，即便外部取消也必须保证清理 Room 记录及本地缩略图文件
                             withContext(NonCancellable) {
