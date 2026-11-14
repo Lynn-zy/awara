@@ -105,12 +105,147 @@ jobs:
           (cd dist && sha256sum "$(basename "$TARGET_APK")" > "$(basename "$TARGET_APK").sha256")
           cat "${TARGET_APK}.sha256"
 
+      - name: 生成 Release 更新说明（CHANGELOG.md 优先，Git Commits 兜底）
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import os
+          import re
+          import subprocess
+
+          version = os.environ["EXPECTED_VERSION"].strip()
+          tag_name = os.environ["TAG_NAME"].strip()
+          repo = os.environ.get("GITHUB_REPOSITORY", "Lynn-zy/awara").strip()
+          changelog_path = "CHANGELOG.md"
+          output_path = "dist/release-notes.md"
+
+
+          def run_git(args):
+              res = subprocess.run(
+                  ["git", *args],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+              )
+              return res.returncode, res.stdout.strip()
+
+
+          def extract_from_changelog(path, ver):
+              if not os.path.isfile(path):
+                  return ""
+              with open(path, "r", encoding="utf-8") as f:
+                  lines = f.read().splitlines()
+
+              heading_pattern = re.compile(rf"^##\s+\[?v?{re.escape(ver)}(?:\]|\s|$)")
+              stop_pattern = re.compile(r"^(?:##\s+|\[[^\]]+\]:\s+https?://)")
+
+              capturing = False
+              section_lines = []
+              for line in lines:
+                  if not capturing:
+                      if heading_pattern.match(line):
+                          capturing = True
+                      continue
+                  if stop_pattern.match(line):
+                      break
+                  section_lines.append(line)
+
+              return "\n".join(section_lines).strip()
+
+
+          def resolve_target_ref(tag):
+              code, _ = run_git(["rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}"])
+              return tag if code == 0 else "HEAD"
+
+
+          def resolve_previous_tag(target_ref):
+              code, prev = run_git(
+                  ["describe", "--tags", "--abbrev=0", "--match", "v*", f"{target_ref}~1"]
+              )
+              return prev if code == 0 and prev else None
+
+
+          def generate_from_git(target_ref, prev_tag):
+              rev_range = f"{prev_tag}..{target_ref}" if prev_tag else target_ref
+              log_args = ["log", "--no-merges", "--format=%h%x09%s", rev_range]
+              if not prev_tag:
+                  log_args.extend(["-n", "30"])
+              code, out = run_git(log_args)
+              if code != 0 or not out:
+                  return ""
+
+              feats = []
+              fixes = []
+              improves = []
+              all_entries = []
+              cc_pattern = re.compile(r"^([a-zA-Z]+)(?:\([^)]+\))?!?:\s*(.+)$")
+
+              for line in out.splitlines():
+                  if "\t" not in line:
+                      continue
+                  sha, subject = line.split("\t", 1)
+                  subject = subject.strip()
+                  if not subject:
+                      continue
+                  all_entries.append(f"- {subject} (`{sha}`)")
+                  match = cc_pattern.match(subject)
+                  if not match:
+                      continue
+                  commit_type = match.group(1).lower()
+                  desc = match.group(2).strip()
+                  bullet = f"- {desc} (`{sha}`)"
+                  if commit_type == "feat":
+                      feats.append(bullet)
+                  elif commit_type == "fix":
+                      fixes.append(bullet)
+                  elif commit_type in ("perf", "refactor"):
+                      improves.append(bullet)
+
+              sections = []
+              if feats:
+                  sections.append("### ✨ 新增功能\n\n" + "\n".join(feats))
+              if fixes:
+                  sections.append("### 🐛 问题修复\n\n" + "\n".join(fixes))
+              if improves:
+                  sections.append("### ⚡ 优化与重构\n\n" + "\n".join(improves))
+              if not sections and all_entries:
+                  sections.append("### 📝 变更记录\n\n" + "\n".join(all_entries))
+
+              return "\n\n".join(sections).strip()
+
+
+          target_ref = resolve_target_ref(tag_name)
+          prev_tag = resolve_previous_tag(target_ref)
+
+          body = extract_from_changelog(changelog_path, version)
+          if body:
+              print(f"已从 {changelog_path} 提取版本 {version} 的更新说明。")
+          else:
+              print(f"{changelog_path} 中未找到版本 {version} 章节，正在从 Git 提交记录自动生成更新说明...")
+              body = generate_from_git(target_ref, prev_tag)
+
+          if not body:
+              body = f"发布版本 {tag_name}。"
+
+          if prev_tag and "compare/" not in body and "**Full Changelog**" not in body:
+              body = f"{body}\n\n**Full Changelog**: https://github.com/{repo}/compare/{prev_tag}...{tag_name}"
+
+          os.makedirs(os.path.dirname(output_path), exist_ok=True)
+          with open(output_path, "w", encoding="utf-8", newline="\n") as f:
+              f.write(body + "\n")
+          EOF
+
       - name: 自动创建 GitHub Release 并上传安装包
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag_name }}
           name: Awara ${{ steps.meta.outputs.tag_name }}
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           files: |
             dist/*.apk
             dist/*.sha256

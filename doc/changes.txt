@@ -1,5 +1,0 @@
-1. 全屏按钮改为播放器右下角
-2. 修复部分界面无法获取数据的问题
-
-1. The full screen button is changed to the lower right corner of the player
-2. Fix the problem that some pages cannot obtain data
