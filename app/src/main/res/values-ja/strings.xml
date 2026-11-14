@@ -375,4 +375,9 @@
     <string name="comment_replies_count">%1$d 件の返信</string>
     <string name="comment_detail_title">コメント詳細</string>
     <string name="comments">コメント</string>
+    <string name="video_tab_overview">概要</string>
+    <string name="video_tab_comments">コメント</string>
+    <string name="dlna_select_device">デバイスを選択</string>
+    <string name="dlna_no_device_found">デバイスが見つかりません</string>
+    <string name="dlna_only_supported_note">注意：DLNA デバイスのみ対応しています</string>
 </resources>

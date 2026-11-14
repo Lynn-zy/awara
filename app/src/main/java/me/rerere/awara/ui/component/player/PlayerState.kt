@@ -30,7 +30,6 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import java.io.File
 import java.io.IOException
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,6 +42,7 @@ import me.rerere.awara.data.playback.PlaybackBufferSample
 import me.rerere.awara.data.playback.PlaybackCdnController
 import me.rerere.awara.data.playback.PlaybackReadAheadDataSource
 import me.rerere.awara.data.playback.PlaybackSettings
+import me.rerere.awara.data.playback.PlaybackSourceRefresher
 import me.rerere.awara.data.playback.PlayerCache
 import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.OkHttpClient
@@ -74,6 +74,7 @@ fun rememberPlayerState(
     val settings = remember { PlaybackSettings.read() }
     val refreshSource by rememberUpdatedState(refreshPlaybackSource)
     val scope = rememberCoroutineScope()
+    val sourceRefresher = remember { PlaybackSourceRefresher(refreshSource = { refreshSource(it) }) }
     val connectionTracker = remember { CdnConnectionTracker() }
     val httpFactory = remember {
         CdnTrackingDataSourceFactory(
@@ -102,7 +103,7 @@ fun rememberPlayerState(
                         client = client,
                         cacheFile = File(context.cacheDir, "playback-cdn-directory.json"),
                     ),
-                refreshSource = { refreshSource(it) },
+                sourceRefresher = sourceRefresher,
                 fallbackFactory = httpFactory,
                 connectionTracker = connectionTracker,
             )
@@ -141,9 +142,8 @@ fun rememberPlayerState(
                 initialPlaybackSpeed = initialSpeed,
                 onBufferDiscontinuity = { cdnController?.resetBufferDetection() },
                 connectionTracker = connectionTracker,
-                refreshPlaybackSource = { refreshSource(it) },
+                sourceRefresher = sourceRefresher,
                 coroutineScope = scope,
-                usesInternalSourceRefresh = cdnController != null,
             )
         )
     }
@@ -226,9 +226,8 @@ class PlayerState(
     },
     private val onBufferDiscontinuity: () -> Unit = {},
     private val connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
-    private val refreshPlaybackSource: (suspend (String) -> String?)? = null,
+    private val sourceRefresher: PlaybackSourceRefresher? = null,
     private val coroutineScope: CoroutineScope? = null,
-    private val usesInternalSourceRefresh: Boolean = false,
 ) {
     /** 只含当前媒体正文的主机与计数，不包含签名、候选探测或预览请求。 */
     val cdnConnections = connectionTracker.snapshot
@@ -262,7 +261,6 @@ class PlayerState(
     private var mediaSwitchEpoch = 0
     private var lastRequestedPositionMs = 0L
     private var refreshJob: Job? = null
-    private val autoRefreshedUrls = mutableSetOf<String>()
 
     val showLoading: Boolean
         get() =
@@ -320,7 +318,8 @@ class PlayerState(
                 if (playbackState == Player.STATE_READY) {
                     playbackError = null
                     duration = player.duration
-                    currentMediaItem = player.currentMediaItem
+                    // 仅在底层明确返回非空条目时同步，避免状态过渡或单测桩返回 null 时丢失同视频上下文
+                    player.currentMediaItem?.let { currentMediaItem = it }
                 }
             }
 
@@ -356,22 +355,20 @@ class PlayerState(
                 val failingItem = currentMediaItem ?: player.currentMediaItem
                 val failingUrl = failingItem?.localConfiguration?.uri?.toString()
                 val authCode = findHttpAuthFailureCode(error)
-                val shouldAutoRefresh =
-                    !usesInternalSourceRefresh &&
-                        authCode != null &&
+                if (
+                    authCode != null &&
+                        failingItem != null &&
                         failingUrl != null &&
-                        failingUrl.startsWith("http", ignoreCase = true) &&
-                        autoRefreshedUrls.add(failingUrl) &&
                         coroutineScope != null &&
-                        refreshPlaybackSource != null
-                if (shouldAutoRefresh && failingItem != null && failingUrl != null) {
-                    val activeItem = resolveMatchingPlayerItem(failingItem)
+                        sourceRefresher?.canAutoRefresh(failingUrl) == true
+                ) {
                     launchSourceRefresh(
-                        failingItem = activeItem,
-                        failingUrl = failingUrl,
-                        fallbackError = error,
+                        targetItem = resolveMatchingPlayerItem(failingItem),
+                        targetUrl = failingUrl,
                         resumePositionMs = resolveRetryPositionMs(),
                         targetPlayWhenReady = player.playWhenReady,
+                        forceRefresh = false,
+                        fallbackError = error,
                     )
                     return
                 }
@@ -382,13 +379,10 @@ class PlayerState(
     init {
         player.addListener(playbackListener)
         // 初次创建时应用常驻偏好并保留音调；临时加速和媒体切换不重新写入偏好。
-        try {
-            if (player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
-                player.playbackParameters =
-                    player.playbackParameters.withSpeed(currentPlaybackSpeed)
-            }
-        } catch (_: SecurityException) {} catch (_: IllegalArgumentException) {} catch (
-            _: UnsupportedOperationException) {}
+        if (player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+            player.playbackParameters =
+                player.playbackParameters.withSpeed(currentPlaybackSpeed)
+        }
     }
 
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
@@ -422,6 +416,7 @@ class PlayerState(
      * @param persistQualitySelection 是否将本次选中的清晰度持久化到偏好设置
      * @param preservePositionMs 显式指定切换后保留的播放位置；为 null 时同视频自动沿用当前位置、新视频从 0 开始
      * @param targetPlayWhenReady 显式指定切换后的播放意图；为 null 时沿用当前 `player.playWhenReady`
+     * @param syncControllerVisibility 切换完成后是否同步更新播控栏显隐状态
      */
     fun updatePlayerItems(
         items: List<PlayerItem>,
@@ -429,6 +424,7 @@ class PlayerState(
         persistQualitySelection: Boolean = false,
         preservePositionMs: Long? = null,
         targetPlayWhenReady: Boolean? = null,
+        syncControllerVisibility: Boolean = false,
     ) {
         cancelPendingRefresh()
         playbackError = null
@@ -503,64 +499,57 @@ class PlayerState(
             positionMs = resolvedPosition,
             targetPlayWhenReady = currentPlayWhenReady,
         )
-    }
-
-    /** 切换当前播放列表中指定清晰度的媒体源并写入用户偏好。 */
-    fun updateCurrentQuality(quality: String) {
-        if (playerItems.isEmpty()) return
-        val item = playerItems.firstOrNull { matchVideoQuality(it.quality, quality) } ?: return
-        cancelPendingRefresh()
-        playbackError = null
-        preferredQuality = item.quality
-        saveQualityPreference(item.quality)
-
-        // 切换清晰度保留当前进度与播控状态，不强制开始播放
-        val currentPosition = player.currentPosition.coerceAtLeast(0L)
-        val currentPlayWhenReady = player.playWhenReady
-        applyMediaItem(
-            item = item,
-            positionMs = currentPosition,
-            targetPlayWhenReady = currentPlayWhenReady,
-        )
-        if (hasStartedPlayback) {
+        if (syncControllerVisibility) {
             if (currentPlayWhenReady) {
                 controllerState.hide()
-            } else {
+            } else if (hasStartedPlayback) {
                 controllerState.show()
             }
         }
     }
 
+    /** 切换当前播放列表中指定清晰度的媒体源并写入用户偏好；重复选中当前已就绪清晰度时不重复重载。 */
+    fun updateCurrentQuality(quality: String) {
+        if (playerItems.isEmpty()) return
+        val matched = playerItems.firstOrNull { matchVideoQuality(it.quality, quality) } ?: return
+        val isDuplicateSelection =
+            matchVideoQuality(currentQuality, matched.quality) &&
+                currentMediaItem == matched.mediaItem &&
+                playbackError == null
+        if (isDuplicateSelection) {
+            return
+        }
+        updatePlayerItems(
+            items = playerItems,
+            targetQuality = matched.quality,
+            persistQualitySelection = true,
+            preservePositionMs = player.currentPosition.coerceAtLeast(0L),
+            targetPlayWhenReady = player.playWhenReady,
+            syncControllerVisibility = true,
+        )
+    }
+
     /**
-     * 更新播放倍速
+     * 更新播放倍速。
      *
-     * 验证目标倍速是否属于四档（0.5x, 1.0x, 1.5x, 2.0x）且播放器当前支持 COMMAND_SET_SPEED_AND_PITCH 命令。 应用成功后更新
-     * [currentPlaybackSpeed] 并调用 [savePlaybackSpeedPreference] 持久化； 若校验失败或底层抛出 SecurityException /
-     * IllegalArgumentException / UnsupportedOperationException， 则不持久化、不改变当前偏好并返回 false；严禁吞没协程取消异常。
+     * 验证目标倍速属于支持档位（0.5x, 1.0x, 1.5x, 2.0x）且播放器支持 `COMMAND_SET_SPEED_AND_PITCH`，
+     * 应用后更新 [currentPlaybackSpeed]、持久化偏好并收起播控栏；校验失败返回 false。
      *
      * @param speed 目标播放倍速
-     * @return true 表示成功更新并持久化，false 表示不支持或设置失败
+     * @return true 表示成功更新并持久化，false 表示不支持或档位非法
      */
     fun updatePlaybackSpeed(speed: Float): Boolean {
         if (!speed.isFinite() || speed !in PlayerPlaybackSpeeds) {
             return false
         }
-        return try {
-            if (!player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
-                return false
-            }
-            player.playbackParameters = player.playbackParameters.withSpeed(speed)
-            currentPlaybackSpeed = speed
-            savePlaybackSpeedPreference(speed)
-            controllerState.hide()
-            true
-        } catch (_: SecurityException) {
-            false
-        } catch (_: IllegalArgumentException) {
-            false
-        } catch (_: UnsupportedOperationException) {
-            false
+        if (!player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+            return false
         }
+        player.playbackParameters = player.playbackParameters.withSpeed(speed)
+        currentPlaybackSpeed = speed
+        savePlaybackSpeedPreference(speed)
+        controllerState.hide()
+        return true
     }
 
     internal fun markPlaybackStarted() {
@@ -584,7 +573,7 @@ class PlayerState(
         player.play()
     }
 
-    /** 重试当前失败的媒体源；若为线上链接且支持刷新回调，则先尝试刷新最新签名地址。 */
+    /** 重试当前失败的媒体源；若为鉴权失败的线上链接且支持刷新回调，则先尝试刷新最新签名地址。 */
     fun retry() {
         val lastError = playbackError
         cancelPendingRefresh()
@@ -604,42 +593,21 @@ class PlayerState(
             return
         }
         val activeUrl = activeItem.mediaItem.localConfiguration?.uri?.toString()
-        val shouldTryRefresh =
+        if (
             lastError?.isHttpAuthError == true &&
                 activeUrl != null &&
                 activeUrl.startsWith("http", ignoreCase = true) &&
                 coroutineScope != null &&
-                refreshPlaybackSource != null
-        if (shouldTryRefresh && activeUrl != null) {
-            val targetEpoch = ++mediaSwitchEpoch
-            isRefreshingSource = true
-            refreshJob =
-                coroutineScope!!.launch {
-                    val refreshedUrl =
-                        try {
-                            refreshPlaybackSource!!(activeUrl)
-                        } catch (error: CancellationException) {
-                            throw error
-                        } catch (_: Exception) {
-                            null
-                        } finally {
-                            if (targetEpoch == mediaSwitchEpoch) {
-                                isRefreshingSource = false
-                            }
-                        }
-                    if (targetEpoch != mediaSwitchEpoch) return@launch
-                    val nextItem =
-                        if (!refreshedUrl.isNullOrBlank()) {
-                            updateItemUri(activeItem, refreshedUrl)
-                        } else {
-                            activeItem
-                        }
-                    applyMediaItem(
-                        item = nextItem,
-                        positionMs = resumePos,
-                        targetPlayWhenReady = true,
-                    )
-                }
+                sourceRefresher?.canRefresh == true
+        ) {
+            launchSourceRefresh(
+                targetItem = activeItem,
+                targetUrl = activeUrl,
+                resumePositionMs = resumePos,
+                targetPlayWhenReady = true,
+                forceRefresh = true,
+                fallbackError = null,
+            )
         } else {
             applyMediaItem(
                 item = activeItem,
@@ -675,26 +643,29 @@ class PlayerState(
         player.prepare()
     }
 
-    /** 在 HTTP 401/403/410 鉴权失败后异步刷新一次签名地址并继续当前位置播放。 */
+    /** 统一处理自动 401/403 刷新与手动重试刷新的协程生命周期及代次防竞态切换。 */
     private fun launchSourceRefresh(
-        failingItem: PlayerItem,
-        failingUrl: String,
-        fallbackError: PlaybackException,
+        targetItem: PlayerItem,
+        targetUrl: String,
         resumePositionMs: Long,
         targetPlayWhenReady: Boolean,
+        forceRefresh: Boolean,
+        fallbackError: PlaybackException?,
     ) {
+        val scope = coroutineScope ?: return
+        val refresher = sourceRefresher ?: return
         cancelPendingRefresh()
         val targetEpoch = ++mediaSwitchEpoch
         isRefreshingSource = true
         refreshJob =
-            coroutineScope!!.launch {
+            scope.launch {
                 val refreshedUrl =
                     try {
-                        refreshPlaybackSource!!(failingUrl)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (_: Exception) {
-                        null
+                        if (forceRefresh) {
+                            refresher.refreshManual(targetUrl)
+                        } else {
+                            refresher.refreshAutoOnce(targetUrl)
+                        }
                     } finally {
                         if (targetEpoch == mediaSwitchEpoch) {
                             isRefreshingSource = false
@@ -702,14 +673,20 @@ class PlayerState(
                     }
                 if (targetEpoch != mediaSwitchEpoch) return@launch
                 if (!refreshedUrl.isNullOrBlank()) {
-                    val refreshedItem = updateItemUri(failingItem, refreshedUrl)
+                    val nextItem = updateItemUri(targetItem, refreshedUrl)
                     applyMediaItem(
-                        item = refreshedItem,
+                        item = nextItem,
                         positionMs = resumePositionMs,
                         targetPlayWhenReady = targetPlayWhenReady,
                     )
-                } else {
+                } else if (fallbackError != null) {
                     recordPlaybackError(error = fallbackError, isHttpAuthError = true)
+                } else {
+                    applyMediaItem(
+                        item = targetItem,
+                        positionMs = resumePositionMs,
+                        targetPlayWhenReady = targetPlayWhenReady,
+                    )
                 }
             }
     }
@@ -769,7 +746,7 @@ class PlayerState(
         return if (livePosition > 0L) livePosition else lastRequestedPositionMs.coerceAtLeast(0L)
     }
 
-    /** 替换清晰度条目中的媒体 URI，并同步更新当前清晰度列表。 */
+    /** 替换清晰度条目中的媒体 URI，仅按对象身份或原 URI 精确匹配以避免清晰度近义误改。 */
     private fun updateItemUri(item: PlayerItem, newUrl: String): PlayerItem {
         val updatedMediaItem = item.mediaItem.buildUpon().setUri(Uri.parse(newUrl)).build()
         val updatedItem = item.copy(mediaItem = updatedMediaItem)
@@ -778,8 +755,7 @@ class PlayerState(
             playerItems.map { existing ->
                 val matches =
                     existing.mediaItem === item.mediaItem ||
-                        (oldUri != null && existing.mediaItem.localConfiguration?.uri == oldUri) ||
-                        matchVideoQuality(existing.quality, item.quality)
+                        (oldUri != null && existing.mediaItem.localConfiguration?.uri == oldUri)
                 if (matches) existing.copy(mediaItem = updatedMediaItem) else existing
             }
         return updatedItem

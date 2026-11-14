@@ -20,8 +20,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BetterTabBar
 import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.ui.page.video.pager.VideoCommentPage
@@ -71,7 +73,7 @@ fun VideoPagePhoneLayout(
                     Tab(
                         selected = pagerState.currentPage == 0,
                         onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
-                        text = { Text("简介") },
+                        text = { Text(stringResource(R.string.video_tab_overview)) },
                     )
 
                     Tab(
@@ -82,9 +84,9 @@ fun VideoPagePhoneLayout(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                Text("评论")
+                                Text(stringResource(R.string.video_tab_comments))
                                 Text(
-                                    text = "${vm.state.video?.numComments ?: 0}",
+                                    text = "${vm.state.details.displayVideo?.numComments ?: 0}",
                                     style = MaterialTheme.typography.labelMedium,
                                 )
                             }
@@ -96,7 +98,7 @@ fun VideoPagePhoneLayout(
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when (it) {
                         0 -> VideoOverviewPage(vm)
-                        1 -> VideoCommentPage(vm)
+                        1 -> VideoCommentPage(vm, canExpandPlayer = collapseState.canExpand)
                     }
                 }
             }

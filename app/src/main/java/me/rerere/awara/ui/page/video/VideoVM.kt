@@ -119,26 +119,29 @@ class VideoVM(
     private fun writeHistory() {
         viewModelScope.launch {
             try {
-                val title = state.video?.title ?: state.localDownload?.title ?: ""
-                val thumbnail = state.video?.thumbnailUrl() ?: state.localDownload?.thumbnail ?: ""
+                val details = state.details
+                val video = details.displayVideo
+                val localDownload = details.localDownload
+                val title = video?.title ?: localDownload?.title ?: ""
+                val thumbnail = video?.thumbnailUrl() ?: localDownload?.thumbnail ?: ""
                 val authorId =
-                    state.video?.user?.username
-                        ?: state.video?.user?.id
-                        ?: state.localDownload?.authorId
+                    video?.user?.username
+                        ?: video?.user?.id
+                        ?: localDownload?.authorId
                         ?: ""
-                val authorName = state.video?.user?.name ?: state.localDownload?.authorName ?: ""
+                val authorName = video?.user?.name ?: localDownload?.authorName ?: ""
                 val authorAvatar =
-                    (state.video?.user?.avatar).toAvatarUrl().takeIf {
-                        state.video?.user?.avatar != null
-                    } ?: state.localDownload?.authorAvatar ?: ""
+                    (video?.user?.avatar).toAvatarUrl().takeIf {
+                        video?.user?.avatar != null
+                    } ?: localDownload?.authorAvatar ?: ""
                 val publishedAt =
-                    state.video?.createdAt?.epochSecond
-                        ?: state.localDownload?.publishedAtEpochSeconds
+                    video?.createdAt?.epochSecond
+                        ?: localDownload?.publishedAtEpochSeconds
                         ?: 0L
                 val durationSeconds =
-                    state.video?.duration
-                        ?: state.video?.file?.duration
-                        ?: (state.localDownload?.durationMs?.div(1000L)?.toInt() ?: 0)
+                    video?.duration
+                        ?: video?.file?.duration
+                        ?: (localDownload?.durationMs?.div(1000L)?.toInt() ?: 0)
                 appDatabase
                     .historyDao()
                     .insertHistory(
@@ -166,11 +169,12 @@ class VideoVM(
         }
     }
 
+    /** 加载视频本地/在线播放决策与远端元数据，并直接映射到密封的 [VideoDetailsState]。 */
     fun getVideo() {
-        if (state.loading) return
-        state =
-            state.copy(loading = true, private = false, sourceError = null, isOnlineRemoved = false)
+        if (state.details.isLoading) return
+        state = state.copy(details = VideoDetailsState.Loading())
         viewModelScope.launch {
+            var unavailableLocal = false
             try {
                 // 本地判定优先，不等网络请求
                 val decision = coordinator.resolvePlaybackDecision(id)
@@ -178,96 +182,136 @@ class VideoVM(
                     is PlaybackDecision.Local -> {
                         state =
                             state.copy(
-                                localDownload = decision.item,
-                                video = null,
-                                urls = emptyList(),
-                                isLocalPlayback = true,
-                                localFileUnavailable = false,
+                                details =
+                                    VideoDetailsState.Local(
+                                        item = decision.item,
+                                        playingLocal = true,
+                                        metadata = VideoDetailsState.Local.Metadata.Loading,
+                                    )
                             )
                     }
                     is PlaybackDecision.MissingLocal -> {
+                        unavailableLocal = true
                         state =
                             state.copy(
-                                localDownload = null,
-                                isLocalPlayback = false,
-                                localFileUnavailable = true,
+                                details = VideoDetailsState.Loading(localFileUnavailable = true)
                             )
                     }
                     PlaybackDecision.Online -> {
                         state =
                             state.copy(
-                                localDownload = null,
-                                isLocalPlayback = false,
-                                localFileUnavailable = false,
+                                details = VideoDetailsState.Loading(localFileUnavailable = false)
                             )
                     }
                 }
 
                 val detailsResult = coordinator.loadDetails(id, decision)
-                when (detailsResult) {
-                    is PlaybackDetailsResult.OnlineSuccess -> {
-                        state =
-                            state.copy(
-                                video = detailsResult.video,
-                                urls = detailsResult.urls,
-                                isLocalPlayback = false,
-                                isLocalFallback = false,
-                                sourceError = null,
-                                isOnlineRemoved = false,
-                            )
-                        loadUserMoreVideos()
-                        writeHistory()
-                    }
-                    is PlaybackDetailsResult.LocalOnlineSuccess -> {
-                        state =
-                            state.copy(
-                                video = detailsResult.video,
-                                urls = emptyList(),
-                                isLocalPlayback = true,
-                                isLocalFallback = false,
-                                sourceError = null,
-                                isOnlineRemoved = false,
-                            )
-                        loadUserMoreVideos()
-                        writeHistory()
-                    }
-                    is PlaybackDetailsResult.LocalFallback -> {
-                        state =
-                            state.copy(
-                                video = null,
-                                urls = emptyList(),
-                                isLocalPlayback = true,
-                                isLocalFallback = true,
-                                isOnlineRemoved = detailsResult.isOnlineRemoved,
-                                sourceError = detailsResult.errorReason,
-                            )
-                        writeHistory()
-                    }
-                    is PlaybackDetailsResult.OnlineFailure -> {
-                        state =
-                            state.copy(
-                                video = detailsResult.partialVideo,
-                                urls = emptyList(),
-                                isLocalPlayback = false,
-                                isLocalFallback = false,
-                                private = detailsResult.isPrivate,
-                                privateUser = detailsResult.privateUser,
-                                isOnlineRemoved = detailsResult.isOnlineRemoved,
-                                sourceError = detailsResult.errorReason,
-                            )
-                    }
-                }
+                applyPlaybackDetailsResult(detailsResult, unavailableLocal)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 Log.w(TAG, "getVideo: $e")
-                state = state.copy(sourceError = e.message ?: e.javaClass.simpleName)
-            } finally {
-                state = state.copy(loading = false)
+                val reason = e.message ?: e.javaClass.simpleName
+                val current = state.details
+                val errorDetails =
+                    if (current is VideoDetailsState.Local) {
+                        current.copy(
+                            metadata =
+                                VideoDetailsState.Local.Metadata.OfflineFallback(
+                                    isOnlineRemoved = false,
+                                    errorReason = reason,
+                                )
+                        )
+                    } else {
+                        VideoDetailsState.Online.Failed(
+                            localFileUnavailable = unavailableLocal,
+                            isOnlineRemoved = false,
+                            errorReason = reason,
+                        )
+                    }
+                state = state.copy(details = errorDetails)
             }
         }
 
         loadRelatedVideos()
+    }
+
+    private fun applyPlaybackDetailsResult(
+        detailsResult: PlaybackDetailsResult,
+        localFileUnavailable: Boolean,
+    ) {
+        when (detailsResult) {
+            is PlaybackDetailsResult.OnlineSuccess -> {
+                state =
+                    state.copy(
+                        details =
+                            VideoDetailsState.Online.Loaded(
+                                localFileUnavailable = localFileUnavailable,
+                                video = detailsResult.video,
+                                onlineUrlsState = OnlineUrlsState.Loaded(detailsResult.urls),
+                            )
+                    )
+                loadUserMoreVideos()
+                writeHistory()
+            }
+            is PlaybackDetailsResult.LocalOnlineSuccess -> {
+                val localDetails = state.details as? VideoDetailsState.Local ?: return
+                state =
+                    state.copy(
+                        details =
+                            localDetails.copy(
+                                metadata =
+                                    VideoDetailsState.Local.Metadata.OnlineReady(
+                                        video = detailsResult.video,
+                                        urlsState = OnlineUrlsState.Idle,
+                                    )
+                            )
+                    )
+                loadUserMoreVideos()
+                writeHistory()
+            }
+            is PlaybackDetailsResult.LocalFallback -> {
+                val playingLocal = (state.details as? VideoDetailsState.Local)?.playingLocal ?: true
+                state =
+                    state.copy(
+                        details =
+                            VideoDetailsState.Local(
+                                item = detailsResult.item,
+                                playingLocal = playingLocal,
+                                metadata =
+                                    VideoDetailsState.Local.Metadata.OfflineFallback(
+                                        isOnlineRemoved = detailsResult.isOnlineRemoved,
+                                        errorReason = detailsResult.errorReason,
+                                    ),
+                            )
+                    )
+                writeHistory()
+            }
+            is PlaybackDetailsResult.OnlineFailure -> {
+                val failedState =
+                    when {
+                        detailsResult.isPrivate ->
+                            VideoDetailsState.Online.Private(
+                                localFileUnavailable = localFileUnavailable,
+                                privateUser = detailsResult.privateUser,
+                                errorReason = detailsResult.errorReason,
+                            )
+                        detailsResult.partialVideo != null ->
+                            VideoDetailsState.Online.PartialSourceError(
+                                localFileUnavailable = localFileUnavailable,
+                                video = detailsResult.partialVideo,
+                                errorReason = detailsResult.errorReason,
+                            )
+                        else ->
+                            VideoDetailsState.Online.Failed(
+                                localFileUnavailable = localFileUnavailable,
+                                isOnlineRemoved = detailsResult.isOnlineRemoved,
+                                errorReason = detailsResult.errorReason,
+                            )
+                    }
+                state = state.copy(details = failedState)
+            }
+        }
     }
 
     // 独立拉取相关视频推荐
@@ -286,19 +330,12 @@ class VideoVM(
         }
     }
 
+    /** 加载作者更多视频；仅在线完整详情可用时发起请求。 */
     fun loadUserMoreVideos() {
         userMoreVideosJob?.cancel()
-        if (state.isLocalFallback || state.video == null) {
-            state =
-                state.copy(
-                    userMoreVideos = emptyList(),
-                    userMoreVideosLoading = false,
-                    userMoreVideosError = null,
-                )
-            return
-        }
+        val video = state.details.interactiveVideo
         val userId =
-            state.video?.user?.takeIf { it.deletedAt == null }?.id?.takeIf { it.isNotBlank() }
+            video?.user?.takeIf { it.deletedAt == null }?.id?.takeIf { it.isNotBlank() }
         if (userId == null) {
             state =
                 state.copy(
@@ -318,7 +355,7 @@ class VideoVM(
                             )
                         }
                         .onSuccess { pager ->
-                            if (state.video?.user?.id == userId) {
+                            if (state.details.interactiveVideo?.user?.id == userId) {
                                 state =
                                     state.copy(
                                         userMoreVideos =
@@ -329,7 +366,7 @@ class VideoVM(
                         }
                         .onError { error ->
                             Log.w(TAG, "loadUserMoreVideos: $error")
-                            if (state.video?.user?.id == userId) {
+                            if (state.details.interactiveVideo?.user?.id == userId) {
                                 state = state.copy(userMoreVideosError = error.message)
                             }
                         }
@@ -338,7 +375,7 @@ class VideoVM(
                                 throw exception.exception
                             }
                             Log.w(TAG, "loadUserMoreVideos: ${exception.exception}")
-                            if (state.video?.user?.id == userId) {
+                            if (state.details.interactiveVideo?.user?.id == userId) {
                                 state =
                                     state.copy(
                                         userMoreVideosError =
@@ -382,20 +419,24 @@ class VideoVM(
         }
     }
 
+    /** 点赞或取消点赞；依赖当前激活态存在可交互在线详情。 */
     fun likeOrUnlike() {
-        if (state.isLocalFallback || state.video == null) return
+        val targetVideo = state.details.interactiveVideo ?: return
         viewModelScope.launch {
             state = state.copy(likeLoading = true)
             runAPICatching {
-                    val video = state.video ?: return@runAPICatching
+                    if (targetVideo.liked) {
+                        mediaRepo.unlikeVideo(targetVideo.id)
+                    } else {
+                        mediaRepo.likeVideo(targetVideo.id)
+                    }
                     state =
-                        if (video.liked) {
-                            mediaRepo.unlikeVideo(video.id)
-                            state.copy(video = video.copy(liked = false))
-                        } else {
-                            mediaRepo.likeVideo(video.id)
-                            state.copy(video = video.copy(liked = true))
-                        }
+                        state.copy(
+                            details =
+                                state.details.withUpdatedVideo { current ->
+                                    current.copy(liked = !targetVideo.liked)
+                                }
+                        )
                 }
                 .onError { Log.w(TAG, "likeOrUnlike(error): $it") }
                 .onException {
@@ -406,19 +447,15 @@ class VideoVM(
         }
     }
 
+    /** 关注或取消关注视频作者。 */
     fun followOrUnfollow() {
-        if (
-            state.isLocalFallback ||
-                state.video?.user == null ||
-                state.video?.user?.deletedAt != null
-        )
-            return
+        val author = state.details.interactiveVideo?.user?.takeIf { it.deletedAt == null } ?: return
         viewModelScope.launch {
             runAPICatching {
-                    if (state.video?.user?.following == true) {
-                        userRepo.unfollowUser(state.video?.user?.id ?: return@runAPICatching)
+                    if (author.following) {
+                        userRepo.unfollowUser(author.id)
                     } else {
-                        userRepo.followUser(state.video?.user?.id ?: return@runAPICatching)
+                        userRepo.followUser(author.id)
                     }
                 }
                 .onSuccess { getVideo() }
@@ -433,14 +470,9 @@ class VideoVM(
 
     /** 加载当前评论层；手势刷新等待真实结果，失败时保留旧数据和浏览位置。 */
     fun loadComments(refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (
-            refresh &&
-                (state.commentState.loading ||
-                    state.isLocalFallback ||
-                    state.isOnlineRemoved ||
-                    state.video == null)
-        )
+        if (refresh && (state.commentState.loading || state.details.interactiveVideo == null)) {
             return null
+        }
         commentLoadJob?.cancel()
         state = state.copy(commentState = state.commentState.copy(loading = true))
         val currentCommentState = state.commentState.stack.last()
@@ -522,7 +554,7 @@ class VideoVM(
      * @return 是否发表成功
      */
     suspend fun postComment(it: CommentCreationDto): Boolean {
-        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return false
+        state.details.interactiveVideo ?: return false
         var success = false
         runAPICatching { commentRepo.postVideoComment(id, it.body, it.parentId) }
             .onSuccess {
@@ -552,7 +584,7 @@ class VideoVM(
      * @return 是否修改成功
      */
     suspend fun editComment(commentId: String, content: String): Boolean {
-        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return false
+        state.details.interactiveVideo ?: return false
         var success = false
         runAPICatching { commentRepo.updateComment(commentId, content) }
             .onSuccess {
@@ -579,7 +611,7 @@ class VideoVM(
      * @return 是否删除成功
      */
     suspend fun deleteComment(commentId: String): Boolean {
-        if (state.isLocalFallback || state.video == null || state.isOnlineRemoved) return false
+        state.details.interactiveVideo ?: return false
         var success = false
         runAPICatching { commentRepo.deleteComment(commentId) }
             .onSuccess {
@@ -606,7 +638,7 @@ class VideoVM(
     }
 
     fun addVideoToPlaylist(playlistId: String) {
-        if (state.isLocalFallback || state.video == null) return
+        state.details.interactiveVideo ?: return
         viewModelScope.launch {
             state = state.copy(playlistLoading = true)
             runAPICatching {
@@ -624,7 +656,7 @@ class VideoVM(
     }
 
     fun removeVideoFromPlaylist(playlistId: String) {
-        if (state.isLocalFallback || state.video == null) return
+        state.details.interactiveVideo ?: return
         viewModelScope.launch {
             state = state.copy(playlistLoading = true)
             runAPICatching {
@@ -644,19 +676,31 @@ class VideoVM(
     /** 传输层鉴权失败时只刷新相同文件和画质，不更新 urls 以免重建媒体、丢失已有缓冲。 */
     internal suspend fun refreshPlaybackSource(oldUrl: String): String? =
         withContext(Dispatchers.Main.immediate) {
-            if (state.isLocalPlayback || state.onlineUrlsLoading)
+            val details = state.details
+            if (details.isLocalPlayback || details.onlineUrlsState.isLoading) {
                 return@withContext null
+            }
+            val currentUrls = details.urls
             val resourceKey = playbackResourceKey(oldUrl)
             val previous =
-                state.urls.playableVideoFiles().firstOrNull {
+                currentUrls.playableVideoFiles().firstOrNull {
                     playbackResourceKey(it.src.view.fixUrl()) == resourceKey
                 } ?: return@withContext null
-            state = state.copy(onlineUrlsLoading = true, onlineUrlsError = null)
+            state =
+                state.copy(
+                    details = details.withUrlsState(OnlineUrlsState.Loading(urls = currentUrls))
+                )
             try {
                 val refreshedVideo = mediaRepo.getVideo(id)
                 val refreshed = mediaRepo.parseVideoUrl(refreshedVideo).playableVideoFiles()
-                if (state.isLocalPlayback) return@withContext null
-                state = state.copy(video = refreshedVideo)
+                if (state.details.isLocalPlayback) return@withContext null
+                state =
+                    state.copy(
+                        details =
+                            state.details
+                                .withUpdatedVideo { refreshedVideo }
+                                .withUrlsState(OnlineUrlsState.Loaded(currentUrls))
+                    )
                 refreshed
                     .firstOrNull {
                         it.qualityKey == previous.qualityKey &&
@@ -669,24 +713,50 @@ class VideoVM(
                 throw exception
             } catch (exception: Exception) {
                 state =
-                    state.copy(onlineUrlsError = VideoPlaybackCoordinator.sanitizeReason(exception))
+                    state.copy(
+                        details =
+                            state.details.withUrlsState(
+                                OnlineUrlsState.Failed(
+                                    reason = VideoPlaybackCoordinator.sanitizeReason(exception),
+                                    urls = currentUrls,
+                                )
+                            )
+                    )
                 null
             } finally {
-                state = state.copy(onlineUrlsLoading = false)
+                val latestDetails = state.details
+                if (latestDetails.onlineUrlsState is OnlineUrlsState.Loading) {
+                    state =
+                        state.copy(
+                            details =
+                                latestDetails.withUrlsState(
+                                    if (currentUrls.isNotEmpty()) {
+                                        OnlineUrlsState.Loaded(currentUrls)
+                                    } else {
+                                        OnlineUrlsState.Idle
+                                    }
+                                )
+                        )
+                }
             }
         }
 
     /** 按需拉取在线清晰度地址；若当前缓存的视频 `fileUrl` 已失效或为空，则先刷新视频详情再重试解析。 */
     fun requestOnlineUrls(onSuccess: (() -> Unit)? = null) {
-        if (state.onlineUrlsLoading) return
-        if (state.urls.isNotEmpty()) {
+        val currentDetails = state.details
+        if (currentDetails.onlineUrlsState.isLoading) return
+        if (currentDetails.urls.isNotEmpty()) {
             onSuccess?.invoke()
             return
         }
         viewModelScope.launch {
-            state = state.copy(onlineUrlsLoading = true, onlineUrlsError = null)
+            val cachedUrls = currentDetails.urls
+            state =
+                state.copy(
+                    details = currentDetails.withUrlsState(OnlineUrlsState.Loading(cachedUrls))
+                )
             try {
-                val currentVideo = state.video
+                val currentVideo = state.details.displayVideo
                 val result =
                     if (currentVideo != null && !currentVideo.fileUrl.isNullOrBlank()) {
                         val firstAttempt = runAPICatching { mediaRepo.parseVideoUrl(currentVideo) }
@@ -706,25 +776,58 @@ class VideoVM(
                     }
                 result
                     .onSuccess { urls ->
-                        state = state.copy(urls = urls, onlineUrlsError = null, sourceError = null)
+                        state =
+                            state.copy(
+                                details = state.details.withUrlsState(OnlineUrlsState.Loaded(urls))
+                            )
                         onSuccess?.invoke()
                     }
                     .onError { error ->
                         Log.w(TAG, "requestOnlineUrls: $error")
-                        state = state.copy(onlineUrlsError = error.message)
+                        state =
+                            state.copy(
+                                details =
+                                    state.details.withUrlsState(
+                                        OnlineUrlsState.Failed(
+                                            reason = error.message,
+                                            urls = cachedUrls,
+                                        )
+                                    )
+                            )
                     }
                     .onException { exception ->
                         if (exception.exception is CancellationException) throw exception.exception
                         Log.w(TAG, "requestOnlineUrls: ${exception.exception}")
                         state =
                             state.copy(
-                                onlineUrlsError =
-                                    VideoPlaybackCoordinator.sanitizeReason(exception.exception)
+                                details =
+                                    state.details.withUrlsState(
+                                        OnlineUrlsState.Failed(
+                                            reason =
+                                                VideoPlaybackCoordinator.sanitizeReason(
+                                                    exception.exception
+                                                ),
+                                            urls = cachedUrls,
+                                        )
+                                    )
                             )
                     }
             } finally {
                 if (isActive) {
-                    state = state.copy(onlineUrlsLoading = false)
+                    val latest = state.details
+                    if (latest.onlineUrlsState is OnlineUrlsState.Loading) {
+                        state =
+                            state.copy(
+                                details =
+                                    latest.withUrlsState(
+                                        if (cachedUrls.isNotEmpty()) {
+                                            OnlineUrlsState.Loaded(cachedUrls)
+                                        } else {
+                                            OnlineUrlsState.Idle
+                                        }
+                                    )
+                            )
+                    }
                 }
             }
         }
@@ -734,27 +837,198 @@ class VideoVM(
     private suspend fun fetchVideoAndParseUrls() =
         runAPICatching {
             val latestVideo = mediaRepo.getVideo(id)
-            state = state.copy(video = latestVideo)
+            state = state.copy(details = state.details.withUpdatedVideo { latestVideo })
             mediaRepo.parseVideoUrl(latestVideo)
         }
 
+    /** 在存在本地下载记录时切换到在线播放模式。 */
     fun selectOnlinePlayback() {
-        if (!state.isLocalPlayback) return
-        state = state.copy(isLocalPlayback = false)
+        val localDetails = state.details as? VideoDetailsState.Local ?: return
+        if (!localDetails.playingLocal) return
+        state = state.copy(details = localDetails.copy(playingLocal = false))
     }
 
+    /** 在存在本地下载记录时切回本地文件播放模式。 */
     fun selectLocalPlayback() {
-        if (state.localDownload == null || state.isLocalPlayback) return
-        state = state.copy(isLocalPlayback = true)
+        val localDetails = state.details as? VideoDetailsState.Local ?: return
+        if (localDetails.playingLocal) return
+        state = state.copy(details = localDetails.copy(playingLocal = true))
+    }
+
+    /** 在线清晰度地址解析或刷新状态。 */
+    sealed interface OnlineUrlsState {
+        val urls: List<VideoFile>
+
+        val isLoading: Boolean
+            get() = this is Loading
+
+        val errorOrNull: String?
+            get() = (this as? Failed)?.reason
+
+        data object Idle : OnlineUrlsState {
+            override val urls: List<VideoFile> = emptyList()
+        }
+
+        data class Loading(override val urls: List<VideoFile> = emptyList()) : OnlineUrlsState
+
+        data class Loaded(override val urls: List<VideoFile>) : OnlineUrlsState
+
+        data class Failed(
+            val reason: String?,
+            override val urls: List<VideoFile> = emptyList(),
+        ) : OnlineUrlsState
+    }
+
+    /** 视频详情与本地/在线播放决策的统一密封状态模型。 */
+    sealed interface VideoDetailsState {
+        /** 是否仍处于页面主加载流程中。 */
+        val isLoading: Boolean
+            get() = false
+
+        /** 仅当远端视频元数据完整且非离线回退/删除/私密态时返回非空视频实体，供交互动作与评论写操作判定。 */
+        val interactiveVideo: Video?
+            get() = null
+
+        /** 用于页面标题、封面与尺寸展示的视频元数据。 */
+        val displayVideo: Video?
+            get() = interactiveVideo
+
+        /** 若本地已下载且文件可访问则返回本地下载记录。 */
+        val localDownload: DownloadItem?
+            get() = null
+
+        /** 当前播放器是否激活本地离线文件路径。 */
+        val isLocalPlayback: Boolean
+            get() = false
+
+        /** 本地下载记录存在但物理文件不可访问时的提示标记。 */
+        val localFileUnavailable: Boolean
+            get() = false
+
+        /** 在线清晰度解析状态。 */
+        val onlineUrlsState: OnlineUrlsState
+            get() = OnlineUrlsState.Idle
+
+        /** 当前可用的在线视频清晰度文件列表。 */
+        val urls: List<VideoFile>
+            get() = onlineUrlsState.urls
+
+        /** 返回应用了视频实体变换后的最新状态副本。 */
+        fun withUpdatedVideo(transform: (Video) -> Video): VideoDetailsState =
+            when (this) {
+                is Local ->
+                    when (metadata) {
+                        is Local.Metadata.OnlineReady ->
+                            copy(metadata = metadata.copy(video = transform(metadata.video)))
+                        else -> this
+                    }
+                is Online.Loaded -> copy(video = transform(video))
+                is Online.PartialSourceError -> copy(video = transform(video))
+                else -> this
+            }
+
+        /** 返回应用了最新在线清晰度解析状态后的状态副本；若成功加载且原处于源地址错误态则自动收敛为已就绪。 */
+        fun withUrlsState(newUrlsState: OnlineUrlsState): VideoDetailsState =
+            when (this) {
+                is Local ->
+                    when (metadata) {
+                        is Local.Metadata.OnlineReady ->
+                            copy(metadata = metadata.copy(urlsState = newUrlsState))
+                        else -> this
+                    }
+                is Online.Loaded -> copy(onlineUrlsState = newUrlsState)
+                is Online.PartialSourceError ->
+                    if (newUrlsState is OnlineUrlsState.Loaded) {
+                        Online.Loaded(
+                            localFileUnavailable = localFileUnavailable,
+                            video = video,
+                            onlineUrlsState = newUrlsState,
+                        )
+                    } else {
+                        copy(onlineUrlsState = newUrlsState)
+                    }
+                else -> this
+            }
+
+        data object Idle : VideoDetailsState
+
+        data class Loading(override val localFileUnavailable: Boolean = false) : VideoDetailsState {
+            override val isLoading: Boolean = true
+        }
+
+        /** 本地已下载文件可播放时的组合态（起播后按远端详情结果收敛为在线联动或离线回退）。 */
+        data class Local(
+            val item: DownloadItem,
+            val playingLocal: Boolean = true,
+            val metadata: Metadata = Metadata.Loading,
+        ) : VideoDetailsState {
+            override val isLoading: Boolean
+                get() = metadata is Metadata.Loading
+
+            override val localDownload: DownloadItem
+                get() = item
+
+            override val isLocalPlayback: Boolean
+                get() = playingLocal
+
+            override val interactiveVideo: Video?
+                get() = (metadata as? Metadata.OnlineReady)?.video
+
+            override val onlineUrlsState: OnlineUrlsState
+                get() = (metadata as? Metadata.OnlineReady)?.urlsState ?: OnlineUrlsState.Idle
+
+            sealed interface Metadata {
+                data object Loading : Metadata
+
+                data class OnlineReady(
+                    val video: Video,
+                    val urlsState: OnlineUrlsState = OnlineUrlsState.Idle,
+                ) : Metadata
+
+                data class OfflineFallback(
+                    val isOnlineRemoved: Boolean,
+                    val errorReason: String?,
+                ) : Metadata
+            }
+        }
+
+        /** 无本地可用文件时的纯在线详情与播放源状态分支。 */
+        sealed interface Online : VideoDetailsState {
+            data class Loaded(
+                override val localFileUnavailable: Boolean,
+                val video: Video,
+                override val onlineUrlsState: OnlineUrlsState,
+            ) : Online {
+                override val interactiveVideo: Video
+                    get() = video
+            }
+
+            data class PartialSourceError(
+                override val localFileUnavailable: Boolean,
+                val video: Video,
+                val errorReason: String?,
+                override val onlineUrlsState: OnlineUrlsState = OnlineUrlsState.Idle,
+            ) : Online {
+                override val interactiveVideo: Video
+                    get() = video
+            }
+
+            data class Private(
+                override val localFileUnavailable: Boolean,
+                val privateUser: User?,
+                val errorReason: String?,
+            ) : Online
+
+            data class Failed(
+                override val localFileUnavailable: Boolean,
+                val isOnlineRemoved: Boolean,
+                val errorReason: String?,
+            ) : Online
+        }
     }
 
     data class VideoState(
-        val loading: Boolean = false,
-        val video: Video? = null,
-        val private: Boolean = false,
-        val privateUser: User? = null,
-        val urls: List<VideoFile> = emptyList(),
-        val sourceError: String? = null,
+        val details: VideoDetailsState = VideoDetailsState.Idle,
         val relatedVideos: List<Video> = emptyList(),
         val userMoreVideos: List<Video> = emptyList(),
         val userMoreVideosLoading: Boolean = false,
@@ -763,13 +1037,6 @@ class VideoVM(
         val commentState: CommentState = CommentState(),
         val playlist: List<Playlist> = emptyList(),
         val playlistLoading: Boolean = false,
-        val localDownload: DownloadItem? = null,
-        val isLocalPlayback: Boolean = false,
-        val isLocalFallback: Boolean = false,
-        val localFileUnavailable: Boolean = false,
-        val isOnlineRemoved: Boolean = false,
-        val onlineUrlsLoading: Boolean = false,
-        val onlineUrlsError: String? = null,
     )
 
     sealed class VideoEvent {

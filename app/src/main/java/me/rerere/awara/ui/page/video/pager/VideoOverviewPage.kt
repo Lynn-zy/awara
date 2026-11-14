@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
@@ -32,8 +34,6 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.PersonOff
 import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.Share
@@ -44,7 +44,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -77,23 +77,31 @@ import me.rerere.awara.R
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.DownloadItem
+import me.rerere.awara.data.entity.Tag
+import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.downloadableVideoFiles
 import me.rerere.awara.data.entity.fixUrl
+import me.rerere.awara.di.TagI18NResolver
 import me.rerere.awara.ui.LocalMessageProvider
+import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
 import me.rerere.awara.ui.component.common.Spin
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.plus
-import me.rerere.awara.ui.component.iwara.AuthorCard
+import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.MediaCard
 import me.rerere.awara.ui.component.iwara.RichText
-import me.rerere.awara.ui.component.iwara.TagRow
+import me.rerere.awara.ui.component.iwara.UserStatus
 import me.rerere.awara.ui.component.player.VideoQualityDownloadDialog
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.rememberUnblockedWorks
 import me.rerere.awara.ui.page.video.VideoVM
+import me.rerere.awara.ui.page.video.VideoVM.VideoDetailsState
+import me.rerere.awara.ui.page.video.layout.VideoOverviewAuthorCardSlot
+import me.rerere.awara.ui.page.video.layout.VideoOverviewTagChipSlot
+import me.rerere.awara.ui.page.video.layout.VideoOverviewTitleCardSlot
 import me.rerere.awara.util.openUrl
 import me.rerere.awara.util.shareLink
 import me.rerere.awara.util.toLocalDateTimeString
@@ -103,25 +111,27 @@ import org.koin.compose.koinInject
 @Composable
 fun VideoOverviewPage(vm: VideoVM) {
     val state = vm.state
+    val details = state.details
+    val displayVideo = details.displayVideo
     // 仅过滤额外推荐，不阻止当前作品正常播放，也不影响本地历史记录。
     val authorVideos =
         rememberUnblockedWorks(state.userMoreVideos) {
                 // 此列表由明确的作者查询获得，条目缺失作者摘要时可使用已确认的当前作者。
-                it.user?.id ?: state.video?.user?.id
+                it.user?.id ?: displayVideo?.user?.id
             }
             .filter { it.id != vm.id }
     val relatedVideos =
         rememberUnblockedWorks(state.relatedVideos) { it.user?.id }.filter { it.id != vm.id }
-    if (state.private) {
+    if (details is VideoDetailsState.Online.Private) {
         Column(modifier = Modifier.padding(8.dp)) {
-            AuthorCard(user = state.privateUser, onClickSub = null)
+            VideoOverviewAuthorCard(user = details.privateUser, onClickSub = null)
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(text = stringResource(R.string.errors_private_video))
             }
         }
     } else {
         // 视频概览区域保留初始加载与网格展示，移除下拉刷新容器与刷新状态
-        Spin(show = state.loading, modifier = Modifier.fillMaxSize()) {
+        Spin(show = details.isLoading, modifier = Modifier.fillMaxSize()) {
             LazyVerticalStaggeredGrid(
                 modifier = Modifier.fillMaxSize(),
                 columns = DynamicStaggeredGridCells(),
@@ -130,19 +140,22 @@ fun VideoOverviewPage(vm: VideoVM) {
                 contentPadding = PaddingValues(8.dp) + WindowInsets.navigationBars.asPaddingValues(),
             ) {
                 // 本地回退时使用专门的摘要卡片展示原记录
-                if (state.isLocalFallback && state.localDownload != null) {
+                if (
+                    details is VideoDetailsState.Local &&
+                        details.metadata is VideoDetailsState.Local.Metadata.OfflineFallback
+                ) {
                     item(span = StaggeredGridItemSpan.FullLine) {
                         LocalDownloadSummary(
-                            item = state.localDownload,
-                            isOnlineRemoved = state.isOnlineRemoved,
-                            sourceError = state.sourceError,
+                            item = details.item,
+                            isOnlineRemoved = details.metadata.isOnlineRemoved,
+                            sourceError = details.metadata.errorReason,
                             vm = vm,
                         )
                     }
                 }
 
                 // 在线视频源解析失败时展示重试入口
-                if (state.video != null && state.sourceError != null && !state.isLocalPlayback) {
+                if (details is VideoDetailsState.Online.PartialSourceError) {
                     item(span = StaggeredGridItemSpan.FullLine) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
@@ -152,7 +165,7 @@ fun VideoOverviewPage(vm: VideoVM) {
                                 text =
                                     stringResource(
                                         R.string.video_source_load_failed,
-                                        state.sourceError,
+                                        details.errorReason.orEmpty(),
                                     ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
@@ -166,8 +179,8 @@ fun VideoOverviewPage(vm: VideoVM) {
                 }
 
                 // 无本地文件且在线视频加载失败时展示对应提示
-                if (state.video == null && !state.isLocalFallback && !state.loading) {
-                    if (state.isOnlineRemoved) {
+                if (details is VideoDetailsState.Online.Failed) {
+                    if (details.isOnlineRemoved) {
                         item(span = StaggeredGridItemSpan.FullLine) {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -192,7 +205,7 @@ fun VideoOverviewPage(vm: VideoVM) {
                                 }
                             }
                         }
-                    } else if (state.sourceError != null) {
+                    } else if (details.errorReason != null) {
                         item(span = StaggeredGridItemSpan.FullLine) {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -212,7 +225,7 @@ fun VideoOverviewPage(vm: VideoVM) {
                                         text =
                                             stringResource(
                                                 R.string.video_details_load_failed,
-                                                state.sourceError,
+                                                details.errorReason,
                                             ),
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = MaterialTheme.colorScheme.error,
@@ -228,7 +241,7 @@ fun VideoOverviewPage(vm: VideoVM) {
                 }
 
                 // 仅远端元数据真实存在时展示完整信息卡片
-                state.video?.let { video ->
+                displayVideo?.let { video ->
                     item(span = StaggeredGridItemSpan.FullLine) {
                         VideoInfoCard(video = video, vm = vm)
                     }
@@ -254,12 +267,17 @@ fun VideoOverviewPage(vm: VideoVM) {
                                 }
                             }
                         } else {
-                            AuthorCard(user = video.user, onClickSub = { vm.followOrUnfollow() })
+                            VideoOverviewAuthorCard(
+                                user = video.user,
+                                onClickSub = { vm.followOrUnfollow() },
+                            )
                         }
                     }
 
                     if (video.tags.isNotEmpty()) {
-                        item(span = StaggeredGridItemSpan.FullLine) { TagRow(tags = video.tags) }
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            VideoOverviewTagRow(tags = video.tags)
+                        }
                     }
 
                     if (
@@ -354,108 +372,79 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
     val downloadStorage: DownloadStorage = koinInject()
     val downloadManager: DownloadManager = koinInject()
     val hasBody = !video.body.isNullOrBlank()
-    Card(modifier = Modifier.animateContentSize().fillMaxWidth()) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(8.dp),
-        ) {
-            Column {
+    VideoOverviewTitleCardSlot(
+        title = video.title,
+        cardModifier = Modifier.animateContentSize(),
+        showExpandToggle = hasBody,
+        expanded = expand,
+        onToggleExpand = { setExpand(!expand) },
+        expandToggleContentDescription =
+            stringResource(
+                if (expand) R.string.hide_description
+                else R.string.show_description
+            ),
+        expandedBody = {
+            // 展开简介前增大与标题的垂直间距
+            Spacer(modifier = Modifier.height(12.dp))
+            SelectionContainer {
+                RichText(
+                    text = video.body.orEmpty().trim(),
+                    style = MaterialTheme.typography.bodySmall,
+                    overflow = TextOverflow.Ellipsis,
+                    onLinkClick = { context.openUrl(it) },
+                )
+            }
+        },
+        metadataContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 视频标题由16sp微调至18sp并配比合理行高，完整常驻不截断
-                    Text(
-                        text = video.title,
-                        style =
-                            MaterialTheme.typography.titleMedium.copy(
-                                fontSize = 18.sp,
-                                lineHeight = 24.sp,
-                            ),
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (hasBody) {
-                        IconButton(onClick = { setExpand(!expand) }) {
+                    Text(text = video.createdAt.toLocalDateTimeString())
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(text = stringResource(R.string.num_likes, video.numLikes))
+                    Text(text = stringResource(R.string.num_views, video.numViews))
+                }
+
+                val localDownload = vm.state.details.localDownload
+                if (shouldShowLocalVideoBadge(vm.state)) {
+                    val quality = localDownload?.quality.orEmpty()
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
                             Icon(
-                                imageVector =
-                                    if (expand) Icons.Outlined.KeyboardArrowUp
-                                    else Icons.Outlined.KeyboardArrowDown,
-                                contentDescription =
-                                    stringResource(
-                                        if (expand) R.string.hide_description
-                                        else R.string.show_description
-                                    ),
+                                Icons.Outlined.DownloadDone,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            Text(
+                                text =
+                                    if (quality.isBlank()) {
+                                        stringResource(R.string.video_local_playback)
+                                    } else {
+                                        stringResource(
+                                            R.string.video_local_playback_quality,
+                                            videoQualityDisplayName(quality),
+                                        )
+                                    },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
                             )
                         }
                     }
                 }
-
-                if (hasBody && expand) {
-                    // 展开简介前增大与标题的垂直间距
-                    Spacer(modifier = Modifier.height(12.dp))
-                    SelectionContainer {
-                        RichText(
-                            text = video.body.orEmpty().trim(),
-                            style = MaterialTheme.typography.bodySmall,
-                            overflow = TextOverflow.Ellipsis,
-                            onLinkClick = { context.openUrl(it) },
-                        )
-                    }
-                }
             }
-
-            ProvideTextStyle(MaterialTheme.typography.labelSmall) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(text = video.createdAt.toLocalDateTimeString())
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(text = stringResource(R.string.num_likes, video.numLikes))
-                        Text(text = stringResource(R.string.num_views, video.numViews))
-                    }
-
-                    val localDownload = vm.state.localDownload
-                    if (shouldShowLocalVideoBadge(vm.state)) {
-                        val quality = localDownload?.quality.orEmpty()
-                        Surface(
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            shape = MaterialTheme.shapes.small,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Icon(
-                                    Icons.Outlined.DownloadDone,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(12.dp),
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                )
-                                Text(
-                                    text =
-                                        if (quality.isBlank()) {
-                                            stringResource(R.string.video_local_playback)
-                                        } else {
-                                            stringResource(
-                                                R.string.video_local_playback_quality,
-                                                videoQualityDisplayName(quality),
-                                            )
-                                        },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Row {
+        },
+        actionsContent = {
                 val notificationPermissionState =
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         rememberPermissionState(Manifest.permission.POST_NOTIFICATIONS)
@@ -471,23 +460,27 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                 var showDownloadMenu by remember { mutableStateOf(false) }
                 var downloadEnqueueing by remember { mutableStateOf(false) }
                 var pendingDownloadOption by remember { mutableStateOf<DownloadOptionMode?>(null) }
+                val currentDetails = vm.state.details
+                val currentOnlineUrlsState = currentDetails.onlineUrlsState
                 val isDownloadBusy =
-                    downloadEnqueueing || vm.state.loading || vm.state.onlineUrlsLoading
+                    downloadEnqueueing ||
+                        currentDetails.isLoading ||
+                        currentOnlineUrlsState.isLoading
                 val availableSources =
-                    remember(vm.state.urls) { vm.state.urls.downloadableVideoFiles() }
+                    remember(currentDetails.urls) { currentDetails.urls.downloadableVideoFiles() }
                 LaunchedEffect(availableSources) {
                     if (
                         pendingDownloadOption != null &&
                             availableSources.isEmpty() &&
-                            !vm.state.onlineUrlsLoading
+                            !currentOnlineUrlsState.isLoading
                     ) {
                         pendingDownloadOption = null
                         message.error { Text(stringResource(R.string.download_url_unavailable)) }
                     }
                 }
 
-                LaunchedEffect(vm.state.onlineUrlsError) {
-                    vm.state.onlineUrlsError?.let { err ->
+                LaunchedEffect(currentOnlineUrlsState.errorOrNull) {
+                    currentOnlineUrlsState.errorOrNull?.let { err ->
                         message.error {
                             Text(stringResource(R.string.video_source_load_failed, err))
                         }
@@ -682,7 +675,61 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                         else stringResource(R.string.like)
                     )
                 }
-            }
+        },
+    )
+}
+
+/**
+ * 基于共享作者槽位渲染视频详情作者卡片，保持头像点击跳主页、角色标签与关注状态按钮交互。
+ */
+@Composable
+private fun VideoOverviewAuthorCard(user: User?, onClickSub: (() -> Unit)?) {
+    val router = LocalRouterProvider.current
+    if (user == null) return
+    val profileId = user.profileIdentifier
+    val onProfileClick: () -> Unit = { profileId?.let { router.navigate("user/$it") } }
+    val displayName =
+        user.name?.takeIf { it.isNotBlank() }
+            ?: user.username?.takeIf { it.isNotBlank() }
+            ?: stringResource(R.string.video_author_unavailable)
+    VideoOverviewAuthorCardSlot(
+        displayName = displayName,
+        enabled = profileId != null,
+        onClick = onProfileClick,
+        avatar = { avatarModifier ->
+            Avatar(modifier = avatarModifier, user = user, onClick = onProfileClick)
+        },
+        badge = { UserStatus(user = user) },
+        action =
+            onClickSub?.let {
+                {
+                    Button(
+                        onClick = it,
+                        type = if (user.following) ButtonType.Outlined else ButtonType.Default,
+                    ) {
+                        Text(
+                            if (user.following) stringResource(R.string.unfollow)
+                            else stringResource(R.string.follow)
+                        )
+                    }
+                }
+            },
+    )
+}
+
+/**
+ * 基于共享标签芯片槽位渲染视频详情横向标签列表，复用国际化标签名解析器。
+ */
+@Composable
+private fun VideoOverviewTagRow(tags: List<Tag>) {
+    val tagI18NResolver = koinInject<TagI18NResolver>()
+    val locales = LocalConfiguration.current.locales
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(tags) { tag ->
+            VideoOverviewTagChipSlot(text = tagI18NResolver.tagName(tag, locales))
         }
     }
 }
@@ -691,7 +738,7 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
  * 只要当前视频存在可用的本地已下载记录，即便用户切至在线清晰度播放，详情卡片也应保持展示本地视频标识。
  */
 internal fun shouldShowLocalVideoBadge(state: VideoVM.VideoState): Boolean =
-    state.localDownload != null
+    state.details.localDownload != null
 
 // 专门展示本地已下载视频信息的独立组件，避免伪造远端统计数据
 @Composable

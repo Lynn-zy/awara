@@ -7,8 +7,10 @@ import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,10 +33,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -70,12 +71,6 @@ import me.rerere.awara.ui.component.player.PlayerState
  * 及标签行底部安全余量（12dp）的固定总和，保证 2 行标题下底部标签完整露出不被截断。
  */
 internal val VIDEO_OVERVIEW_CARDS_VERTICAL_SPACING = 36.dp
-
-/**
- * 标识当前视频详情页竖屏播放器是否处于已收起、可随下拉继续拉高的状态。
- * 供子层下拉刷新组件（如评论区 `SwipeRefresh`）让出顶部下拉手势，优先恢复播放器高度。
- */
-internal val LocalVideoPlayerCanExpand = compositionLocalOf { false }
 
 /**
  * 解析当前视频的有效显示尺寸：优先使用播放器内核已识别的视频帧尺寸，尚未解码时回退视频文件元数据宽高。
@@ -391,158 +386,218 @@ internal fun VideoAdaptivePlayerLayoutBox(
     // 切换到新视频或横竖屏模式变更时重置折叠偏移，恢复默认展开态
     LaunchedEffect(mediaKey, isPortraitVideo) { collapseState.reset() }
 
-    CompositionLocalProvider(LocalVideoPlayerCanExpand provides collapseState.canExpand) {
-        SubcomposeLayout(modifier = modifier.nestedScroll(nestedScrollConnection)) { constraints ->
-            val containerWidthPx = constraints.maxWidth.coerceAtLeast(0)
-            val containerHeightPx = constraints.maxHeight.coerceAtLeast(0)
-            val statusBarHeightPx = if (deductStatusBar) statusBars.getTop(this) else 0
-            val navigationBarHeightPx = navigationBars.getBottom(this)
+    SubcomposeLayout(modifier = modifier.nestedScroll(nestedScrollConnection)) { constraints ->
+        val containerWidthPx = constraints.maxWidth.coerceAtLeast(0)
+        val containerHeightPx = constraints.maxHeight.coerceAtLeast(0)
+        val statusBarHeightPx = if (deductStatusBar) statusBars.getTop(this) else 0
+        val navigationBarHeightPx = navigationBars.getBottom(this)
 
-            val landscapeHeightPx =
+        val landscapeHeightPx =
+            calculateVideoDetailPlayerHeightPx(
+                isPortrait = false,
+                containerWidthPx = containerWidthPx,
+                containerHeightPx = containerHeightPx,
+                statusBarHeightPx = statusBarHeightPx,
+                tabBarHeightPx = 0,
+                collapsedTitleCardMaxHeightPx = 0,
+                authorCardHeightPx = 0,
+                tagRowHeightPx = 0,
+                cardsVerticalSpacingPx = 0,
+                navigationBarHeightPx = 0,
+            )
+
+        // 仅在竖屏视频且容器有效时通过共享排版槽位测量固定基准卡片与标签行高度
+        val maxPlayerHeightPx =
+            if (isPortraitVideo && containerWidthPx > 0 && containerHeightPx > 0) {
+                val cardHorizontalPaddingPx = 16.dp.roundToPx()
+                val cardWidthPx = (containerWidthPx - cardHorizontalPaddingPx).coerceAtLeast(0)
+                val cardConstraints =
+                    Constraints(
+                        minWidth = cardWidthPx,
+                        maxWidth = cardWidthPx,
+                        minHeight = 0,
+                        maxHeight = Constraints.Infinity,
+                    )
+                val looseConstraints =
+                    Constraints(
+                        minWidth = 0,
+                        maxWidth = containerWidthPx,
+                        minHeight = 0,
+                        maxHeight = Constraints.Infinity,
+                    )
+                val metricMeasurables =
+                    subcompose("reference_metrics") {
+                        if (includeTabBar) {
+                            Tab(
+                                selected = true,
+                                onClick = {},
+                                text = { Text(stringResource(R.string.video_tab_overview)) },
+                            )
+                        }
+                        VideoOverviewTitleCardSlot(
+                            title = "标题\n标题",
+                            titleMaxLines = 2,
+                            showExpandToggle = true,
+                            expanded = false,
+                            metadataContent = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(text = "2026-01-01 00:00", maxLines = 1)
+                                }
+                            },
+                            actionsContent = {
+                                IconButton(onClick = {}) {
+                                    Icon(Icons.Outlined.Download, contentDescription = null)
+                                }
+                                Spacer(modifier = Modifier.weight(1f))
+                                Button(onClick = {}, type = ButtonType.Default) {
+                                    Text(text = stringResource(R.string.like), maxLines = 1)
+                                }
+                            },
+                        )
+                        VideoOverviewAuthorCardSlot(
+                            displayName = "Author",
+                            nameMaxLines = 1,
+                            avatar = { avatarModifier -> Box(modifier = avatarModifier) },
+                            badge = {
+                                Tag(type = TagType.Info) { Text(text = "user", maxLines = 1) }
+                            },
+                            action = {
+                                Button(onClick = {}, type = ButtonType.Default) {
+                                    Text(text = stringResource(R.string.follow), maxLines = 1)
+                                }
+                            },
+                        )
+                        VideoOverviewTagChipSlot(text = "Tag", maxLines = 1)
+                    }
+                var index = 0
+                val tabBarHeightPx =
+                    if (includeTabBar) {
+                        metricMeasurables[index++].measure(looseConstraints).height
+                    } else 0
+                val collapsedTitleCardHeightPx =
+                    metricMeasurables[index++].measure(cardConstraints).height
+                val authorCardHeightPx =
+                    metricMeasurables[index++].measure(cardConstraints).height
+                val tagRowHeightPx =
+                    metricMeasurables[index].measure(looseConstraints).height
+
                 calculateVideoDetailPlayerHeightPx(
-                    isPortrait = false,
+                    isPortrait = true,
                     containerWidthPx = containerWidthPx,
                     containerHeightPx = containerHeightPx,
                     statusBarHeightPx = statusBarHeightPx,
-                    tabBarHeightPx = 0,
-                    collapsedTitleCardMaxHeightPx = 0,
-                    authorCardHeightPx = 0,
-                    tagRowHeightPx = 0,
-                    cardsVerticalSpacingPx = 0,
-                    navigationBarHeightPx = 0,
+                    tabBarHeightPx = tabBarHeightPx,
+                    collapsedTitleCardMaxHeightPx = collapsedTitleCardHeightPx,
+                    authorCardHeightPx = authorCardHeightPx,
+                    tagRowHeightPx = tagRowHeightPx,
+                    cardsVerticalSpacingPx = VIDEO_OVERVIEW_CARDS_VERTICAL_SPACING.roundToPx(),
+                    navigationBarHeightPx = navigationBarHeightPx,
                 )
-
-            // 仅在竖屏视频且容器有效时测量固定基准卡片与标签行高度
-            val maxPlayerHeightPx =
-                if (isPortraitVideo && containerWidthPx > 0 && containerHeightPx > 0) {
-                    val cardHorizontalPaddingPx = 16.dp.roundToPx()
-                    val cardWidthPx = (containerWidthPx - cardHorizontalPaddingPx).coerceAtLeast(0)
-                    val cardConstraints =
-                        Constraints(
-                            minWidth = cardWidthPx,
-                            maxWidth = cardWidthPx,
-                            minHeight = 0,
-                            maxHeight = Constraints.Infinity,
-                        )
-                    val looseConstraints =
-                        Constraints(
-                            minWidth = 0,
-                            maxWidth = containerWidthPx,
-                            minHeight = 0,
-                            maxHeight = Constraints.Infinity,
-                        )
-                    val metricMeasurables =
-                        subcompose("reference_metrics") {
-                            if (includeTabBar) {
-                                Tab(selected = true, onClick = {}, text = { Text("简介") })
-                            }
-                            CollapsedTwoLineTitleCardPrototype()
-                            AuthorCardPrototype()
-                            TagRowPrototype()
-                        }
-                    var index = 0
-                    val tabBarHeightPx =
-                        if (includeTabBar) {
-                            metricMeasurables[index++].measure(looseConstraints).height
-                        } else 0
-                    val collapsedTitleCardHeightPx =
-                        metricMeasurables[index++].measure(cardConstraints).height
-                    val authorCardHeightPx =
-                        metricMeasurables[index++].measure(cardConstraints).height
-                    val tagRowHeightPx =
-                        metricMeasurables[index].measure(looseConstraints).height
-
-                    calculateVideoDetailPlayerHeightPx(
-                        isPortrait = true,
-                        containerWidthPx = containerWidthPx,
-                        containerHeightPx = containerHeightPx,
-                        statusBarHeightPx = statusBarHeightPx,
-                        tabBarHeightPx = tabBarHeightPx,
-                        collapsedTitleCardMaxHeightPx = collapsedTitleCardHeightPx,
-                        authorCardHeightPx = authorCardHeightPx,
-                        tagRowHeightPx = tagRowHeightPx,
-                        cardsVerticalSpacingPx = VIDEO_OVERVIEW_CARDS_VERTICAL_SPACING.roundToPx(),
-                        navigationBarHeightPx = navigationBarHeightPx,
-                    )
-                } else {
-                    landscapeHeightPx
-                }
-
-            collapseState.updateBounds(minPx = landscapeHeightPx, maxPx = maxPlayerHeightPx)
-
-            val mainPlaceables =
-                subcompose("main_content") { content(collapseState) }
-                    .map { it.measure(constraints) }
-
-            val layoutWidth = mainPlaceables.maxOfOrNull { it.width } ?: containerWidthPx
-            val layoutHeight = mainPlaceables.maxOfOrNull { it.height } ?: containerHeightPx
-            layout(layoutWidth, layoutHeight) {
-                mainPlaceables.forEach { it.placeRelative(0, 0) }
+            } else {
+                landscapeHeightPx
             }
+
+        collapseState.updateBounds(minPx = landscapeHeightPx, maxPx = maxPlayerHeightPx)
+
+        val mainPlaceables =
+            subcompose("main_content") { content(collapseState) }
+                .map { it.measure(constraints) }
+
+        val layoutWidth = mainPlaceables.maxOfOrNull { it.width } ?: containerWidthPx
+        val layoutHeight = mainPlaceables.maxOfOrNull { it.height } ?: containerHeightPx
+        layout(layoutWidth, layoutHeight) {
+            mainPlaceables.forEach { it.placeRelative(0, 0) }
         }
     }
 }
 
 /**
- * 与真实常规 `VideoInfoCard` 严格同构的未展开 2 行标题最大高度测量样板：
- * 包含 2 行标题 + 展开图标、统计信息行与底部操作按钮行，不依赖动态数据且不触发副作用。
+ * 视频详情概览页标题卡片的共享布局槽位。
+ * 同时用于 `VideoOverviewPage` 真实渲染与竖屏播放器 `reference_metrics` 基准高度测量，
+ * 保证标题字号/行高、折叠切换图标、元数据区与底部操作栏严格同构。
  */
 @Composable
-private fun CollapsedTwoLineTitleCardPrototype() {
-    Card(modifier = Modifier.fillMaxWidth()) {
+internal fun VideoOverviewTitleCardSlot(
+    title: String,
+    cardModifier: Modifier = Modifier,
+    titleMaxLines: Int = Int.MAX_VALUE,
+    showExpandToggle: Boolean = false,
+    expanded: Boolean = false,
+    onToggleExpand: () -> Unit = {},
+    expandToggleContentDescription: String? = null,
+    expandedBody: (@Composable () -> Unit)? = null,
+    metadataContent: @Composable () -> Unit,
+    actionsContent: @Composable RowScope.() -> Unit,
+) {
+    Card(modifier = cardModifier.fillMaxWidth()) {
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(8.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "标题\n标题",
-                    style =
-                        MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 18.sp,
-                            lineHeight = 24.sp,
-                        ),
-                    maxLines = 2,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = {}) {
-                    Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null)
-                }
-            }
-
-            ProvideTextStyle(MaterialTheme.typography.labelSmall) {
+            Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(text = "2026-01-01 00:00", maxLines = 1)
+                    // 视频标题由16sp微调至18sp并配比合理行高
+                    Text(
+                        text = title,
+                        style =
+                            MaterialTheme.typography.titleMedium.copy(
+                                fontSize = 18.sp,
+                                lineHeight = 24.sp,
+                            ),
+                        maxLines = titleMaxLines,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (showExpandToggle) {
+                        IconButton(onClick = onToggleExpand) {
+                            Icon(
+                                imageVector =
+                                    if (expanded) Icons.Outlined.KeyboardArrowUp
+                                    else Icons.Outlined.KeyboardArrowDown,
+                                contentDescription = expandToggleContentDescription,
+                            )
+                        }
+                    }
+                }
+
+                if (expanded && expandedBody != null) {
+                    expandedBody()
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = {}) {
-                    Icon(Icons.Outlined.Download, contentDescription = null)
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                Button(onClick = {}, type = ButtonType.Default) {
-                    Text(text = stringResource(R.string.like), maxLines = 1)
-                }
-            }
+            ProvideTextStyle(MaterialTheme.typography.labelSmall) { metadataContent() }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                content = actionsContent,
+            )
         }
     }
 }
 
 /**
- * 与真实 `AuthorCard` 严格同构的测量样板：包含头像占位、作者名、身份徽标与关注按钮，不发起图片网络请求。
+ * 视频详情概览页作者卡片的共享布局槽位。
+ * 统一头像容器比例、作者名排布、身份标签间距与右侧操作按钮骨架，供真实页面与高度基准测量复用。
  */
 @Composable
-private fun AuthorCardPrototype() {
-    Card(modifier = Modifier.fillMaxWidth()) {
+internal fun VideoOverviewAuthorCardSlot(
+    displayName: String,
+    modifier: Modifier = Modifier,
+    nameMaxLines: Int = Int.MAX_VALUE,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
+    avatar: @Composable (Modifier) -> Unit,
+    badge: @Composable () -> Unit,
+    action: (@Composable () -> Unit)? = null,
+) {
+    val cardContent: @Composable ColumnScope.() -> Unit = {
         Row(modifier = Modifier.padding(8.dp)) {
             Column(modifier = Modifier.weight(1f)) {
                 Row(
@@ -550,42 +605,58 @@ private fun AuthorCardPrototype() {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Box(modifier = Modifier.fillMaxHeight().aspectRatio(1f))
+                    avatar(Modifier.fillMaxHeight().aspectRatio(1f))
                     Column {
                         Text(
-                            text = "Author",
+                            text = displayName,
                             style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
+                            maxLines = nameMaxLines,
                         )
                         Row(
                             modifier = Modifier.padding(top = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Tag(type = TagType.Info) { Text(text = "user", maxLines = 1) }
+                            badge()
                         }
                     }
                 }
             }
-            Button(onClick = {}, type = ButtonType.Default) {
-                Text(text = stringResource(R.string.follow), maxLines = 1)
-            }
+            action?.invoke()
         }
+    }
+    if (onClick != null) {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+            enabled = enabled,
+            onClick = onClick,
+            content = cardContent,
+        )
+    } else {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+            content = cardContent,
+        )
     }
 }
 
 /**
- * 与真实 `TagRow` / `TagChip` 严格同构的单行标签高度测量样板，确保底部露出的视频标签不被裁切。
+ * 视频详情概览页标签芯片的共享样式槽位，保证标签外边距、圆角与字号排版同构。
  */
 @Composable
-private fun TagRowPrototype() {
+internal fun VideoOverviewTagChipSlot(
+    text: String,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+) {
     Surface(
+        modifier = modifier,
         tonalElevation = 2.dp,
         shape = MaterialTheme.shapes.small,
     ) {
         ProvideTextStyle(MaterialTheme.typography.labelMedium) {
             Text(
-                text = "Tag",
-                maxLines = 1,
+                text = text,
+                maxLines = maxLines,
                 modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp),
             )
         }

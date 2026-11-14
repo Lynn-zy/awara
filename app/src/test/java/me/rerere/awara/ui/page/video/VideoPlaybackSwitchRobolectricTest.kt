@@ -33,6 +33,7 @@ import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadType
 import me.rerere.awara.data.entity.Playlist
 import me.rerere.awara.data.entity.Video
+import me.rerere.awara.data.playback.PlaybackSourceRefresher
 import me.rerere.awara.data.repo.CommentRepo
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
@@ -208,8 +209,7 @@ class VideoPlaybackSwitchRobolectricTest {
                     initialQuality = "540",
                     saveQualityPreference = {},
                     coroutineScope = scope,
-                    refreshPlaybackSource = null,
-                    usesInternalSourceRefresh = false,
+                    sourceRefresher = null,
                 )
 
             val localItem =
@@ -295,12 +295,14 @@ class VideoPlaybackSwitchRobolectricTest {
                     player = player,
                     initialQuality = "540",
                     saveQualityPreference = {},
-                    refreshPlaybackSource = {
-                        refreshCalls.incrementAndGet()
-                        freshUrl
-                    },
+                    sourceRefresher =
+                        PlaybackSourceRefresher(
+                            refreshSource = {
+                                refreshCalls.incrementAndGet()
+                                freshUrl
+                            },
+                        ),
                     coroutineScope = scope,
-                    usesInternalSourceRefresh = false,
                 )
             autoRecoverState.updatePlayerItems(
                 items =
@@ -331,12 +333,14 @@ class VideoPlaybackSwitchRobolectricTest {
                     player = player,
                     initialQuality = "540",
                     saveQualityPreference = {},
-                    refreshPlaybackSource = {
-                        stuckRefreshCalls.incrementAndGet()
-                        failedUrl
-                    },
+                    sourceRefresher =
+                        PlaybackSourceRefresher(
+                            refreshSource = {
+                                stuckRefreshCalls.incrementAndGet()
+                                failedUrl
+                            },
+                        ),
                     coroutineScope = scope,
-                    usesInternalSourceRefresh = false,
                 )
             failFastState.updatePlayerItems(
                 items =
@@ -354,6 +358,62 @@ class VideoPlaybackSwitchRobolectricTest {
             }
             assertEquals("同一失效地址绝不能循环刷新", 1, stuckRefreshCalls.get())
             assertTrue(failFastState.playbackError!!.isHttpAuthError)
+        } finally {
+            scope.cancel()
+            player.release()
+        }
+    }
+
+    @Test
+    fun refreshOnlyUpdatesMatchingMediaItemWithoutCrossMutatingAdjacentQualities() {
+        server.dispatcher =
+            object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val path = request.path.orEmpty()
+                    return if (path.contains("token=fresh")) {
+                        buildMp4Response(request)
+                    } else {
+                        MockResponse().setResponseCode(403)
+                    }
+                }
+            }
+
+        val player = createTestExoPlayer()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        try {
+            val stale720p60 = loopbackUrl("/view?quality=720p60&token=stale")
+            val fresh720p60 = loopbackUrl("/view?quality=720p60&token=fresh")
+            val sibling720 = loopbackUrl("/view?quality=720&token=keep")
+            val state =
+                PlayerState(
+                    player = player,
+                    initialQuality = "720p60",
+                    saveQualityPreference = {},
+                    sourceRefresher = PlaybackSourceRefresher(refreshSource = { fresh720p60 }),
+                    coroutineScope = scope,
+                )
+            state.updatePlayerItems(
+                items =
+                    listOf(
+                        PlayerState.PlayerItem("720p60", MediaItem.fromUri(stale720p60)),
+                        PlayerState.PlayerItem("720", MediaItem.fromUri(sibling720)),
+                    ),
+                targetQuality = "720p60",
+                persistQualitySelection = false,
+                preservePositionMs = 0L,
+                targetPlayWhenReady = false,
+            )
+
+            waitUntil("刷新后应进入 READY") { state.state == PlayerState.State.READY }
+            assertEquals(
+                fresh720p60,
+                state.playerItems[0].mediaItem.localConfiguration?.uri?.toString(),
+            )
+            assertEquals(
+                "刷新当前条目时相邻清晰度条目 URI 不得被误改写",
+                sibling720,
+                state.playerItems[1].mediaItem.localConfiguration?.uri?.toString(),
+            )
         } finally {
             scope.cancel()
             player.release()
@@ -443,29 +503,29 @@ class VideoPlaybackSwitchRobolectricTest {
             )
         try {
             waitUntil({
-                "VideoVM 应完成本地视频与初始详情加载 (local=${vm.state.localDownload != null}, video=${vm.state.video != null}, err=${vm.state.sourceError}, calls=${getVideoCalls.get()})"
+                "VideoVM 应完成本地视频与初始详情加载 (local=${vm.state.details.localDownload != null}, video=${vm.state.details.displayVideo != null}, details=${vm.state.details}, calls=${getVideoCalls.get()})"
             }) {
-                vm.state.localDownload != null && vm.state.video != null
+                vm.state.details.localDownload != null && vm.state.details.displayVideo != null
             }
-            assertTrue("本地播放初始不主动解析在线清晰度", vm.state.urls.isEmpty())
+            assertTrue("本地播放初始不主动解析在线清晰度", vm.state.details.urls.isEmpty())
 
             var onSuccessCalled = false
             vm.requestOnlineUrls { onSuccessCalled = true }
 
             waitUntil("requestOnlineUrls 应在旧 fileUrl 403 后刷新 getVideo 并成功解析") {
-                onSuccessCalled && !vm.state.onlineUrlsLoading
+                onSuccessCalled && !vm.state.details.onlineUrlsState.isLoading
             }
 
-            assertNull("兜底刷新成功后不应残留 onlineUrlsError", vm.state.onlineUrlsError)
-            assertEquals(listOf("540"), vm.state.urls.map { it.name })
+            assertNull("兜底刷新成功后不应残留 onlineUrlsError", vm.state.details.onlineUrlsState.errorOrNull)
+            assertEquals(listOf("540"), vm.state.details.urls.map { it.name })
             assertEquals("应先复用缓存 video 再兜底刷新一次详情", 2, getVideoCalls.get())
-            assertEquals(freshFileUrl, vm.state.video?.fileUrl)
+            assertEquals(freshFileUrl, vm.state.details.displayVideo?.fileUrl)
 
             // 切至在线播放后，应保留本地下载记录及详情卡片“✓本地视频”标识；未下载视频则不展示
             assertTrue(shouldShowLocalVideoBadge(vm.state))
             vm.selectOnlinePlayback()
-            assertFalse("切至在线源后 isLocalPlayback 应置为 false", vm.state.isLocalPlayback)
-            assertNotNull("切至在线源后仍应保留 localDownload 记录", vm.state.localDownload)
+            assertFalse("切至在线源后 isLocalPlayback 应置为 false", vm.state.details.isLocalPlayback)
+            assertNotNull("切至在线源后仍应保留 localDownload 记录", vm.state.details.localDownload)
             assertTrue("切至在线清晰度后仍应保持展示本地视频 tag", shouldShowLocalVideoBadge(vm.state))
             assertFalse("无本地下载记录时不展示本地视频 tag", shouldShowLocalVideoBadge(VideoVM.VideoState()))
         } finally {

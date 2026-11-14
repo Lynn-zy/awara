@@ -17,8 +17,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
+import me.rerere.awara.R
 import me.rerere.awara.ui.component.ext.onlyBottom
 import net.mm2d.upnp.Device
 
@@ -42,7 +44,7 @@ fun DlnaSelector(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    text = "Select a device",
+                    text = stringResource(R.string.dlna_select_device),
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Column(
@@ -77,13 +79,13 @@ fun DlnaSelector(
                         }
                     } else {
                         Text(
-                            text = "No device found",
+                            text = stringResource(R.string.dlna_no_device_found),
                             style = MaterialTheme.typography.titleLarge,
                         )
                     }
                 }
                 Text(
-                    text = "Note: Only support DLNA devices",
+                    text = stringResource(R.string.dlna_only_supported_note),
                     style = MaterialTheme.typography.labelMedium,
                 )
             }

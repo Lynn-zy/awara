@@ -68,6 +68,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -227,6 +228,47 @@ internal fun shouldEnableDoubleTapGesture(
             playbackState = playbackState,
             playbackError = playbackError,
         )
+
+/**
+ * 播放器初始加载与首帧待播交互派生状态。
+ * 将单次重组与手势回调共用的待播提示、初始加载拦截与双击可用性收敛为单点计算，避免多次重复求值。
+ */
+internal data class InitialPlayInteractionState(
+    val showPlayPrompt: Boolean,
+    val blockLoadingInteraction: Boolean,
+    val enableDoubleTapGesture: Boolean,
+)
+
+/** 根据当前 [PlayerState] 快照统一派生初始交互控制状态。 */
+internal fun resolveInitialPlayInteractionState(state: PlayerState): InitialPlayInteractionState {
+    val showPrompt =
+        shouldShowInitialPlayPrompt(
+            playing = state.playing,
+            playWhenReady = state.playWhenReady,
+            hasStartedPlayback = state.hasStartedPlayback,
+            showLoading = state.showLoading,
+            playbackState = state.state,
+            playbackError = state.playbackError,
+        )
+    val blockLoading =
+        shouldBlockInitialLoadingInteraction(
+            hasStartedPlayback = state.hasStartedPlayback,
+            playing = state.playing,
+            initialPlayPromptReady = showPrompt,
+            playbackState = state.state,
+            playbackError = state.playbackError,
+        )
+    val enableDoubleTap =
+        state.playbackError == null &&
+            state.state != PlayerState.State.IDLE &&
+            !showPrompt &&
+            !blockLoading
+    return InitialPlayInteractionState(
+        showPlayPrompt = showPrompt,
+        blockLoadingInteraction = blockLoading,
+        enableDoubleTapGesture = enableDoubleTap,
+    )
+}
 
 @Composable
 fun Player(
@@ -490,23 +532,9 @@ internal fun PlayerController(
         }
     }
 
-    val awaitingInitialPlay =
-        shouldShowInitialPlayPrompt(
-            playing = state.playing,
-            playWhenReady = state.playWhenReady,
-            hasStartedPlayback = state.hasStartedPlayback,
-            showLoading = state.showLoading,
-            playbackState = state.state,
-            playbackError = state.playbackError,
-        )
-    val doubleTapEnabled =
-        shouldEnableDoubleTapGesture(
-            hasStartedPlayback = state.hasStartedPlayback,
-            playing = state.playing,
-            initialPlayPromptReady = awaitingInitialPlay,
-            playbackState = state.state,
-            playbackError = state.playbackError,
-        )
+    val initialInteractionState =
+        remember(state) { derivedStateOf { resolveInitialPlayInteractionState(state) } }
+    val initialInteraction = initialInteractionState.value
 
     val systemBars = WindowInsets.systemBarsIgnoringVisibility
     val systemGestures = WindowInsets.systemGestures
@@ -529,13 +557,13 @@ internal fun PlayerController(
                     fullscreen,
                     playerSize,
                     inputEnabled,
-                    doubleTapEnabled,
+                    initialInteraction.enableDoubleTapGesture,
                 ) {
                     if (!inputEnabled) return@pointerInput
                     detectTapGestures(
                         onPress = { suppressTap = false },
                         onDoubleTap =
-                            if (doubleTapEnabled) {
+                            if (initialInteraction.enableDoubleTapGesture) {
                                 {
                                     if (!suppressTap) {
                                         lastInteract = System.currentTimeMillis()
@@ -555,29 +583,13 @@ internal fun PlayerController(
                                 suppressTap = false
                                 return@detectTapGestures
                             }
-                            val initialPrompt =
-                                shouldShowInitialPlayPrompt(
-                                    playing = state.playing,
-                                    playWhenReady = state.playWhenReady,
-                                    hasStartedPlayback = state.hasStartedPlayback,
-                                    showLoading = state.showLoading,
-                                    playbackState = state.state,
-                                    playbackError = state.playbackError,
-                                )
-                            if (
-                                shouldBlockInitialLoadingInteraction(
-                                    hasStartedPlayback = state.hasStartedPlayback,
-                                    playing = state.playing,
-                                    initialPlayPromptReady = initialPrompt,
-                                    playbackState = state.state,
-                                    playbackError = state.playbackError,
-                                )
-                            ) {
+                            val interaction = initialInteractionState.value
+                            if (interaction.blockLoadingInteraction) {
                                 // 初始 loading 转圈期间（即使首帧已提前显示）点击播放器区域不显示底部进度条
                                 return@detectTapGestures
                             }
                             lastInteract = System.currentTimeMillis()
-                            if (initialPrompt) {
+                            if (interaction.showPlayPrompt) {
                                 // 初始缓冲已停止且首帧就绪：触发轻微柔白蒙层反馈，立即开始播放并收起全部控件
                                 triggerInitialPlayTapVeil(tapOffset)
                                 state.play()
@@ -594,25 +606,10 @@ internal fun PlayerController(
                     gestureKey =
                         listOf(mediaItem, mediaGeneration, fullscreen, playerSize, inputEnabled),
                     canInteract = {
-                        val initialPrompt =
-                            shouldShowInitialPlayPrompt(
-                                playing = state.playing,
-                                playWhenReady = state.playWhenReady,
-                                hasStartedPlayback = state.hasStartedPlayback,
-                                showLoading = state.showLoading,
-                                playbackState = state.state,
-                                playbackError = state.playbackError,
-                            )
                         foreground &&
                             windowInfo.isWindowFocused &&
                             mediaGeneration == renderedGeneration &&
-                            !shouldBlockInitialLoadingInteraction(
-                                hasStartedPlayback = state.hasStartedPlayback,
-                                playing = state.playing,
-                                initialPlayPromptReady = initialPrompt,
-                                playbackState = state.state,
-                                playbackError = state.playbackError,
-                            )
+                            !initialInteractionState.value.blockLoadingInteraction
                     },
                     canBoost = {
                         (state.playing || state.hasStartedPlayback) &&
@@ -879,7 +876,7 @@ internal fun PlayerController(
         // 初始缓冲已完成且首帧就绪时，在右下角展示方案 B 白色半透明圆润矩形播放按钮
         AnimatedVisibility(
             visible =
-                awaitingInitialPlay &&
+                initialInteraction.showPlayPrompt &&
                     !controller.bottomVisible &&
                     !previewState.isActive &&
                     controls.feedback == null,
@@ -932,47 +929,10 @@ internal fun PlayerController(
             }
 
             if (activeError != null && !previewState.isActive && controls.feedback == null) {
-                Column(
-                    modifier =
-                        Modifier.widthIn(max = 320.dp)
-                            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                            .testTag("player_error_overlay"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.ErrorOutline,
-                        contentDescription = null,
-                        tint = Color.White,
-                    )
-                    Text(
-                        text = stringResource(R.string.player_playback_failed, activeError.message),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    TextButton(
-                        onClick = { state.retry() },
-                        colors =
-                            ButtonDefaults.textButtonColors(
-                                containerColor = Color.White.copy(alpha = 0.16f),
-                                contentColor = Color.White,
-                            ),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.testTag("player_retry_button"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text(text = stringResource(R.string.retry))
-                    }
-                }
+                PlayerPlaybackErrorOverlay(
+                    activeError = activeError,
+                    onRetry = { state.retry() },
+                )
             }
 
             if (
@@ -991,6 +951,55 @@ internal fun PlayerController(
                     Icon(Icons.Outlined.Replay, "Replay")
                 }
             }
+        }
+    }
+}
+
+/** 播放失败时在播放器中心展示错误原因与重试按钮浮层。 */
+@Composable
+private fun PlayerPlaybackErrorOverlay(
+    activeError: PlayerState.PlaybackError,
+    onRetry: () -> Unit,
+) {
+    Column(
+        modifier =
+            Modifier.widthIn(max = 320.dp)
+                .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .testTag("player_error_overlay"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.ErrorOutline,
+            contentDescription = null,
+            tint = Color.White,
+        )
+        Text(
+            text = stringResource(R.string.player_playback_failed, activeError.message),
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        TextButton(
+            onClick = onRetry,
+            colors =
+                ButtonDefaults.textButtonColors(
+                    containerColor = Color.White.copy(alpha = 0.16f),
+                    contentColor = Color.White,
+                ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.testTag("player_retry_button"),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            Text(text = stringResource(R.string.retry))
         }
     }
 }
@@ -1168,67 +1177,72 @@ internal fun PlayerInitialPlayBadge(
                     }
                 },
     ) {
-        val cx = size.width * 0.5f
-        val cy = size.height * 0.5f
-        val cornerAnchorX = 20.4.dp.toPx()
-        val cornerAnchorY = 14.3.dp.toPx()
-        // bulge = 40% 时 exponent = 4.36，用于精确对齐渐变上下边界
-        val diagScale = 0.5.pow(1.0 / 4.36).toFloat()
-        val ry = cornerAnchorY / diagScale
-        val pillTop = cy - ry
-        val pillBottom = cy + ry
-
-        val pillPath =
-            buildYoutubeStylePillPath(
-                centerX = cx,
-                centerY = cy,
-                cornerAnchorX = cornerAnchorX,
-                cornerAnchorY = cornerAnchorY,
-                bulgeFraction = 0.40f,
-            )
-
-        // 1. 40% 不透明度的朴素白色半透明圆润矩形主体（外投影=0%，微凸边缘=0%）
-        drawPath(
-            path = pillPath,
-            brush =
-                Brush.verticalGradient(
-                    0.00f to Color.White.copy(alpha = 0.40f),
-                    0.55f to Color(0xFFF6F8FB).copy(alpha = 0.40f),
-                    1.00f to Color.White.copy(alpha = 0.40f),
-                    startY = pillTop,
-                    endY = pillBottom,
-                ),
-        )
-
-        // 2. 极轻柔边缘收敛描边（对应 bevel=0% 时的微弱抗锯齿过渡边）
-        drawPath(
-            path = pillPath,
-            brush =
-                Brush.verticalGradient(
-                    0.00f to Color.White.copy(alpha = 0.12f),
-                    0.50f to Color.White.copy(alpha = 0.00f),
-                    1.00f to Color(0xFF484F5E).copy(alpha = 0.04f),
-                    startY = pillTop,
-                    endY = pillBottom,
-                ),
-            style = Stroke(width = 1.dp.toPx()),
-        )
-
-        // 3. 柔和深灰半透明圆角播放三角（rgba(22, 25, 31, 0.74)）
-        val trianglePath =
-            buildRoundedPlayTrianglePath(
-                centerX = cx,
-                centerY = cy,
-                width = 12.6.dp.toPx(),
-                height = 14.4.dp.toPx(),
-                cornerRadius = 2.1.dp.toPx(),
-                opticalShiftX = 1.15.dp.toPx(),
-            )
-        drawPath(
-            path = trianglePath,
-            color = Color(0xFF16191F).copy(alpha = 0.74f),
-        )
+        drawInitialPlayBadge()
     }
+}
+
+/** 在 [DrawScope] 内绘制右下角圆润播放按钮底板、柔光描边与中心圆角播放三角。 */
+private fun DrawScope.drawInitialPlayBadge() {
+    val cx = size.width * 0.5f
+    val cy = size.height * 0.5f
+    val cornerAnchorX = 20.4.dp.toPx()
+    val cornerAnchorY = 14.3.dp.toPx()
+    // bulge = 40% 时 exponent = 4.36，用于精确对齐渐变上下边界
+    val diagScale = 0.5.pow(1.0 / 4.36).toFloat()
+    val ry = cornerAnchorY / diagScale
+    val pillTop = cy - ry
+    val pillBottom = cy + ry
+
+    val pillPath =
+        buildYoutubeStylePillPath(
+            centerX = cx,
+            centerY = cy,
+            cornerAnchorX = cornerAnchorX,
+            cornerAnchorY = cornerAnchorY,
+            bulgeFraction = 0.40f,
+        )
+
+    // 1. 40% 不透明度的朴素白色半透明圆润矩形主体（外投影=0%，微凸边缘=0%）
+    drawPath(
+        path = pillPath,
+        brush =
+            Brush.verticalGradient(
+                0.00f to Color.White.copy(alpha = 0.40f),
+                0.55f to Color(0xFFF6F8FB).copy(alpha = 0.40f),
+                1.00f to Color.White.copy(alpha = 0.40f),
+                startY = pillTop,
+                endY = pillBottom,
+            ),
+    )
+
+    // 2. 极轻柔边缘收敛描边（对应 bevel=0% 时的微弱抗锯齿过渡边）
+    drawPath(
+        path = pillPath,
+        brush =
+            Brush.verticalGradient(
+                0.00f to Color.White.copy(alpha = 0.12f),
+                0.50f to Color.White.copy(alpha = 0.00f),
+                1.00f to Color(0xFF484F5E).copy(alpha = 0.04f),
+                startY = pillTop,
+                endY = pillBottom,
+            ),
+        style = Stroke(width = 1.dp.toPx()),
+    )
+
+    // 3. 柔和深灰半透明圆角播放三角（rgba(22, 25, 31, 0.74)）
+    val trianglePath =
+        buildRoundedPlayTrianglePath(
+            centerX = cx,
+            centerY = cy,
+            width = 12.6.dp.toPx(),
+            height = 14.4.dp.toPx(),
+            cornerRadius = 2.1.dp.toPx(),
+            opticalShiftX = 1.15.dp.toPx(),
+        )
+    drawPath(
+        path = trianglePath,
+        color = Color(0xFF16191F).copy(alpha = 0.74f),
+    )
 }
 
 /** 数值标签保持四档约定，常驻菜单不展示或持久化长按中的临时速度。 */

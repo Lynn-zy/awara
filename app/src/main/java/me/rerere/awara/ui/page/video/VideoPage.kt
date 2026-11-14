@@ -70,15 +70,16 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     val message = LocalMessageProvider.current
 
     // M3
+    val details = vm.state.details
     val colorState = rememberDynamicColorSchemeState()
-    LaunchedEffect(vm.state.video) {
-        colorState.updateColorScheme(url = vm.state.video?.thumbnailUrl() ?: "")
+    LaunchedEffect(details.displayVideo) {
+        colorState.updateColorScheme(url = details.displayVideo?.thumbnailUrl() ?: "")
     }
 
     // Full Screen
     var fullscreen by remember { mutableStateOf(false) }
     fun enterFullScreen() {
-        val effectiveSize = resolveEffectiveVideoSize(state.videoSize, vm.state.video)
+        val effectiveSize = resolveEffectiveVideoSize(state.videoSize, vm.state.details.displayVideo)
         if (effectiveSize == PlayerState.VideoSize.UNKNOWN) return
         // 单击全屏按钮进入全屏时，立即收起顶部标题与底部进度条等全部控件
         state.controllerState.hide()
@@ -98,54 +99,38 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
 
     // 状态驱动播放器内容更新，本地播放加载本地URI，在线清晰度加载网络源，切换保持播放位置与播放状态
     LaunchedEffect(
-        vm.state.localDownload,
-        vm.state.urls,
-        vm.state.isLocalPlayback,
-        vm.state.loading,
+        details.localDownload,
+        details.urls,
+        details.isLocalPlayback,
+        details.isLoading,
     ) {
-        val local = vm.state.localDownload
-        if (vm.state.isLocalPlayback && local != null) {
+        val local = details.localDownload
+        if (details.isLocalPlayback && local != null) {
             val playerItem =
                 buildLocalPlayerItem(
                     videoId = vm.id,
-                    title = vm.state.video?.title ?: local.title,
+                    title = details.displayVideo?.title ?: local.title,
                     localDownload = local,
                 )
             if (playerItem != null) {
-                val isSameLocalItem =
-                    state.playerItems.size == 1 &&
-                        state.playerItems.first().quality == playerItem.quality &&
-                        state.currentMediaItem?.localConfiguration?.uri ==
-                            playerItem.mediaItem.localConfiguration?.uri
-                if (!isSameLocalItem) {
-                    state.updatePlayerItems(listOf(playerItem))
-                }
+                state.updatePlayerItems(listOf(playerItem))
             }
-        } else if (!vm.state.isLocalPlayback && vm.state.urls.isNotEmpty()) {
+        } else if (!details.isLocalPlayback && details.urls.isNotEmpty()) {
             val onlineItems =
                 buildOnlinePlayerItems(
                     videoId = vm.id,
-                    title = vm.state.video?.title,
-                    files = vm.state.urls.playableVideoFiles(),
+                    title = details.displayVideo?.title,
+                    files = details.urls.playableVideoFiles(),
                 )
-            val isSameOnlineItems =
-                state.playerItems.size == onlineItems.size &&
-                    state.playerItems.zip(onlineItems).all { (current, next) ->
-                        matchVideoQuality(current.quality, next.quality) &&
-                            current.mediaItem.localConfiguration?.uri ==
-                                next.mediaItem.localConfiguration?.uri
-                    }
-            if (!isSameOnlineItems) {
-                state.updatePlayerItems(onlineItems)
-            }
-        } else if (!vm.state.loading && vm.state.localDownload == null && vm.state.urls.isEmpty()) {
+            state.updatePlayerItems(onlineItems)
+        } else if (!details.isLoading && local == null && details.urls.isEmpty()) {
             state.updatePlayerItems(emptyList())
         }
     }
 
     // 本地记录文件丢失或无权限读取时给予警告提示
-    LaunchedEffect(vm.state.localFileUnavailable) {
-        if (vm.state.localFileUnavailable) {
+    LaunchedEffect(details.localFileUnavailable) {
+        if (details.localFileUnavailable) {
             message.warning { Text(composeStringResource(R.string.video_local_file_unavailable)) }
         }
     }
@@ -206,10 +191,12 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
 
                         speedSelector()
 
-                        val localDownload = vm.state.localDownload
-                        val playableUrls = vm.state.urls.playableVideoFiles()
+                        val currentDetails = vm.state.details
+                        val localDownload = currentDetails.localDownload
+                        val playableUrls = currentDetails.urls.playableVideoFiles()
+                        val onlineUrlsState = currentDetails.onlineUrlsState
                         val displayQualityText =
-                            if (vm.state.isLocalPlayback) {
+                            if (currentDetails.isLocalPlayback) {
                                 localDownload
                                     ?.quality
                                     ?.takeIf { it.isNotBlank() }
@@ -226,8 +213,8 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                         val showQualityAction =
                             localDownload != null ||
                                 playableUrls.isNotEmpty() ||
-                                vm.state.onlineUrlsLoading ||
-                                vm.state.onlineUrlsError != null
+                                onlineUrlsState.isLoading ||
+                                onlineUrlsState.errorOrNull != null
                         if (showQualityAction) {
                             Box {
                                 var expandedVideoQuality by remember { mutableStateOf(false) }
@@ -236,9 +223,9 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                     onClick = {
                                         expandedVideoQuality = true
                                         if (
-                                            vm.state.urls.isEmpty() &&
-                                                vm.state.video != null &&
-                                                !vm.state.onlineUrlsLoading
+                                            currentDetails.urls.isEmpty() &&
+                                                currentDetails.interactiveVideo != null &&
+                                                !onlineUrlsState.isLoading
                                         ) {
                                             vm.requestOnlineUrls()
                                         }
@@ -268,12 +255,12 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                         DropdownMenuItem(
                                             onClick = {
                                                 expandedVideoQuality = false
-                                                if (!vm.state.isLocalPlayback) {
+                                                if (!currentDetails.isLocalPlayback) {
                                                     val localItem =
                                                         buildLocalPlayerItem(
                                                             videoId = vm.id,
                                                             title =
-                                                                vm.state.video?.title
+                                                                currentDetails.displayVideo?.title
                                                                     ?: localDownload.title,
                                                             localDownload = localDownload,
                                                         )
@@ -285,14 +272,14 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                             state.playbackError != null ||
                                                                 state.player.playWhenReady
                                                         vm.selectLocalPlayback()
-                                                        switchPlayerQuality(
-                                                            state = state,
+                                                        state.updatePlayerItems(
                                                             items = listOf(localItem),
                                                             targetQuality = localItem.quality,
                                                             persistQualitySelection = false,
                                                             preservePositionMs = currentPos,
                                                             targetPlayWhenReady =
                                                                 targetPlayWhenReady,
+                                                            syncControllerVisibility = true,
                                                         )
                                                     }
                                                 } else {
@@ -301,7 +288,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                             },
                                             text = { Text(localItemLabel) },
                                             trailingIcon =
-                                                if (vm.state.isLocalPlayback) {
+                                                if (currentDetails.isLocalPlayback) {
                                                     {
                                                         Icon(
                                                             Icons.Outlined.Check,
@@ -315,7 +302,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                     if (playableUrls.isNotEmpty()) {
                                         playableUrls.forEach { url ->
                                             val isSelected =
-                                                !vm.state.isLocalPlayback &&
+                                                !currentDetails.isLocalPlayback &&
                                                     matchVideoQuality(
                                                         url.qualityKey,
                                                         state.currentQuality,
@@ -334,16 +321,17 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                     val items =
                                                         buildOnlinePlayerItems(
                                                             videoId = vm.id,
-                                                            title = vm.state.video?.title,
+                                                            title =
+                                                                currentDetails.displayVideo?.title,
                                                             files = playableUrls,
                                                         )
-                                                    switchPlayerQuality(
-                                                        state = state,
+                                                    state.updatePlayerItems(
                                                         items = items,
                                                         targetQuality = url.name,
                                                         persistQualitySelection = true,
                                                         preservePositionMs = currentPos,
                                                         targetPlayWhenReady = targetPlayWhenReady,
+                                                        syncControllerVisibility = true,
                                                     )
                                                 },
                                                 text = { Text(videoQualityDisplayName(url.name)) },
@@ -358,13 +346,13 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                     } else null,
                                             )
                                         }
-                                    } else if (vm.state.onlineUrlsLoading) {
+                                    } else if (onlineUrlsState.isLoading) {
                                         DropdownMenuItem(
                                             onClick = {},
                                             enabled = false,
                                             text = { Text("…") },
                                         )
-                                    } else if (vm.state.onlineUrlsError != null) {
+                                    } else if (onlineUrlsState.errorOrNull != null) {
                                         DropdownMenuItem(
                                             onClick = { vm.requestOnlineUrls() },
                                             text = { Text(composeStringResource(R.string.retry)) },
@@ -388,7 +376,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                 )
             },
         ) { player ->
-            val portraitVideo = isPortraitVideo(state.videoSize, vm.state.video)
+            val portraitVideo = isPortraitVideo(state.videoSize, vm.state.details.displayVideo)
             when (windowSize.widthSizeClass) {
                 WindowWidthSizeClass.Compact ->
                     VideoPagePhoneLayout(
@@ -443,26 +431,3 @@ private fun buildOnlinePlayerItems(
                     .build(),
         )
     }
-
-/** 一次性应用用户选择的清晰度/本地源并同步播控栏显隐状态。 */
-private fun switchPlayerQuality(
-    state: PlayerState,
-    items: List<PlayerState.PlayerItem>,
-    targetQuality: String,
-    persistQualitySelection: Boolean,
-    preservePositionMs: Long,
-    targetPlayWhenReady: Boolean,
-) {
-    state.updatePlayerItems(
-        items = items,
-        targetQuality = targetQuality,
-        persistQualitySelection = persistQualitySelection,
-        preservePositionMs = preservePositionMs,
-        targetPlayWhenReady = targetPlayWhenReady,
-    )
-    if (targetPlayWhenReady) {
-        state.controllerState.hide()
-    } else if (state.hasStartedPlayback) {
-        state.controllerState.show()
-    }
-}

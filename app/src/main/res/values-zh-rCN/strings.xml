@@ -375,4 +375,9 @@
     <string name="comment_replies_count">共%1$d条回复</string>
     <string name="comment_detail_title">评论详情</string>
     <string name="comments">留言</string>
+    <string name="video_tab_overview">简介</string>
+    <string name="video_tab_comments">评论</string>
+    <string name="dlna_select_device">选择投屏设备</string>
+    <string name="dlna_no_device_found">未发现设备</string>
+    <string name="dlna_only_supported_note">注意：仅支持 DLNA 设备</string>
 </resources>

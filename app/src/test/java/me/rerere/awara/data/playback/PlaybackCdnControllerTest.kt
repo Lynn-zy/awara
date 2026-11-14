@@ -60,7 +60,7 @@ class PlaybackCdnControllerTest {
             PlaybackCdnController(
                 client = client,
                 directory = CdnDirectory(client),
-                refreshSource = { null },
+                sourceRefresher = PlaybackSourceRefresher(),
                 urlResolver = ::resolveLoopbackUrl,
             )
     }
@@ -171,7 +171,7 @@ class PlaybackCdnControllerTest {
             PlaybackCdnController(
                 client = client,
                 directory = CdnDirectory(client, directoryUrl = loopbackUrl("/directory")),
-                refreshSource = { null },
+                sourceRefresher = PlaybackSourceRefresher(),
                 urlResolver = ::resolveLoopbackUrl,
             )
         val previous = controller.createDataSource()

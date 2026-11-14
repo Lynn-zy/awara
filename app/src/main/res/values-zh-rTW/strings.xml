@@ -375,4 +375,9 @@
     <string name="comment_replies_count">共 %1$d 則回覆</string>
     <string name="comment_detail_title">評論詳情</string>
     <string name="comments">留言</string>
+    <string name="video_tab_overview">簡介</string>
+    <string name="video_tab_comments">評論</string>
+    <string name="dlna_select_device">選擇投放裝置</string>
+    <string name="dlna_no_device_found">找不到裝置</string>
+    <string name="dlna_only_supported_note">注意：僅支援 DLNA 裝置</string>
 </resources>

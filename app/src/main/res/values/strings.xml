@@ -381,4 +381,9 @@
     <string name="comment_replies_count">%1$d replies</string>
     <string name="comment_detail_title">Comment details</string>
     <string name="comments">Comments</string>
+    <string name="video_tab_overview">Overview</string>
+    <string name="video_tab_comments">Comments</string>
+    <string name="dlna_select_device">Select a device</string>
+    <string name="dlna_no_device_found">No device found</string>
+    <string name="dlna_only_supported_note">Note: Only support DLNA devices</string>
 </resources>

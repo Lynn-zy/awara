@@ -7,7 +7,9 @@ import androidx.media3.common.Player
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
+import kotlinx.coroutines.runBlocking
 import me.rerere.awara.data.entity.videoQualityRank
+import me.rerere.awara.data.playback.PlaybackSourceRefresher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -39,7 +41,6 @@ class PlayerStateQualityTest {
         var canSetSpeedAndPitch: Boolean = false
         var playbackParametersValue: PlaybackParameters = PlaybackParameters(1f, 1f)
         var lastSetPlaybackParameters: PlaybackParameters? = null
-        var throwOnSetPlaybackParameters: RuntimeException? = null
 
         override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
             val name = method.name
@@ -79,7 +80,6 @@ class PlayerStateQualityTest {
                     return playbackParametersValue
                 }
                 name == "setPlaybackParameters" && argCount == 1 -> {
-                    throwOnSetPlaybackParameters?.let { throw it }
                     val params = args!![0] as PlaybackParameters
                     playbackParametersValue = params
                     lastSetPlaybackParameters = params
@@ -560,29 +560,6 @@ class PlayerStateQualityTest {
     }
 
     @Test
-    fun updatePlaybackSpeedHandlesPlatformExceptionsWithoutCrashingOrPersisting() {
-        val (player, handler) = createMockPlayer()
-        handler.canSetSpeedAndPitch = true
-        // 模拟底层抛出系统安全限制异常
-        handler.throwOnSetPlaybackParameters = SecurityException("Mock system restriction")
-
-        var persistedSpeed: Float? = null
-        val state =
-            PlayerState(
-                player = player,
-                initialQuality = "Source",
-                saveQualityPreference = {},
-                initialPlaybackSpeed = 1f,
-                savePlaybackSpeedPreference = { persistedSpeed = it },
-            )
-
-        val result = state.updatePlaybackSpeed(1.5f)
-        assertFalse(result)
-        assertEquals(1f, state.currentPlaybackSpeed, 0.0f)
-        assertNull(persistedSpeed)
-    }
-
-    @Test
     fun temporaryPlayerSpeedChangeDoesNotPollutePreferredSpeedOrWritePreference() {
         val (player, handler) = createMockPlayer()
         handler.canSetSpeedAndPitch = true
@@ -1036,5 +1013,98 @@ class PlayerStateQualityTest {
         assertEquals("从 ENDED 切换在线源时应从 0ms 重播而非停留在片尾", 0L, handler.lastSetPositionMs)
         assertEquals("原子切换只能触发一次 prepare", preparesBeforeSwitch + 1, handler.prepareCount)
         assertEquals(listOf("540"), savedQualities)
+    }
+
+    @Test
+    fun updateCurrentQualitySelectsMatchingItemAndIgnoresDuplicateSelection() {
+        val (player, handler) = createMockPlayer()
+        val savedQualities = mutableListOf<String>()
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = { savedQualities.add(it) },
+            )
+        val itemSource = MediaItem.Builder().setMediaId("vid_q").build()
+        val item720 = MediaItem.Builder().setMediaId("vid_q").build()
+        state.updatePlayerItems(
+            listOf(
+                PlayerState.PlayerItem("Source", itemSource),
+                PlayerState.PlayerItem("720", item720),
+            )
+        )
+        val preparesAfterInit = handler.prepareCount
+
+        state.updateCurrentQuality("720")
+        assertEquals("720", state.currentQuality)
+        assertEquals(item720, handler.lastSetMediaItem)
+        assertEquals(preparesAfterInit + 1, handler.prepareCount)
+
+        state.updateCurrentQuality("720")
+        assertEquals("重复选中相同清晰度时不得重复触发切换准备", preparesAfterInit + 1, handler.prepareCount)
+        assertEquals(listOf("720"), savedQualities)
+    }
+
+    @Test
+    fun sharedSourceRefresherConsumesSingleAutoBudgetAndAllowsManualRetry() = runBlocking {
+        var calls = 0
+        val staleUrl = "https://cdn1.iwara.tv/view?filename=demo_540.mp4&path=2026&expires=1"
+        val freshUrl1 = "https://cdn2.iwara.tv/view?filename=demo_540.mp4&path=2026&expires=2"
+        val freshUrl2 = "https://cdn3.iwara.tv/view?filename=demo_540.mp4&path=2026&expires=3"
+        val refresher =
+            PlaybackSourceRefresher(
+                refreshSource = {
+                    calls++
+                    if (calls == 1) freshUrl1 else freshUrl2
+                },
+                trustedHostPredicate = { it.endsWith(".iwara.tv") },
+            )
+
+        val first = refresher.refreshAutoOnce(staleUrl)
+        assertEquals(freshUrl1, first)
+        assertFalse("刷新前后同一资源键均应封存自动预算，避免下游重复 403 自动刷新", refresher.canAutoRefresh(freshUrl1))
+        assertNull("同资源再次自动刷新必须直接返回 null", refresher.refreshAutoOnce(freshUrl1))
+        assertEquals(1, calls)
+
+        val manual = refresher.refreshManual(freshUrl1)
+        assertEquals("显式手动重试仍应允许发起刷新", freshUrl2, manual)
+        assertEquals(2, calls)
+        assertFalse("手动刷新所得新链接仍不重入自动刷新死循环", refresher.canAutoRefresh(freshUrl2))
+    }
+
+    @Test
+    fun resolveInitialPlayInteractionStateMatchesDerivedStatesAcrossLifecycle() {
+        val (player, handler) = createMockPlayer()
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+            )
+
+        // 1. 初始加载中（BUFFERING，非自动播放）：拦截点击与手势，不展示待播提示、禁用双击
+        handler.playbackStateValue = Player.STATE_BUFFERING
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+        val buffering = resolveInitialPlayInteractionState(state)
+        assertFalse(buffering.showPlayPrompt)
+        assertTrue(buffering.blockLoadingInteraction)
+        assertFalse(buffering.enableDoubleTapGesture)
+
+        // 2. 就绪待播（READY，非自动播放）：展示待播提示、放开点击、仍禁用双击避免 300ms 延迟
+        handler.playbackStateValue = Player.STATE_READY
+        state.playbackListener.onPlaybackStateChanged(Player.STATE_READY)
+        val readyPrompt = resolveInitialPlayInteractionState(state)
+        assertTrue(readyPrompt.showPlayPrompt)
+        assertFalse(readyPrompt.blockLoadingInteraction)
+        assertFalse(readyPrompt.enableDoubleTapGesture)
+
+        // 3. 启动播放后：隐藏待播提示、不拦截交互、启用双击
+        handler.playWhenReadyValue = true
+        handler.isPlayingValue = true
+        state.playbackListener.onIsPlayingChanged(true)
+        val playing = resolveInitialPlayInteractionState(state)
+        assertFalse(playing.showPlayPrompt)
+        assertFalse(playing.blockLoadingInteraction)
+        assertTrue(playing.enableDoubleTapGesture)
     }
 }

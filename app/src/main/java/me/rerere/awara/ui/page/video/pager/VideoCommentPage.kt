@@ -10,13 +10,23 @@ import androidx.compose.ui.Modifier
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.iwara.comment.CommentList
 import me.rerere.awara.ui.page.video.VideoVM
+import me.rerere.awara.ui.page.video.VideoVM.VideoDetailsState
 
 @Composable
-fun VideoCommentPage(vm: VideoVM) {
+fun VideoCommentPage(
+    vm: VideoVM,
+    canExpandPlayer: Boolean = false,
+) {
+    val details = vm.state.details
+    val canInteractOnline = details.interactiveVideo != null
+    val isLocalFallback =
+        details is VideoDetailsState.Local &&
+            details.metadata is VideoDetailsState.Local.Metadata.OfflineFallback
+
     // 优先采用在线视频作者真实 ID；若处于离线回退且已下载信息可用，则使用现有真实 authorId（绝不猜测昵称）
     val videoAuthorId =
-        vm.state.video?.user?.id?.takeIf { it.isNotBlank() }
-            ?: vm.state.localDownload?.authorId?.takeIf { it.isNotBlank() }
+        details.displayVideo?.user?.id?.takeIf { it.isNotBlank() }
+            ?: details.localDownload?.authorId?.takeIf { it.isNotBlank() }
 
     // 仅在线评论层接入下拉刷新，不重新加载播放器或视频详情。
     CommentList(
@@ -26,15 +36,15 @@ fun VideoCommentPage(vm: VideoVM) {
         onPageChange = vm::jumpCommentPage,
         onPush = { vm.pushComment(it) },
         onBack = { vm.popComment() },
-        canPostReply =
-            !vm.state.isLocalFallback && !vm.state.isOnlineRemoved && vm.state.video != null,
+        canPostReply = canInteractOnline,
         onPostReply = vm::postComment,
         onEditComment = vm::editComment,
         onDeleteComment = vm::deleteComment,
-        isLocalFallback = vm.state.isLocalFallback,
+        isLocalFallback = isLocalFallback,
         videoAuthorId = videoAuthorId,
+        canExpandPlayer = canExpandPlayer,
         onRefresh =
-            if (!vm.state.isLocalFallback && !vm.state.isOnlineRemoved && vm.state.video != null) {
+            if (canInteractOnline) {
                 { vm.loadComments(refresh = true)?.await() ?: RefreshResult.Ignored }
             } else null,
     )

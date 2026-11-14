@@ -22,11 +22,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.runBlocking
 import me.rerere.awara.data.cdn.CdnDirectory
 import me.rerere.awara.data.cdn.CdnFailureAction
 import me.rerere.awara.data.cdn.CdnPolicy
 import me.rerere.awara.data.cdn.parseContentRange
+import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import okhttp3.Call
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -34,6 +35,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+
+/** 共享的媒体流传输与后台探测 OkHttpClient 组合。 */
+internal data class PlaybackHttpClients(
+    val mediaClient: OkHttpClient,
+    val probeClient: OkHttpClient,
+)
 
 /**
  * 缓冲感知单路多 CDN 播放数据源。
@@ -46,22 +53,28 @@ import okhttp3.Response
  * 4. 连续偏移续读：失败或主动换源时精确根据已返回字节数构造 Range 头部继续读取，严禁以 200 OK 跳字节伪造续读，避免引发播放器内核重建与清空缓冲；
  * 5. 跨线程即时取消：尊重播放器销毁与 Seek 中断，close 可安全跨线程中断所有正在阻塞的媒体 Call 与后台 Probe。
  *
- * @param client 用于衍生流媒体传输定制连接配置的基础 OkHttpClient
+ * @param mediaClient 控制器共享的媒体流长连接 OkHttpClient
+ * @param probeClient 控制器共享的后台探测轻量 OkHttpClient
  * @param directory Iwara 多 CDN 节点目录管理器
  * @param sessionProvider 会话上下文检索与创建函数
- * @param refreshSource 签名失效 (403) 时的单一异步刷新回调
+ * @param sourceRefresher 统一的 401/403 单次签名刷新协调器
+ * @param refreshScopeRunner 控制异步刷新执行归属作用域的挂起调度桥接函数
  * @param defaultHttpDataSourceFactory 非可信或非 /view 请求的兜底标准数据源工厂
  * @param trustedHostPredicate 受控可信主机判定谓词
  * @param now 提供当前时间戳（毫秒）的函数
  * @param coroutineScope 后台异步探测协程作用域
  * @param onDataSourceClosed 数据源关闭时的生命周期注销回调
  * @param urlResolver 网络传输层 URL 解析器，支持单元测试注入映射，生产默认使用原始 URL
+ * @param onOpening 数据源进入 open 时触发的活跃登记回调
+ * @param connectionTracker CDN 活跃连接与可用节点追踪器
  */
 internal class PlaybackCdnDataSource(
-    private val client: OkHttpClient,
+    private val mediaClient: OkHttpClient,
+    private val probeClient: OkHttpClient,
     private val directory: CdnDirectory,
     private val sessionProvider: (HttpUrl) -> PlaybackCdnSession,
-    private val refreshSource: suspend (String) -> String?,
+    private val sourceRefresher: PlaybackSourceRefresher,
+    private val refreshScopeRunner: suspend (suspend () -> String?) -> String? = { it() },
     private val defaultHttpDataSourceFactory: DataSource.Factory,
     private val trustedHostPredicate: (String) -> Boolean,
     private val now: () -> Long,
@@ -69,47 +82,11 @@ internal class PlaybackCdnDataSource(
     private val onDataSourceClosed: (PlaybackCdnDataSource) -> Unit,
     private val urlResolver: (HttpUrl) -> HttpUrl = { it },
     private val onOpening: (PlaybackCdnDataSource, DataSpec) -> Unit = { _, _ -> },
-    private val connectionTracker: me.rerere.awara.data.diagnostics.CdnConnectionTracker? = null,
+    private val connectionTracker: CdnConnectionTracker? = null,
 ) : BaseDataSource(/* isNetwork= */ true), PlaybackReadModeAware {
 
     /** 由网络预读包装器标记的主动限速，不计入节点吞吐或慢源检测。 */
     @Volatile override var isKeepAliveRead: Boolean = false
-
-    /** 定制的媒体流长连接 OkHttpClient，清除拦截器与 CookieJar 防凭据泄露，读超时设置为 15 秒 */
-    private val mediaClient: OkHttpClient =
-        client
-            .newBuilder()
-            .apply {
-                interceptors().clear()
-                networkInterceptors().clear()
-                cookieJar(CookieJar.NO_COOKIES)
-            }
-            .callTimeout(0, TimeUnit.MILLISECONDS)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(PlaybackCdnPolicy.READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .retryOnConnectionFailure(false)
-            .build()
-
-    /** 后台探测专属轻量 OkHttpClient，清除拦截器与 CookieJar，配置 3 秒严格超时与独立超时控制 */
-    private val probeClient: OkHttpClient =
-        client
-            .newBuilder()
-            .apply {
-                interceptors().clear()
-                networkInterceptors().clear()
-                cookieJar(CookieJar.NO_COOKIES)
-            }
-            .callTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .connectTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .readTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .writeTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .retryOnConnectionFailure(false)
-            .build()
 
     /** 非可信地址或非 /view 请求的兜底委托数据源 */
     private var fallbackDataSource: DataSource? = null
@@ -163,6 +140,7 @@ internal class PlaybackCdnDataSource(
     /** 当前响应返回的头信息字典 */
     private var responseHeaders: Map<String, List<String>> = emptyMap()
 
+    /** 打开媒体资源数据源；若期间发生异常，自动关闭并从控制器注销。 */
     override fun open(dataSpec: DataSpec): Long {
         // 重置实例级状态，确保同 DataSource 实例在 close 后再次 open 时干净重置
         isClosed.set(false)
@@ -181,54 +159,59 @@ internal class PlaybackCdnDataSource(
         currentUri = dataSpec.uri
         responseHeaders = emptyMap()
 
-        transferInitializing(dataSpec)
-        openedDataSpec = dataSpec
-        onOpening(this, dataSpec)
+        try {
+            transferInitializing(dataSpec)
+            openedDataSpec = dataSpec
+            onOpening(this, dataSpec)
 
-        val rawUrl = dataSpec.uri?.toString().orEmpty().ifBlank { dataSpec.key.orEmpty() }
-        val parsedHttpUrl = rawUrl.toHttpUrlOrNull()
+            val rawUrl = dataSpec.uri?.toString().orEmpty().ifBlank { dataSpec.key.orEmpty() }
+            val parsedHttpUrl = rawUrl.toHttpUrlOrNull()
 
-        // 1. 安全分流：非标准 HTTPS、非 443 默认端口、非可信域名或非单层 /view，直接走兜底
-        if (
-            parsedHttpUrl == null ||
-                !PlaybackResourceKey.isTrustedPlaybackViewUrl(parsedHttpUrl, trustedHostPredicate)
-        ) {
-            val fallback = defaultHttpDataSourceFactory.createDataSource()
-            fallbackDataSource = fallback
-            val openResult = fallback.open(dataSpec)
-            currentUri = fallback.uri ?: dataSpec.uri
-            responseHeaders = fallback.responseHeaders
+            // 1. 安全分流：非标准 HTTPS、非 443 默认端口、非可信域名或非单层 /view，直接走兜底
+            if (
+                parsedHttpUrl == null ||
+                    !PlaybackResourceKey.isTrustedPlaybackViewUrl(parsedHttpUrl, trustedHostPredicate)
+            ) {
+                val fallback = defaultHttpDataSourceFactory.createDataSource()
+                fallbackDataSource = fallback
+                val openResult = fallback.open(dataSpec)
+                currentUri = fallback.uri ?: dataSpec.uri
+                responseHeaders = fallback.responseHeaders
+                transferStarted(dataSpec)
+                isOpened = true
+                return openResult
+            }
+
+            // 2. 属于可信 /view，获取或创建共享会话并同步外部手动刷新后的新签名 URL
+            val session = sessionProvider(parsedHttpUrl)
+            session.syncExternalUrlIfChanged(parsedHttpUrl)
+            currentSession = session
+            currentPosition = dataSpec.position
+            bytesRemaining = dataSpec.length
+
+            // 3. 首次主源优先起播；后续定位重开复用会话的验证与吞吐，不固定回到原始节点
+            val resolvedLength =
+                connectWithRetry(
+                    session = session,
+                    targetHost = session.selectOpeningHost(now()),
+                    position = currentPosition,
+                    length = bytesRemaining,
+                    dataSpec = dataSpec,
+                )
+
             transferStarted(dataSpec)
             isOpened = true
-            return openResult
+
+            // 4. 起播成功后，若满足多 CDN 候选验证条件，启动后台单路探测协程
+            if (session.allowsCrossCdn()) {
+                startBackgroundProbeIfEligible(session)
+            }
+
+            return resolvedLength
+        } catch (t: Throwable) {
+            close()
+            throw t
         }
-
-        // 2. 属于可信 /view，获取或创建共享会话
-        val session = sessionProvider(parsedHttpUrl)
-        currentSession = session
-        currentPosition = dataSpec.position
-        bytesRemaining = dataSpec.length
-
-        // 3. 首次主源优先起播；后续定位重开复用会话的验证与吞吐，不固定回到原始节点。
-        val resolvedLength =
-            connectWithRetry(
-                session = session,
-                targetHost = session.selectOpeningHost(now()),
-                position = currentPosition,
-                length = bytesRemaining,
-                dataSpec = dataSpec,
-                isInitialOpen = true,
-            )
-
-        transferStarted(dataSpec)
-        isOpened = true
-
-        // 4. 起播成功后，若满足多 CDN 候选验证条件，启动后台单路探测协程
-        if (session.allowsCrossCdn) {
-            startBackgroundProbeIfEligible(session)
-        }
-
-        return resolvedLength
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -322,12 +305,13 @@ internal class PlaybackCdnDataSource(
     override fun getResponseHeaders(): Map<String, List<String>> =
         fallbackDataSource?.responseHeaders ?: responseHeaders
 
+    /** 关闭数据源并注销生命周期登记，不取消可能仍在后台运行的多源探测。 */
     override fun close() {
         if (isClosed.compareAndSet(false, true)) {
             synchronized(this) { connectionTracker?.unregister(this) }
             onDataSourceClosed(this)
 
-            // 本次媒体流结束不取消会话探测，退出视频与换网由控制器统一取消。
+            // 本次媒体流结束不取消会话探测，退出视频与换网由控制器统一取消
             fallbackDataSource?.let {
                 try {
                     it.close()
@@ -335,21 +319,7 @@ internal class PlaybackCdnDataSource(
                 fallbackDataSource = null
             }
 
-            // 跨线程取消底层网络 Call 与输入流
-            try {
-                activeCall?.cancel()
-            } catch (_: Exception) {}
-            activeCall = null
-
-            try {
-                currentInputStream?.close()
-            } catch (_: Exception) {}
-            currentInputStream = null
-
-            try {
-                currentResponse?.close()
-            } catch (_: Exception) {}
-            currentResponse = null
+            closeActiveNetworkHandles()
 
             if (isOpened) {
                 transferEnded()
@@ -366,7 +336,7 @@ internal class PlaybackCdnDataSource(
     /** 网络变化只重验候选，不重建媒体或清空已缓冲数据。 */
     fun revalidateSources() {
         val session = currentSession ?: return
-        if (!isClosed.get() && session.allowsCrossCdn) startBackgroundProbeIfEligible(session)
+        if (!isClosed.get() && session.allowsCrossCdn()) startBackgroundProbeIfEligible(session)
     }
 
     /** 建立底层 HTTP 连接并完成严格协议与响应校验。 */
@@ -376,22 +346,13 @@ internal class PlaybackCdnDataSource(
         position: Long,
         length: Long,
         dataSpec: DataSpec,
-        isInitialOpen: Boolean,
     ): Long {
+        val snapshot = session.prepareConnection(targetHost)
         val isCrossHost = targetHost != session.initialHost
-        val connectionGeneration = session.networkGeneration.get()
-        // 跨主机镜像节点准入检查：必须指纹全部就绪且已被列入已验证备选节点列表，严禁未经采样验证跨源连接
-        if (isCrossHost) {
-            if (!session.isFingerprintReady.get() || !session.backupNodes.contains(targetHost)) {
-                throw IOException("目标主机 $targetHost 尚未通过样本指纹验证或不在备选列表中，严禁跨源连接")
-            }
-        }
-
-        val targetUrl = CdnPolicy.candidateUrl(session.currentUrl, targetHost, "/view")
+        val targetUrl = CdnPolicy.candidateUrl(snapshot.targetUrl, targetHost, "/view")
         val networkUrl = urlResolver(targetUrl)
         val requestBuilder = Request.Builder().url(networkUrl).get()
 
-        // 构造精确 Range 头部
         val rangeHeader =
             if (length != C.LENGTH_UNSET.toLong()) {
                 "bytes=$position-${position + length - 1}"
@@ -399,17 +360,16 @@ internal class PlaybackCdnDataSource(
                 "bytes=$position-"
             }
         requestBuilder.header("Range", rangeHeader)
-
         // 强制 identity 编码，杜绝任何 gzip/deflate 压缩引发的字节偏移错乱
         requestBuilder.header("Accept-Encoding", "identity")
 
         // 仅当该 host 自己此前已记录过强 ETag 时，才允许携带 If-Range；跨源新节点严禁携带旧主机的 ETag
-        val hostRecordedEtag = session.etagByHost[targetHost]
+        val hostRecordedEtag = snapshot.recordedEtag
         if (hostRecordedEtag != null && CdnPolicy.isStrongValidator(hostRecordedEtag)) {
             requestBuilder.header("If-Range", hostRecordedEtag)
         }
 
-        // 清除跨 host 继承的敏感与冲突头（清除 Range / Host / Authorization / Cookie / If-Range / Accept-Encoding）
+        // 清除跨 host 继承的敏感与冲突头
         val disallowedHeaders =
             setOf("range", "host", "authorization", "cookie", "if-range", "accept-encoding")
         for ((key, value) in dataSpec.httpRequestHeaders) {
@@ -438,130 +398,51 @@ internal class PlaybackCdnDataSource(
         var streamAcquired = false
         try {
             val code = response.code
-            if (code == 401 || code == 403) {
-                val action = CdnPolicy.failureAction(code)
-                if (
-                    action == CdnFailureAction.REFRESH_SIGNATURE && !session.hasRefreshedSignature
-                ) {
-                    response.close()
-                    val refreshedUrl = runBlockingCatching { refreshSignature(session) }
-                    if (refreshedUrl != null) {
-                        return connect(
-                            session,
-                            targetHost,
-                            position,
-                            length,
-                            dataSpec,
-                            isInitialOpen,
-                        )
-                    }
-                }
-                throw HttpDataSource.InvalidResponseCodeException(
-                    code,
-                    response.message,
-                    null,
-                    response.headers.toMultimap(),
-                    dataSpec,
-                    byteArrayOf(),
-                )
-            }
-
-            if (code == 404 || code == 410) {
-                session.retireHost(targetHost)
-                throw HttpDataSource.InvalidResponseCodeException(
-                    code,
-                    response.message,
-                    null,
-                    response.headers.toMultimap(),
-                    dataSpec,
-                    byteArrayOf(),
-                )
-            }
-
-            if (code == 429) {
-                session.setCooldown(targetHost, 5000L, now())
-                throw HttpDataSource.InvalidResponseCodeException(
-                    code,
-                    response.message,
-                    null,
-                    response.headers.toMultimap(),
-                    dataSpec,
-                    byteArrayOf(),
-                )
-            }
-
             if (code !in 200..299) {
-                throw HttpDataSource.InvalidResponseCodeException(
-                    code,
-                    response.message,
-                    null,
-                    response.headers.toMultimap(),
-                    dataSpec,
-                    byteArrayOf(),
+                return handleHttpFailureCode(
+                    session = session,
+                    targetHost = targetHost,
+                    position = position,
+                    length = length,
+                    dataSpec = dataSpec,
+                    snapshot = snapshot,
+                    response = response,
+                    code = code,
                 )
             }
 
-            // 校验 200 OK 场景
             if (code == 200) {
-                // 跨主机镜像节点严禁 200 偷换响应
-                if (isCrossHost) {
-                    session.retireHost(targetHost)
-                    throw IOException("备选镜像节点 $targetHost 返回 200 OK，属于非法偷换行为")
-                }
-
                 // 普通源仅允许在 offset 0 时接受 200 OK，严禁跳字节续读
                 if (position > 0L) {
                     throw IOException("服务端对偏移 $position 返回 200 OK，严禁跳字节续读")
                 }
-
                 val encoding = response.header("Content-Encoding")
                 if (!encoding.isNullOrBlank() && !encoding.equals("identity", true)) {
                     throw IOException("媒体响应不允许压缩编码")
                 }
-                val recordedEtag = session.etagByHost[targetHost]
-                if (recordedEtag != null && recordedEtag != response.header("ETag")) {
-                    throw IOException("节点校验器变化，拒绝复用旧媒体内容")
-                }
-
-                // 普通 200 源可播但彻底禁止后续跨 CDN 镜像与分流
-                session.supportsRange = false
-                session.allowsCrossCdn = false
-
-                currentResponse?.close()
-                currentResponse = response
-                currentHost = targetHost
-                currentInputStream = response.body?.byteStream() ?: throw IOException("响应体为空")
-                responseHeaders = response.headers.toMultimap()
-
+                session.recordHttp200Response(
+                    targetHost = targetHost,
+                    generation = snapshot.generation,
+                    observedEtag = response.header("ETag"),
+                )
                 val contentLength = response.body?.contentLength() ?: -1L
-                bytesRemaining = if (length != C.LENGTH_UNSET.toLong()) length else contentLength
+                val resolvedRemaining =
+                    if (length != C.LENGTH_UNSET.toLong()) length else contentLength
                 streamAcquired = true
-                session.recordMediaConnection(targetHost, connectionGeneration)
-                synchronized(this) {
-                    if (!isClosed.get() && bytesRemaining != 0L)
-                        connectionTracker?.register(this, targetHost)
-                }
-                return bytesRemaining
+                return acceptResponseStream(response, targetHost, resolvedRemaining)
             }
 
-            // 校验 206 Partial Content 场景
             if (code == 206) {
                 val contentRange = response.header("Content-Range")
                 val parsedRange =
                     parseContentRange(contentRange)
                         ?: throw IOException("非法的 Content-Range 响应头: $contentRange")
-
-                // 1. 起始偏移必须严格等于请求位置
                 if (parsedRange.start != position) {
                     throw IOException("Content-Range 起始字节不匹配: ${parsedRange.start} != $position")
                 }
-
-                // 2. 总长度必须确切已知（total > 0L）
                 val parsedTotal =
                     parsedRange.total?.takeIf { it > 0L }
                         ?: throw IOException("Content-Range 总长度未知或非法: $contentRange")
-
-                // 3. 严格核对 end 为 min(requestEnd, total - 1)
                 val expectedEnd =
                     if (length != C.LENGTH_UNSET.toLong()) {
                         minOf(position + length - 1, parsedTotal - 1)
@@ -574,17 +455,6 @@ internal class PlaybackCdnDataSource(
                     )
                 }
 
-                // 4. 严格校验 total 与 session.totalBytes
-                val sessionTotal = session.totalBytes
-                if (sessionTotal == null) {
-                    session.totalBytes = parsedTotal
-                } else if (parsedTotal != sessionTotal) {
-                    throw IOException(
-                        "节点 $targetHost 返回的文件总大小与主源不一致: $parsedTotal != $sessionTotal"
-                    )
-                }
-
-                // 5. 严格核对 body contentLength 与 rangeLen
                 val rangeLen = parsedRange.end - parsedRange.start + 1
                 val bodyContentLength = response.body?.contentLength() ?: -1L
                 if (bodyContentLength != -1L && bodyContentLength != rangeLen) {
@@ -593,60 +463,25 @@ internal class PlaybackCdnDataSource(
                     )
                 }
 
-                // 6. Content-Encoding 必须为 identity
                 val encoding = response.header("Content-Encoding")
                 val isIdentity =
                     encoding.isNullOrBlank() || encoding.equals("identity", ignoreCase = true)
-                if (!isIdentity) {
-                    session.allowsCrossCdn = false
-                    throw IOException("节点 $targetHost 返回了非 identity 编码: $encoding")
-                }
-
-                // 7. 强 ETag 核对：强 ETag 变更拒绝，不可覆盖旧 ETag 无校验
                 val rawEtag = response.header("ETag")
                 val isStrong = CdnPolicy.isStrongValidator(rawEtag)
-                val recordedEtag = session.etagByHost[targetHost]
+                session.recordHttp206Response(
+                    targetHost = targetHost,
+                    generation = snapshot.generation,
+                    parsedTotal = parsedTotal,
+                    isIdentity = isIdentity,
+                    encoding = encoding,
+                    rawEtag = rawEtag,
+                    isStrongEtag = isStrong,
+                )
 
-                if (recordedEtag != null) {
-                    if (rawEtag == null || !isStrong || rawEtag != recordedEtag) {
-                        throw IOException(
-                            "节点 $targetHost 强 ETag 发生变更或失效: $rawEtag != $recordedEtag"
-                        )
-                    }
-                } else {
-                    if (isStrong && rawEtag != null) {
-                        session.etagByHost[targetHost] = rawEtag
-                    } else {
-                        // 主源若无强 ETag，允许普通播放但禁止跨 CDN 镜像
-                        if (!isCrossHost) {
-                            session.allowsCrossCdn = false
-                        } else {
-                            throw IOException("备选镜像节点 $targetHost 未返回强 ETag")
-                        }
-                    }
-                }
-
-                if (!isCrossHost) {
-                    session.supportsRange = true
-                    // 主源同时满足已知总长、identity 编码与强 ETag 时才允许跨 CDN 镜像
-                    session.allowsCrossCdn = session.totalBytes != null && isIdentity && isStrong
-                }
-
-                currentResponse?.close()
-                currentResponse = response
-                currentHost = targetHost
-                currentInputStream = response.body?.byteStream() ?: throw IOException("响应体为空")
-                responseHeaders = response.headers.toMultimap()
-
-                bytesRemaining =
+                val resolvedRemaining =
                     if (length != C.LENGTH_UNSET.toLong()) minOf(length, rangeLen) else rangeLen
                 streamAcquired = true
-                session.recordMediaConnection(targetHost, connectionGeneration)
-                synchronized(this) {
-                    if (!isClosed.get() && bytesRemaining != 0L)
-                        connectionTracker?.register(this, targetHost)
-                }
-                return bytesRemaining
+                return acceptResponseStream(response, targetHost, resolvedRemaining)
             }
 
             throw IOException("不支持的 HTTP 响应状态码: $code")
@@ -661,6 +496,98 @@ internal class PlaybackCdnDataSource(
         }
     }
 
+    /** 由 [CdnPolicy.failureAction] 统一驱动非 2xx 响应的刷新、节点退役、冷却或终止动作。 */
+    private fun handleHttpFailureCode(
+        session: PlaybackCdnSession,
+        targetHost: String,
+        position: Long,
+        length: Long,
+        dataSpec: DataSpec,
+        snapshot: PlaybackCdnSession.ConnectionSnapshot,
+        response: Response,
+        code: Int,
+    ): Long {
+        when (CdnPolicy.failureAction(code)) {
+            CdnFailureAction.REFRESH_SIGNATURE -> {
+                val refreshedUrl =
+                    try {
+                        runBlocking {
+                            refreshScopeRunner {
+                                sourceRefresher.refreshAutoOnce(
+                                    currentUrl = snapshot.targetUrl.toString(),
+                                    expectedResourceKey = session.resourceKey,
+                                    validateResourceKey = true,
+                                )
+                            }
+                        }
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw InterruptedIOException("签名刷新被中断").apply { initCause(e) }
+                    }
+                val newHttpUrl = refreshedUrl?.toHttpUrlOrNull()
+                if (newHttpUrl != null) {
+                    session.updateRefreshedUrl(newHttpUrl)
+                    response.close()
+                    return connect(
+                        session = session,
+                        targetHost = targetHost,
+                        position = position,
+                        length = length,
+                        dataSpec = dataSpec,
+                    )
+                }
+                throw invalidResponseException(code, response, dataSpec)
+            }
+            CdnFailureAction.RETIRE_FILE_NODE -> {
+                session.retireHost(targetHost)
+                throw invalidResponseException(code, response, dataSpec)
+            }
+            CdnFailureAction.COOLDOWN -> {
+                session.setCooldown(targetHost, 5000L, now())
+                throw invalidResponseException(code, response, dataSpec)
+            }
+            CdnFailureAction.TRY_ANOTHER,
+            CdnFailureAction.FAIL -> {
+                throw invalidResponseException(code, response, dataSpec)
+            }
+        }
+    }
+
+    /** 记录已验证通过的 HTTP 媒体响应流并向连接追踪器登记活跃主机。 */
+    private fun acceptResponseStream(
+        response: Response,
+        targetHost: String,
+        resolvedRemaining: Long,
+    ): Long {
+        currentResponse?.close()
+        currentResponse = response
+        currentHost = targetHost
+        currentInputStream = response.body?.byteStream() ?: throw IOException("响应体为空")
+        responseHeaders = response.headers.toMultimap()
+        bytesRemaining = resolvedRemaining
+        synchronized(this) {
+            if (!isClosed.get() && bytesRemaining != 0L) {
+                connectionTracker?.register(this, targetHost)
+            }
+        }
+        return bytesRemaining
+    }
+
+    /** 构造符合 Media3 规范的 HTTP 响应码异常。 */
+    private fun invalidResponseException(
+        code: Int,
+        response: Response,
+        dataSpec: DataSpec,
+    ): HttpDataSource.InvalidResponseCodeException =
+        HttpDataSource.InvalidResponseCodeException(
+            code,
+            response.message,
+            null,
+            response.headers.toMultimap(),
+            dataSpec,
+            byteArrayOf(),
+        )
+
     /** 带有限故障重试与跨源切换的连接尝试。 */
     private fun connectWithRetry(
         session: PlaybackCdnSession,
@@ -668,56 +595,40 @@ internal class PlaybackCdnDataSource(
         position: Long,
         length: Long,
         dataSpec: DataSpec,
-        isInitialOpen: Boolean,
     ): Long {
         var currentAttemptHost = targetHost
         while (!isClosed.get()) {
             try {
                 return connect(
-                    session,
-                    currentAttemptHost,
-                    position,
-                    length,
-                    dataSpec,
-                    isInitialOpen,
+                    session = session,
+                    targetHost = currentAttemptHost,
+                    position = position,
+                    length = length,
+                    dataSpec = dataSpec,
                 )
             } catch (e: Exception) {
                 if (isClosed.get() || isCancellationException(e)) {
                     throw (e as? IOException ?: IOException(e))
                 }
-
-                // 401/403 签名失效属于全会话凭据问题，严禁对其他备选节点重复重试
-                if (
-                    e is HttpDataSource.InvalidResponseCodeException &&
-                        (e.responseCode == 401 || e.responseCode == 403)
-                ) {
+                if (isNonSwitchableHttpFailure(e)) {
                     throw e
                 }
-
-                if (session.failureCount.incrementAndGet() > CdnPolicy.MAX_FAILURES) {
+                if (!session.recordFailureWithinBudget()) {
                     throw (e as? IOException ?: IOException("会话级累计错误超限", e))
                 }
 
-                // 重开可能首选镜像，故障回退必须同时考虑仍可用的主源与其他已验证备选。
-                if (session.allowsCrossCdn) {
-                    val nextHost =
-                        (listOf(session.initialHost) + session.backupNodes).distinct().firstOrNull {
-                            it != currentAttemptHost && session.isHostAvailable(it, now())
-                        }
-                    if (nextHost != null) {
-                        if (
-                            session.switchCount.incrementAndGet() >
-                                PlaybackCdnPolicy.MAX_SWITCH_COUNT
-                        ) {
-                            throw (e as? IOException ?: IOException("会话换源次数已达上限", e))
-                        }
-                        session.lastSwitchTimestamp = now()
-                        currentAttemptHost = nextHost
+                when (val retryDecision = session.selectInitialRetryHost(currentAttemptHost, now())) {
+                    is PlaybackCdnSession.InitialRetryDecision.SwitchTo -> {
+                        currentAttemptHost = retryDecision.host
                         continue
                     }
+                    PlaybackCdnSession.InitialRetryDecision.BudgetExhausted -> {
+                        throw (e as? IOException ?: IOException("会话换源次数已达上限", e))
+                    }
+                    PlaybackCdnSession.InitialRetryDecision.NoAlternative -> {
+                        throw (e as? IOException ?: IOException("连接失败且无可用备选节点", e))
+                    }
                 }
-
-                throw (e as? IOException ?: IOException("连接失败且无可用备选节点", e))
             }
         }
         throw IOException("连接被关闭")
@@ -738,110 +649,84 @@ internal class PlaybackCdnDataSource(
     ): Boolean {
         if (isClosed.get()) return false
 
-        // 1. 预算与换源上限检查
         if (!isProactiveSwitch) {
-            if (session.failureCount.incrementAndGet() > CdnPolicy.MAX_FAILURES) {
-                return false
-            }
-            if (++segmentRetryCount > PlaybackCdnPolicy.MAX_READ_SEGMENT_RETRIES) {
-                return false
-            }
-            // 401/403 签名失效在刷新失败后直接拒绝，严禁静默重连
-            if (
-                cause is HttpDataSource.InvalidResponseCodeException &&
-                    (cause.responseCode == 401 || cause.responseCode == 403)
-            ) {
-                return false
-            }
-        } else {
-            // 主动换源上限与冷却检查：硬上限受 MAX_SWITCH_COUNT 约束
-            if (session.switchCount.get() >= PlaybackCdnPolicy.MAX_SWITCH_COUNT) {
-                return false
-            }
-            val timeSinceLast = now() - session.lastSwitchTimestamp
-            if (
-                session.lastSwitchTimestamp > 0L &&
-                    timeSinceLast < PlaybackCdnPolicy.SWITCH_COOLDOWN_MS
-            ) {
-                return false
-            }
+            if (!session.recordFailureWithinBudget()) return false
+            if (++segmentRetryCount > PlaybackCdnPolicy.MAX_READ_SEGMENT_RETRIES) return false
+            if (isNonSwitchableHttpFailure(cause)) return false
         }
 
         val spec = openedDataSpec ?: return false
-
-        // 2. 若不允许跨源，仅能尝试在当前主机从断点重连
-        if (!session.allowsCrossCdn) {
-            if (isProactiveSwitch) return false
-            val host = currentHost ?: return false
-            // 若为无 ETag 源，断点重连无法确保数据一致性，直接报错交由标准播放器处理，不拼旧数据
-            if (currentPosition > 0L && session.etagByHost[host] == null) {
-                return false
-            }
-
-            return try {
-                closeCurrentStream()
-                connect(session, host, currentPosition, bytesRemaining, spec, false)
-                true
-            } catch (e: Exception) {
-                if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
-                if (cause != null && cause !== e) cause.addSuppressed(e)
-                false
-            }
-        }
-
-        // 3. 允许跨源，寻找已完成抽样验证的可用备选节点
-        val availableBackups =
-            (listOf(session.initialHost) + session.backupNodes).distinct().filter { candidate ->
-                candidate != currentHost && session.isHostAvailable(candidate, now())
-            }
-
-        if (
-            availableBackups.isNotEmpty() &&
-                session.switchCount.get() < PlaybackCdnPolicy.MAX_SWITCH_COUNT
+        return when (
+            val plan =
+                session.beginRecoveryOrSwitch(
+                    currentHost = currentHost,
+                    currentPosition = currentPosition,
+                    now = now(),
+                    isProactiveSwitch = isProactiveSwitch,
+                )
         ) {
-            val chosenHost =
-                availableBackups.maxByOrNull { session.hostThroughputEwma[it] ?: 0.0 }
-                    ?: availableBackups.first()
-
-            return try {
-                session.switchCount.incrementAndGet()
-                closeCurrentStream()
-                connect(session, chosenHost, currentPosition, bytesRemaining, spec, false)
-                session.lastSwitchTimestamp = now()
-                segmentRetryCount = 0
-                true
-            } catch (e: Exception) {
-                if (isClosed.get() || isCancellationException(e)) {
-                    if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
-                    return false
+            is PlaybackCdnSession.RecoveryPlan.SwitchTo -> {
+                try {
+                    closeCurrentStream()
+                    connect(
+                        session = session,
+                        targetHost = plan.host,
+                        position = currentPosition,
+                        length = bytesRemaining,
+                        dataSpec = spec,
+                    )
+                    session.markSwitchCompleted(now())
+                    segmentRetryCount = 0
+                    true
+                } catch (e: Exception) {
+                    if (isClosed.get() || isCancellationException(e)) {
+                        if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
+                        return false
+                    }
+                    session.retireHost(plan.host)
+                    trySwitchOrRecover(session, e, false)
                 }
-                session.retireHost(chosenHost)
-                trySwitchOrRecover(session, e, false)
             }
+            is PlaybackCdnSession.RecoveryPlan.ReconnectSame -> {
+                try {
+                    closeCurrentStream()
+                    connect(
+                        session = session,
+                        targetHost = plan.host,
+                        position = currentPosition,
+                        length = bytesRemaining,
+                        dataSpec = spec,
+                    )
+                    true
+                } catch (e: Exception) {
+                    if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
+                    if (cause != null && cause !== e) cause.addSuppressed(e)
+                    false
+                }
+            }
+            PlaybackCdnSession.RecoveryPlan.None -> false
         }
+    }
 
-        // 4. 若无备选节点可用，主动换源直接放弃（避免重连风暴）；故障时尝试在当前主机断点重连
-        if (isProactiveSwitch) return false
-
-        val current = currentHost ?: return false
-        if (currentPosition > 0L && session.etagByHost[current] == null) {
-            return false
-        }
-
-        return try {
-            closeCurrentStream()
-            connect(session, current, currentPosition, bytesRemaining, spec, false)
-            true
-        } catch (e: Exception) {
-            if (isCancellationException(e)) throw (e as? IOException ?: IOException(e))
-            if (cause != null && cause !== e) cause.addSuppressed(e)
-            false
+    /** 根据 [CdnPolicy.failureAction] 判断异常是否为禁止跨节点重试的全局/致命 HTTP 错误。 */
+    private fun isNonSwitchableHttpFailure(e: Throwable?): Boolean {
+        val responseError = e as? HttpDataSource.InvalidResponseCodeException ?: return false
+        return when (CdnPolicy.failureAction(responseError.responseCode)) {
+            CdnFailureAction.REFRESH_SIGNATURE,
+            CdnFailureAction.FAIL -> true
+            CdnFailureAction.RETIRE_FILE_NODE,
+            CdnFailureAction.COOLDOWN,
+            CdnFailureAction.TRY_ANOTHER -> false
         }
     }
 
     /** 安全关闭并清理当前连接流。 */
     private fun closeCurrentStream() {
         synchronized(this) { connectionTracker?.unregister(this) }
+        closeActiveNetworkHandles()
+    }
+
+    private fun closeActiveNetworkHandles() {
         try {
             activeCall?.cancel()
         } catch (_: Exception) {}
@@ -858,191 +743,111 @@ internal class PlaybackCdnDataSource(
         currentResponse = null
     }
 
-    /** 触发 403 签名刷新流程。由会话互斥锁严格保证整个生命周期仅执行一次刷新。 */
-    private suspend fun refreshSignature(session: PlaybackCdnSession): HttpUrl? {
-        return session.refreshMutex.withLock {
-            if (session.hasRefreshedSignature) {
-                return@withLock null
-            }
-
-            // 失败回调也计一次刷新预算，严禁无限递归重试
-            session.hasRefreshedSignature = true
-
-            val oldUrlString = session.currentUrl.toString()
-            val newUrlString =
-                try {
-                    refreshSource(oldUrlString)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                }
-
-            if (newUrlString.isNullOrBlank()) {
-                return@withLock null
-            }
-
-            val newHttpUrl = newUrlString.toHttpUrlOrNull() ?: return@withLock null
-            val newKey = playbackResourceKey(newHttpUrl, trustedHostPredicate)
-
-            // 严格校验刷新出的资源标识是否与当前会话一致，不一致则拒绝
-            if (newKey != session.resourceKey) {
-                return@withLock null
-            }
-
-            session.currentUrl = newHttpUrl
-            session.currentUrl
-        }
-    }
-
     private data class SampleResult(val etag: String, val sha256: String)
 
-    /** 当主源具备跨源条件时，启动后台单路探测协程。 */
+    /** 当主源具备跨源条件时，通过会话状态锁原子启动后台单路探测协程。 */
     private fun startBackgroundProbeIfEligible(session: PlaybackCdnSession) {
-        synchronized(session) {
-            val existingJob = session.probeJob
-            if (existingJob != null && existingJob.isActive) {
-                return
-            }
-            if (
-                session.isFingerprintReady.get() &&
-                    session.backupNodes.size >= PlaybackCdnPolicy.MAX_BACKUP_NODES
-            ) {
-                return
-            }
+        session.startProbeIfNeeded { generation ->
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val primaryTask = session.primarySampleTask(generation)
+                    val sampleRanges: List<LongRange>
+                    val totalBytes: Long
+                    if (primaryTask != null) {
+                        totalBytes = primaryTask.totalBytes
+                        sampleRanges = CdnPolicy.sampleRanges(totalBytes)
+                        val tempFingerprints = mutableMapOf<Int, String>()
+                        for ((index, range) in sampleRanges.withIndex()) {
+                            val sample =
+                                fetchSample(
+                                    url = primaryTask.primaryUrl,
+                                    range = range,
+                                    session = session,
+                                    expectedTotal = totalBytes,
+                                    generation = generation,
+                                ) ?: return@launch
+                            if (sample.etag != primaryTask.primaryEtag) {
+                                return@launch
+                            }
+                            tempFingerprints[index] = sample.sha256
+                        }
+                        if (!session.commitPrimaryFingerprints(generation, tempFingerprints)) {
+                            return@launch
+                        }
+                    } else {
+                        val totals = session.discoveryTotalsAndUrl(generation) ?: return@launch
+                        totalBytes = totals.first
+                        sampleRanges = CdnPolicy.sampleRanges(totalBytes)
+                    }
 
-            val generation = session.networkGeneration.get()
-            session.probeJob =
-                coroutineScope.launch(Dispatchers.IO) {
-                    try {
-                        val total = session.totalBytes ?: return@launch
-                        val sampleRanges = CdnPolicy.sampleRanges(total)
-
-                        // 1. 若主源样本指纹尚未就绪，首先对主源采样开中尾指纹
-                        if (!session.isFingerprintReady.get()) {
-                            val initialHostEtag = session.etagByHost[session.initialHost]
+                    val candidates = directory.candidates(session.initialHost)
+                    for (candidateHost in candidates.take(CdnPolicy.MAX_CANDIDATES)) {
+                        val probeContext =
+                            session.candidateProbeContext(generation, candidateHost, now())
+                                ?: continue
+                        val observedEtag =
+                            probeCandidate(
+                                session = session,
+                                candidateHost = candidateHost,
+                                probeContext = probeContext,
+                                sampleRanges = sampleRanges,
+                                expectedTotal = totalBytes,
+                                generation = generation,
+                            )
+                        currentCoroutineContext().ensureActive()
+                        if (observedEtag != null) {
                             if (
-                                initialHostEtag == null ||
-                                    !CdnPolicy.isStrongValidator(initialHostEtag)
+                                !session.recordVerifiedBackup(
+                                    generation,
+                                    candidateHost,
+                                    observedEtag,
+                                )
                             ) {
                                 return@launch
                             }
-
-                            val tempFingerprints = mutableMapOf<Int, String>()
-                            for ((index, range) in sampleRanges.withIndex()) {
-                                val sample =
-                                    fetchSample(
-                                        session.currentUrl,
-                                        range,
-                                        session,
-                                        total,
-                                        generation,
-                                    ) ?: return@launch
-                                // 主源 ETag 期望在抽样期间保持不变且恒强
-                                if (sample.etag != initialHostEtag) {
-                                    return@launch
-                                }
-                                tempFingerprints[index] = sample.sha256
-                            }
-
-                            // 3 段全部通过，事务性写入主源指纹并标记就绪
-                            synchronized(session) {
-                                if (generation != session.networkGeneration.get()) return@launch
-                                for ((index, hash) in tempFingerprints) {
-                                    session.sampleFingerprints[index] = hash
-                                }
-                                session.isFingerprintReady.set(true)
-                                session.markVerifiedHost(session.initialHost, generation)
-                            }
                         }
-
-                        // 2. 从目录获取最多 6 个候选主机并逐个验证，已验证满 2 个时立即停止
-                        val candidates = directory.candidates(session.initialHost)
-                        for (candidateHost in candidates.take(CdnPolicy.MAX_CANDIDATES)) {
-                            if (session.backupNodes.size >= PlaybackCdnPolicy.MAX_BACKUP_NODES)
-                                break
-                            if (
-                                !session.trustedHostPredicate(candidateHost) ||
-                                    !session.isHostAvailable(candidateHost, now()) ||
-                                    candidateHost == session.initialHost
-                            ) {
-                                continue
-                            }
-
-                            val valid =
-                                probeCandidate(
-                                    session,
-                                    candidateHost,
-                                    sampleRanges,
-                                    total,
-                                    generation,
-                                )
-                            val probeContext = currentCoroutineContext()
-                            synchronized(session) {
-                                if (generation != session.networkGeneration.get()) return@launch
-                                probeContext.ensureActive()
-                                if (valid && !session.backupNodes.contains(candidateHost)) {
-                                    session.backupNodes.add(candidateHost)
-                                }
-                            }
-                        }
-                    } catch (_: CancellationException) {
-                        // 探测被正常取消
-                    } catch (_: IOException) {
-                        // 忽略后台探测中的网络异常，不影响前台播放
                     }
+                } catch (_: CancellationException) {
+                    // 探测被正常取消
+                } catch (_: IOException) {
+                    // 忽略后台探测中的网络异常，不影响前台播放
                 }
+            }
         }
     }
 
-    /** 对单一候选节点执行开中尾 3 段抽样验证。 */
+    /** 对单一候选节点执行开中尾 3 段抽样验证，成功返回该节点强 ETag，否则返回 null。 */
     private suspend fun probeCandidate(
         session: PlaybackCdnSession,
         candidateHost: String,
+        probeContext: PlaybackCdnSession.CandidateProbeContext,
         sampleRanges: List<LongRange>,
         expectedTotal: Long,
         generation: Int,
-    ): Boolean {
-        val candidateUrl = CdnPolicy.candidateUrl(session.currentUrl, candidateHost, "/view")
+    ): String? {
+        val candidateUrl = CdnPolicy.candidateUrl(probeContext.currentUrl, candidateHost, "/view")
         var observedEtag: String? = null
 
         for ((index, range) in sampleRanges.withIndex()) {
             val sample =
-                fetchSample(candidateUrl, range, session, expectedTotal, generation) ?: return false
+                fetchSample(candidateUrl, range, session, expectedTotal, generation)
+                    ?: return null
 
-            // 候选节点 3 段抽样返回的强 ETag 必须完全恒定
             if (observedEtag == null) {
                 observedEtag = sample.etag
             } else if (observedEtag != sample.etag) {
-                synchronized(session) {
-                    if (generation == session.networkGeneration.get()) {
-                        session.retireHost(candidateHost)
-                    }
-                }
-                return false
+                session.retireHostIfGeneration(candidateHost, generation)
+                return null
             }
 
-            // 比较抽样内容摘要与主源指纹
-            val expectedHash = session.sampleFingerprints[index]
+            val expectedHash = probeContext.fingerprints[index]
             if (sample.sha256 != expectedHash) {
-                synchronized(session) {
-                    if (generation == session.networkGeneration.get()) {
-                        session.retireHost(candidateHost)
-                    }
-                }
-                return false
+                session.retireHostIfGeneration(candidateHost, generation)
+                return null
             }
         }
 
-        val probeContext = currentCoroutineContext()
-        synchronized(session) {
-            if (generation != session.networkGeneration.get()) return false
-            probeContext.ensureActive()
-            if (observedEtag != null) {
-                session.etagByHost[candidateHost] = observedEtag
-            }
-        }
-        return true
+        return observedEtag
     }
 
     /** 从目标 URL 读取指定区间的数据并验证严格 Range、长度、EOF 与强 ETag。 */
@@ -1054,7 +859,7 @@ internal class PlaybackCdnDataSource(
         generation: Int,
     ): SampleResult? = coroutineScope {
         ensureActive()
-        if (generation != session.networkGeneration.get()) return@coroutineScope null
+        if (generation != session.currentNetworkGeneration()) return@coroutineScope null
         val networkUrl = urlResolver(url)
         val request =
             Request.Builder()
@@ -1064,8 +869,7 @@ internal class PlaybackCdnDataSource(
                 .build()
 
         val call = probeClient.newCall(request)
-        session.activeProbeCalls.add(call)
-        if (generation != session.networkGeneration.get()) call.cancel()
+        if (!session.registerProbeCall(generation, call)) return@coroutineScope null
         val cancellationWatcher =
             launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
@@ -1080,12 +884,8 @@ internal class PlaybackCdnDataSource(
             response.use { res ->
                 ensureActive()
                 val code = res.code
-                if (code == 404 || code == 410) {
-                    synchronized(session) {
-                        if (generation == session.networkGeneration.get()) {
-                            session.retireHost(url.host)
-                        }
-                    }
+                if (CdnPolicy.failureAction(code) == CdnFailureAction.RETIRE_FILE_NODE) {
+                    session.retireHostIfGeneration(url.host, generation)
                     return@coroutineScope null
                 }
                 if (code != 206) return@coroutineScope null
@@ -1131,7 +931,7 @@ internal class PlaybackCdnDataSource(
             null
         } finally {
             cancellationWatcher.cancel()
-            session.activeProbeCalls.remove(call)
+            session.unregisterProbeCall(call)
         }
     }
 
@@ -1154,14 +954,44 @@ internal class PlaybackCdnDataSource(
         return false
     }
 
-    /** 同步执行挂起操作（如签名刷新）；遇到协程取消时显式重抛，其余非致命异常返回 null。 */
-    private fun <T> runBlockingCatching(block: suspend () -> T): T? {
-        return try {
-            kotlinx.coroutines.runBlocking { block() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
+    companion object {
+        /** 基于基础 [OkHttpClient] 创建流媒体长连接与后台短超时探测两个共享传输客户端。 */
+        fun createHttpClients(baseClient: OkHttpClient): PlaybackHttpClients {
+            val mediaClient =
+                baseClient
+                    .newBuilder()
+                    .apply {
+                        interceptors().clear()
+                        networkInterceptors().clear()
+                        cookieJar(CookieJar.NO_COOKIES)
+                    }
+                    .callTimeout(0, TimeUnit.MILLISECONDS)
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(PlaybackCdnPolicy.READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .writeTimeout(10, TimeUnit.SECONDS)
+                    .followRedirects(false)
+                    .followSslRedirects(false)
+                    .retryOnConnectionFailure(false)
+                    .build()
+
+            val probeClient =
+                baseClient
+                    .newBuilder()
+                    .apply {
+                        interceptors().clear()
+                        networkInterceptors().clear()
+                        cookieJar(CookieJar.NO_COOKIES)
+                    }
+                    .callTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .connectTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .readTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .writeTimeout(PlaybackCdnPolicy.PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .followRedirects(false)
+                    .followSslRedirects(false)
+                    .retryOnConnectionFailure(false)
+                    .build()
+
+            return PlaybackHttpClients(mediaClient = mediaClient, probeClient = probeClient)
         }
     }
 }
