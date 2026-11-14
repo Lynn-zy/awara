@@ -19,6 +19,7 @@ import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.entity.videoDownloadResourceKey
 import okhttp3.Call
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -213,7 +214,8 @@ class RangeDownloaderTest {
                 assertNotNull(snapshotAtPeak)
                 assertEquals(2, snapshotAtPeak!!.connectionCount)
                 assertEquals(1, snapshotAtPeak!!.nodeCount)
-                val expectedHost = server.hostName.lowercase()
+                // 请求 URL 已显式固定主机，直接取其 host 避免受系统反向解析将 127.0.0.1 映成 localhost
+                val expectedHost = url.toHttpUrl().host
                 assertEquals(listOf(expectedHost, expectedHost), snapshotAtPeak!!.hosts)
 
                 val finalSnapshot = tracker.snapshot.value
