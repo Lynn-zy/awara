@@ -27,7 +27,6 @@ internal class CdnTrackingDataSourceFactory(
                 val url = upstream.uri?.toString()?.toHttpUrlOrNull()
                 synchronized(this) {
                     if (!closed && length != 0L && url != null) {
-                        tracker.updateAvailableHosts(listOf(url.host))
                         tracker.register(this, url.host)
                     }
                 }

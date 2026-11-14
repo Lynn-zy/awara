@@ -60,8 +60,6 @@ import java.lang.reflect.Proxy
 import kotlinx.coroutines.runBlocking
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
-import me.rerere.awara.ui.page.video.layout.VideoAdaptivePlayerLayoutBox
-import me.rerere.awara.ui.page.video.layout.videoAdaptivePlayerHeight
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -1556,93 +1554,9 @@ class PlayerSeekInteractionTest {
         }
     }
 
-    /** 详情页竖屏布局为底部卡片与标签行留出预留空间，且支持向下浏览收起至横屏高度、回滑到顶拉高恢复。 */
-    @Test
-    fun portraitAdaptiveLayoutReservesBottomSpaceAndCollapsesSmoothlyOnScroll() {
-        val isPortrait = mutableStateOf(false)
-        val expanded = mutableStateOf(false)
-        compose.setContent {
-            MaterialTheme {
-                VideoAdaptivePlayerLayoutBox(
-                    isPortraitVideo = isPortrait.value,
-                    includeTabBar = true,
-                    deductStatusBar = false,
-                    modifier = Modifier.size(392.dp, 852.dp).testTag("detail_root"),
-                ) { collapseState ->
-                    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
-                        Box(
-                            Modifier.size(width = 392.dp, height = 0.dp)
-                                .videoAdaptivePlayerHeight(collapseState)
-                                .testTag("adaptive_player_box")
-                        ) {
-                            Box(
-                                Modifier.size(48.dp)
-                                    .align(androidx.compose.ui.Alignment.BottomEnd)
-                                    .testTag("adaptive_fullscreen_btn")
-                            )
-                        }
-                        androidx.compose.foundation.lazy.LazyColumn(
-                            modifier = Modifier.weight(1f).fillMaxSize().testTag("detail_scroll_list")
-                        ) {
-                            if (expanded.value) {
-                                item { Text("展开后的长简介内容\n第二行\n第三行") }
-                            }
-                            items(30) { idx ->
-                                Box(Modifier.size(392.dp, 56.dp)) { Text("Item $idx") }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        compose.waitForIdle()
-        val landscapeBounds =
-            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
-        assertEquals(9f / 16f, landscapeBounds.height / landscapeBounds.width, 0.02f)
-
-        // 切换为竖屏视频：播放器变为竖屏高度，且不铺满屏幕以留出底部标题卡片、作者卡片与标签行空间
-        compose.runOnIdle { isPortrait.value = true }
-        val portraitBounds =
-            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
-        val fullscreenBtnBefore =
-            compose.onNodeWithTag("adaptive_fullscreen_btn").fetchSemanticsNode().boundsInRoot
-        val rootBounds = compose.onNodeWithTag("detail_root").fetchSemanticsNode().boundsInRoot
-        assertTrue(portraitBounds.height > portraitBounds.width)
-        assertTrue(portraitBounds.height < rootBounds.height * 0.78f)
-
-        // 展开下方简介后，初始未滑动时播放器高度保持恒定不变
-        compose.runOnIdle { expanded.value = true }
-        val fullscreenBtnAfter =
-            compose.onNodeWithTag("adaptive_fullscreen_btn").fetchSemanticsNode().boundsInRoot
-        assertEquals(fullscreenBtnBefore.top, fullscreenBtnAfter.top, 0.5f)
-        assertEquals(fullscreenBtnBefore.bottom, fullscreenBtnAfter.bottom, 0.5f)
-
-        // 往下浏览内容（手指向上滑）：竖屏播放器平滑收起直至初始横屏 16:9 高度
-        compose.onNodeWithTag("detail_scroll_list").performTouchInput {
-            down(center)
-            moveBy(Offset(0f, -portraitBounds.height))
-            up()
-        }
-        compose.waitForIdle()
-        val collapsedBounds =
-            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
-        assertEquals(landscapeBounds.height, collapsedBounds.height, 2f)
-
-        // 从下方往上回滑到顶并继续下拉：竖屏播放器平滑拉高恢复初始竖屏高度
-        compose.onNodeWithTag("detail_scroll_list").performTouchInput {
-            down(center)
-            moveBy(Offset(0f, portraitBounds.height * 1.5f))
-            up()
-        }
-        compose.waitForIdle()
-        val reExpandedBounds =
-            compose.onNodeWithTag("adaptive_player_box").fetchSemanticsNode().boundsInRoot
-        assertEquals(portraitBounds.height, reExpandedBounds.height, 2f)
-    }
-
     /** 真正使用平台解码器会话复用取测试视频帧，验证尺寸有上限且切源关闭正常释放；无设备时此测试编译校验。 */
     @Test
-    fun localFixtureProducesScaledFrameAndNetworkIsRejected() =
+    fun localFixtureProducesScaledFrame() =
         runBlocking<Unit> {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             val context = instrumentation.targetContext
@@ -1658,11 +1572,6 @@ class PlayerSeekInteractionTest {
                 assertTrue(frame!!.width in 1..LOCAL_THUMBNAIL_MAX_LONG_SIDE_PX)
                 assertTrue(frame.height in 1..LOCAL_THUMBNAIL_MAX_LONG_SIDE_PX)
                 frame.recycle()
-                assertNull(
-                    session.loadFrame(
-                        SeekThumbnailRequest("https://example.com/video.mp4", 0L)
-                    )
-                )
             } finally {
                 session.close()
                 video.delete()

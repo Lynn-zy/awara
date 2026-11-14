@@ -16,6 +16,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -220,6 +221,21 @@ class PlayerCacheTest {
         // 重复调用 close 不会减成负数
         leasedDataSource.close()
         assertEquals(0, leaseCount)
+    }
+
+    /** 未调用 open 直接 read 必须立即抛出 IllegalStateException 快速失败，禁止返回 EOF。 */
+    @Test
+    fun leasedDataSourceReadBeforeOpenFailsFast() {
+        val leasedDataSource =
+            PlayerCache.LeasedDataSource(
+                onOpen = {},
+                onClose = {},
+                delegateProvider = { error("未 open 前不应创建 delegate") },
+            )
+
+        assertThrows(IllegalStateException::class.java) {
+            leasedDataSource.read(ByteArray(16), 0, 16)
+        }
     }
 
     /** 场景 4：finish vs background/config。验证仅在最后 Activity finishing 且非配置变更时触发退出回调。 */

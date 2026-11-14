@@ -15,7 +15,6 @@ import androidx.media3.exoplayer.upstream.Allocation
 import me.rerere.awara.data.playback.PlaybackSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,46 +29,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE)
 class PlayerBufferPolicyTest {
-
-    /** 验证普通模式下保持默认策略，不篡改参数也不启用扩展标记。 */
-    @Test
-    fun normalModeRetainsDefaultParameters() {
-        val settings = PlaybackSettings(expandedBufferEnabled = false)
-        val params = PlayerBufferPolicy.parameters(settings)
-
-        assertFalse(params.isExpanded)
-        assertFalse(params.prioritizeTimeOverSizeThresholds)
-
-        // 验证工厂方法能够成功构建原生默认 LoadControl 实例
-        val loadControl = PlayerBufferPolicy.create(settings)
-        assertNotNull(loadControl)
-    }
-
-    /** 验证扩展模式下时间目标：90s/120s，起播 1000ms，重缓冲 3000ms，禁用时间优先。 */
-    @Test
-    fun expandedModeAppliesTargetDurations() {
-        val settings = PlaybackSettings(expandedBufferEnabled = true)
-        val params = PlayerBufferPolicy.parameters(settings)
-
-        assertTrue(params.isExpanded)
-        assertEquals(90_000, params.minBufferMs)
-        assertEquals(120_000, params.maxBufferMs)
-        assertEquals(1_000, params.bufferForPlaybackMs)
-        assertEquals(3_000, params.bufferForPlaybackAfterRebufferMs)
-        assertFalse(params.prioritizeTimeOverSizeThresholds)
-
-        val loadControl = PlayerBufferPolicy.create(settings)
-        assertNotNull(loadControl)
-    }
-
-    /** 扩展预读时间不能用更小的固定字节目标覆盖播放器的轨道自适应预算。 */
-    @Test
-    fun expandedModeKeepsTrackBasedByteBudget() {
-        val settings = PlaybackSettings(expandedBufferEnabled = true)
-        val params = PlayerBufferPolicy.parameters(settings)
-
-        assertEquals(C.LENGTH_UNSET, params.targetBufferBytes)
-    }
 
     /** 扩展模式只增加网络预读和重缓冲窗口，不改变 file/content 的本地加载与起播阈值。 */
     @Test

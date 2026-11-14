@@ -23,7 +23,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,7 +33,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.VideoFile
@@ -45,12 +43,10 @@ import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.BackButton
-import me.rerere.awara.ui.component.player.DlnaSelector
 import me.rerere.awara.ui.component.player.Player
 import me.rerere.awara.ui.component.player.PlayerScaffold
 import me.rerere.awara.ui.component.player.PlayerState
 import me.rerere.awara.ui.component.player.matchVideoQuality
-import me.rerere.awara.ui.component.player.rememberDlnaCastState
 import me.rerere.awara.ui.component.player.rememberPlayerState
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.ForceSystemBarColor
@@ -72,46 +68,12 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     val windowSize = rememberWindowSizeClass()
     val state = rememberPlayerState(refreshPlaybackSource = vm::refreshPlaybackSource)
     val message = LocalMessageProvider.current
-    val scope = rememberCoroutineScope()
 
     // M3
     val colorState = rememberDynamicColorSchemeState()
     LaunchedEffect(vm.state.video) {
         colorState.updateColorScheme(url = vm.state.video?.thumbnailUrl() ?: "")
     }
-
-    // Dlna
-    val dlnaCastState = rememberDlnaCastState()
-    var dlnaCastSheetShow by remember { mutableStateOf(false) }
-    DlnaSelector(
-        show = dlnaCastSheetShow,
-        onDismiss = { dlnaCastSheetShow = false },
-        state = dlnaCastState,
-        onDeviceSelected = { device ->
-            state.pause()
-            state.currentMediaItem?.let { mediaItem ->
-                scope.launch {
-                    val uri = mediaItem.localConfiguration?.uri
-                    val scheme = uri?.scheme?.lowercase()
-                    // 本地成品 content/file URI 禁止发送到远端 DLNA 设备
-                    if (vm.state.isLocalPlayback || scheme == "content" || scheme == "file") {
-                        message.error {
-                            Text(composeStringResource(R.string.video_local_cast_unsupported))
-                        }
-                        return@launch
-                    }
-                    kotlin
-                        .runCatching {
-                            dlnaCastState.playUrl(device = device, url = uri.toString())
-                            message.success { Text("已发送到 ${device.friendlyName}") }
-                        }
-                        .onFailure {
-                            message.error { Text("发送失败: ${it.message ?: it.javaClass.simpleName}") }
-                        }
-                }
-            }
-        },
-    )
 
     // Full Screen
     var fullscreen by remember { mutableStateOf(false) }
@@ -226,7 +188,6 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     modifier = Modifier.fillMaxSize(),
                     navigationIcon = { BackButton() },
                     actions = { speedSelector ->
-                        // 保留DLNA投屏状态与选择逻辑，顶部投屏按钮按需求隐藏展示
                         if (fullscreen) {
                             IconButton(
                                 onClick = {

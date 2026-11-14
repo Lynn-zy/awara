@@ -410,8 +410,12 @@ object PlayerCache {
             }
         }
 
+        /** 从已打开的底层数据源读取字节；未先调用 [open] 时立即快速失败。 */
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-            return delegate?.read(buffer, offset, length) ?: -1
+            val activeDelegate =
+                delegate
+                    ?: throw IllegalStateException("LeasedDataSource read called before open")
+            return activeDelegate.read(buffer, offset, length)
         }
 
         override fun getUri(): Uri? = delegate?.uri

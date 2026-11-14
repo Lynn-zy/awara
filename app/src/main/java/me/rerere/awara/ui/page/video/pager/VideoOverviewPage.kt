@@ -37,7 +37,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.PersonOff
 import androidx.compose.material.icons.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -458,21 +457,17 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
 
             Row {
                 val notificationPermissionState =
-                    rememberPermissionState(
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            Manifest.permission.POST_NOTIFICATIONS
-                        } else {
-                            ""
-                        }
-                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        rememberPermissionState(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        null
+                    }
                 val storagePermissionState =
-                    rememberPermissionState(
-                        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-                            Manifest.permission.WRITE_EXTERNAL_STORAGE
-                        } else {
-                            ""
-                        }
-                    )
+                    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                        rememberPermissionState(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    } else {
+                        null
+                    }
                 var showDownloadMenu by remember { mutableStateOf(false) }
                 var downloadEnqueueing by remember { mutableStateOf(false) }
                 var pendingDownloadOption by remember { mutableStateOf<DownloadOptionMode?>(null) }
@@ -552,22 +547,21 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                                 DownloadOptionMode.APP -> {
                                     if (downloadEnqueueing) return@VideoQualityDownloadDialog
 
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        if (
+                                    if (
+                                        notificationPermissionState != null &&
                                             notificationPermissionState.status !=
                                                 PermissionStatus.Granted
-                                        ) {
-                                            message.error {
-                                                Text(
-                                                    stringResource(
-                                                        R.string
-                                                            .please_grant_notification_permission
-                                                    )
+                                    ) {
+                                        message.error {
+                                            Text(
+                                                stringResource(
+                                                    R.string
+                                                        .please_grant_notification_permission
                                                 )
-                                            }
-                                            notificationPermissionState.launchPermissionRequest()
-                                            return@VideoQualityDownloadDialog
+                                            )
                                         }
+                                        notificationPermissionState.launchPermissionRequest()
+                                        return@VideoQualityDownloadDialog
                                     }
 
                                     if (
@@ -584,7 +578,7 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
 
                                     val directoryUri = downloadStorage.directoryUri()
                                     if (
-                                        Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                        storagePermissionState != null &&
                                             directoryUri.isBlank() &&
                                             storagePermissionState.status !=
                                                 PermissionStatus.Granted
@@ -667,8 +661,6 @@ private fun VideoInfoCard(video: Video, vm: VideoVM) {
                 IconButton(onClick = { context.shareLink("https://www.iwara.tv/video/${vm.id}") }) {
                     Icon(Icons.Outlined.Share, null)
                 }
-
-                IconButton(onClick = { /*TODO*/ }) { Icon(Icons.Outlined.Translate, null) }
 
                 Spacer(modifier = Modifier.weight(1f))
 

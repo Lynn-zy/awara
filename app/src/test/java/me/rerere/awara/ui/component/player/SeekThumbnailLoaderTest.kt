@@ -507,6 +507,12 @@ class SeekThumbnailLoaderTest {
                 assertEquals(listOf("content://media/video/1"), openedUris)
                 assertEquals(0, releaseCount)
 
+                // 在线 HTTP(S) 请求不得进入本地解码会话，必须直接返回 null 且不打开数据源
+                assertNull(
+                    session.loadFrame(SeekThumbnailRequest("https://example.com/video.mp4", 0L))
+                )
+                assertEquals(listOf("content://media/video/1"), openedUris)
+
                 // 切换到第二个横屏视频：先释放旧提取器，再以 320x180 打开新提取器
                 dimensions = 1920 to 1080
                 val f4 = session.loadFrame(SeekThumbnailRequest("content://media/video/2", 4000L))

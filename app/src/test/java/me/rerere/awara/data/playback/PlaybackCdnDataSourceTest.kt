@@ -12,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -872,6 +873,26 @@ class PlaybackCdnDataSourceTest {
             )
         } finally {
             Thread.interrupted()
+            source.close()
+        }
+    }
+
+    /** 403 签名刷新被协程取消时，必须显式传播 CancellationException，不得吞没后伪装成 403 响应异常。 */
+    @Test(timeout = 10_000)
+    fun forbiddenRefreshCancellationPropagatesInsteadOfThrowingHttp403() {
+        server.enqueue(MockResponse().setResponseCode(403))
+        val source =
+            createSource(
+                refresh = { throw CancellationException("caller cancelled refresh") }
+            )
+        try {
+            val thrown = assertThrows(IOException::class.java) { source.open(spec()) }
+            assertTrue(
+                "取消异常应保留为 CancellationException 因果链，而非 403 InvalidResponseCodeException: $thrown",
+                thrown.cause is CancellationException,
+            )
+            assertEquals(1, server.requestCount)
+        } finally {
             source.close()
         }
     }

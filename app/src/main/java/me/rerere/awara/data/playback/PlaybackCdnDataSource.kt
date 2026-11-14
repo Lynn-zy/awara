@@ -182,13 +182,7 @@ internal class PlaybackCdnDataSource(
         openedDataSpec = dataSpec
         onOpening(this, dataSpec)
 
-        val rawUrl =
-            try {
-                    dataSpec.uri?.toString() ?: dataSpec.key.orEmpty()
-                } catch (_: Exception) {
-                    dataSpec.key.orEmpty()
-                }
-                .ifBlank { dataSpec.key.orEmpty() }
+        val rawUrl = dataSpec.uri?.toString().orEmpty().ifBlank { dataSpec.key.orEmpty() }
         val parsedHttpUrl = rawUrl.toHttpUrlOrNull()
 
         // 1. 安全分流：非标准 HTTPS、非 443 默认端口、非可信域名或非单层 /view，直接走兜底
@@ -449,9 +443,6 @@ internal class PlaybackCdnDataSource(
                     response.close()
                     val refreshedUrl = runBlockingCatching { refreshSignature(session) }
                     if (refreshedUrl != null) {
-                        try {
-                            response.close()
-                        } catch (_: Exception) {}
                         return connect(
                             session,
                             targetHost,
@@ -878,6 +869,8 @@ internal class PlaybackCdnDataSource(
             val newUrlString =
                 try {
                     refreshSource(oldUrlString)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                     null
                 }
@@ -1183,9 +1176,12 @@ internal class PlaybackCdnDataSource(
         return ParsedContentRange(start, end, total)
     }
 
+    /** 同步执行挂起操作（如签名刷新）；遇到协程取消时显式重抛，其余非致命异常返回 null。 */
     private fun <T> runBlockingCatching(block: suspend () -> T): T? {
         return try {
             kotlinx.coroutines.runBlocking { block() }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }

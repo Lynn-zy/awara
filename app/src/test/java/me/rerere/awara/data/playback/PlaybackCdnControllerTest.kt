@@ -3,12 +3,15 @@ package me.rerere.awara.data.playback
 import android.net.Uri
 import androidx.media3.datasource.DataSpec
 import java.io.IOException
+import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import me.rerere.awara.data.download.DownloadCdnDirectory
 import okhttp3.Call
 import okhttp3.EventListener
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -38,16 +41,27 @@ class PlaybackCdnControllerTest {
             .setUri(Uri.parse("https://acheron.iwara.tv/view?filename=test_Source.mp4&path=test"))
             .build()
 
+    /** 构造指向 MockWebServer 显式 IPv4 回环地址的测试 URL。 */
+    private fun loopbackUrl(pathAndQuery: String): HttpUrl =
+        "http://127.0.0.1:${server.port}$pathAndQuery".toHttpUrl()
+
+    /** 将远端请求 URL 重写为回环测试地址，保留路径与查询参数。 */
+    private fun resolveLoopbackUrl(url: HttpUrl): HttpUrl {
+        val query = url.encodedQuery?.let { "?$it" }.orEmpty()
+        return loopbackUrl("${url.encodedPath}$query")
+    }
+
     @Before
     fun setUp() {
-        server.start()
+        // 显式绑定 IPv4 回环地址，规避双栈 localhost 解析耗时与断流后回退至未监听 IPv6 [::1] 的偶发失败
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
         val client = OkHttpClient()
         controller =
             PlaybackCdnController(
                 client = client,
                 directory = DownloadCdnDirectory(client),
                 refreshSource = { null },
-                urlResolver = { server.url(it.encodedPath + "?" + it.encodedQuery) },
+                urlResolver = ::resolveLoopbackUrl,
             )
     }
 
@@ -156,9 +170,9 @@ class PlaybackCdnControllerTest {
         controller =
             PlaybackCdnController(
                 client = client,
-                directory = DownloadCdnDirectory(client, directoryUrl = server.url("/directory")),
+                directory = DownloadCdnDirectory(client, directoryUrl = loopbackUrl("/directory")),
                 refreshSource = { null },
-                urlResolver = { server.url(it.encodedPath + "?" + it.encodedQuery) },
+                urlResolver = ::resolveLoopbackUrl,
             )
         val previous = controller.createDataSource()
         val next = controller.createDataSource()

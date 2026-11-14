@@ -212,21 +212,6 @@ internal class PlaybackCdnSession(
         }
     }
 
-    /**
-     * 在发生定位（Seek）或外层显式调用 resetBuffer 时重置瞬时缓冲区检测状态。
-     *
-     * 遵循原则：
-     * 1. 严格保留已验证指纹、备选节点与安全身份；
-     * 2. 严禁把会话级总换源次数 [switchCount] 或失败次数 [failureCount] 清零，硬性预算全生命周期受限；
-     * 3. 仅重置换源冷却时间戳，允许在定位后若确有需要重新获得评估机会（但不突破总上限）。
-     *
-     * @param now 当前时间戳（毫秒）
-     */
-    fun resetBufferDetection(now: Long) {
-        // 严禁清零 switchCount 与 failureCount，保留会话级硬性预算约束
-        lastSwitchTimestamp = 0L
-    }
-
     /** 取消并中断所有正在运行的后台探测请求及协程作业。 */
     fun cancelProbes() {
         probeJob?.cancel()
