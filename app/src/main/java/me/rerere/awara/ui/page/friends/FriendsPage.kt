@@ -12,9 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
-import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Card
@@ -38,26 +35,20 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendRequestDto
 import me.rerere.awara.data.entity.User
-import me.rerere.awara.data.source.stringResource as apiStringResource
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.Spin
-import me.rerere.awara.ui.component.common.UiState
-import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
-import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
-import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.ext.onlyBottom
 import me.rerere.awara.ui.component.iwara.Avatar
-import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.component.iwara.PagedStaggeredGridPage
 import me.rerere.awara.ui.component.iwara.UserCard
 import me.rerere.awara.ui.component.iwara.UserStatus
-import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.toLocalDateTimeString
@@ -69,11 +60,8 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
     LaunchedEffect(vm) {
         vm.events.collect { event ->
             when (event) {
-                is FriendsVM.FriendsEvent.ActionError -> {
-                    messageProvider.error { Text(apiStringResource(error = event.error)) }
-                }
-                is FriendsVM.FriendsEvent.ActionException -> {
-                    messageProvider.error { Text(event.message) }
+                is FriendsVM.FriendsEvent.ActionFailed -> {
+                    messageProvider.error { Text(event.message.asString()) }
                 }
             }
         }
@@ -99,10 +87,6 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
             // 本人查看显示好友和申请2页，非本人仅显示好友1页；采用 lambda 动态读取页数
             val pagerState = rememberPagerState { if (vm.self) 2 else 1 }
             val scope = rememberCoroutineScope()
-            val friendsGridState = rememberLazyStaggeredGridState()
-            val requestsGridState = rememberLazyStaggeredGridState()
-            PageScrollEffect(vm.state.friendsLoadedPage) { friendsGridState.scrollToItem(0) }
-            PageScrollEffect(vm.state.requestsLoadedPage) { requestsGridState.scrollToItem(0) }
             if (vm.self) {
                 BetterTabBar(selectedTabIndex = pagerState.currentPage) {
                     Tab(
@@ -122,109 +106,48 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
             // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                 when (page) {
-                    0 -> {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            SwipeRefresh(
-                                state =
-                                    rememberSwipeRefreshState(
-                                        vm.state.friendsUiState is UiState.Loading,
-                                        isError = vm.state.friendsUiState is UiState.Error,
-                                    ),
-                                onRefresh = {
-                                    vm.loadFriends(refresh = true)?.await() ?: RefreshResult.Ignored
-                                },
-                                modifier = Modifier.fillMaxWidth().weight(1f),
-                            ) {
-                                UiStateBox(
-                                    state = vm.state.friendsUiState,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onErrorRetry = { vm.loadFriends(force = true) },
-                                ) {
-                                    LazyVerticalStaggeredGrid(
-                                        state = friendsGridState,
-                                        columns = DynamicStaggeredGridCells(),
-                                        contentPadding = PaddingValues(8.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalItemSpacing = 8.dp,
-                                        modifier =
-                                            Modifier.matchParentSize()
-                                                .nestedScroll(appbarBehavior.nestedScrollConnection),
-                                    ) {
-                                        items(vm.state.friendsData, key = { it.id }) {
-                                            UserCard(user = it)
-                                        }
-                                    }
-                                }
-                            }
-                            PaginationBar(
-                                page = vm.state.friendsPage,
-                                limit = 32,
-                                total = vm.state.friendsCount,
-                                onPageChange = { vm.jumpFriendsPage(it) },
-                                contentPadding = innerPadding.onlyBottom(),
-                            )
+                    0 ->
+                        PagedStaggeredGridPage(
+                            feed = vm.state.friends,
+                            displayItems = vm.state.friends.items,
+                            displayUiState = vm.state.friends.uiState,
+                            itemKey = { it.id },
+                            onPageChange = { vm.jumpFriendsPage(it) },
+                            onErrorRetry = { vm.loadFriends(force = true) },
+                            onRefresh = {
+                                vm.loadFriends(refresh = true)?.await() ?: RefreshResult.Ignored
+                            },
+                            gridModifier = Modifier.nestedScroll(appbarBehavior.nestedScrollConnection),
+                            paginationPadding = innerPadding.onlyBottom(),
+                        ) {
+                            UserCard(user = it)
                         }
-                    }
 
-                    1 -> {
+                    1 ->
                         Spin(show = vm.state.loadingFriendChange) {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                SwipeRefresh(
-                                    state =
-                                        rememberSwipeRefreshState(
-                                            vm.state.requestsUiState is UiState.Loading,
-                                            isError = vm.state.requestsUiState is UiState.Error,
-                                        ),
-                                    onRefresh = {
-                                        vm.loadRequests(refresh = true)?.await()
-                                            ?: RefreshResult.Ignored
-                                    },
-                                    modifier = Modifier.fillMaxWidth().weight(1f),
-                                ) {
-                                    UiStateBox(
-                                        state = vm.state.requestsUiState,
-                                        modifier = Modifier.fillMaxSize(),
-                                        onErrorRetry = { vm.loadRequests(force = true) },
-                                    ) {
-                                        LazyVerticalStaggeredGrid(
-                                            state = requestsGridState,
-                                            columns =
-                                                DynamicStaggeredGridCells(
-                                                    minSize = 300.dp,
-                                                    min = 1,
-                                                ),
-                                            contentPadding = PaddingValues(8.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalItemSpacing = 8.dp,
-                                            modifier =
-                                                Modifier.matchParentSize()
-                                                    .nestedScroll(
-                                                        appbarBehavior.nestedScrollConnection
-                                                    ),
-                                        ) {
-                                            items(vm.state.requestsData, key = { it.id }) {
-                                                FriendRequestCard(
-                                                    friendRequestDto = it,
-                                                    onAccept = { userId -> vm.addFriends(userId) },
-                                                    onReject = { userId ->
-                                                        vm.removeFriends(userId)
-                                                    },
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                PaginationBar(
-                                    page = vm.state.requestsPage,
-                                    limit = 32,
-                                    total = vm.state.requestsCount,
-                                    onPageChange = { vm.jumpRequestsPage(it) },
-                                    contentPadding = innerPadding.onlyBottom(),
+                            PagedStaggeredGridPage(
+                                feed = vm.state.requests,
+                                displayItems = vm.state.requests.items,
+                                displayUiState = vm.state.requests.uiState,
+                                itemKey = { it.id },
+                                onPageChange = { vm.jumpRequestsPage(it) },
+                                onErrorRetry = { vm.loadRequests(force = true) },
+                                onRefresh = {
+                                    vm.loadRequests(refresh = true)?.await()
+                                        ?: RefreshResult.Ignored
+                                },
+                                gridModifier =
+                                    Modifier.nestedScroll(appbarBehavior.nestedScrollConnection),
+                                columns = DynamicStaggeredGridCells(minSize = 300.dp, min = 1),
+                                paginationPadding = innerPadding.onlyBottom(),
+                            ) {
+                                FriendRequestCard(
+                                    friendRequestDto = it,
+                                    onAccept = { userId -> vm.addFriends(userId) },
+                                    onReject = { userId -> vm.removeFriends(userId) },
                                 )
                             }
                         }
-                    }
                 }
             }
         }

@@ -88,7 +88,10 @@ val indexNavigations = listOf(
             Text(stringResource(R.string.index_nav_subscription), maxLines = 1)
         },
         icon = {
-            Icon(Icons.Outlined.Subscriptions, "Subscription")
+            Icon(
+                Icons.Outlined.Subscriptions,
+                stringResource(R.string.index_nav_subscription),
+            )
         },
         needLogin = true
     ),
@@ -98,7 +101,7 @@ val indexNavigations = listOf(
             Text(stringResource(R.string.index_nav_video), maxLines = 1)
         },
         icon = {
-            Icon(Icons.Outlined.VideoLabel, "Videos")
+            Icon(Icons.Outlined.VideoLabel, stringResource(R.string.index_nav_video))
         },
     ),
     IndexNavigation(
@@ -107,7 +110,7 @@ val indexNavigations = listOf(
             Text(stringResource(R.string.index_nav_image), maxLines = 1)
         },
         icon = {
-            Icon(Icons.Outlined.Image, "Images")
+            Icon(Icons.Outlined.Image, stringResource(R.string.index_nav_image))
         },
     ),
 )

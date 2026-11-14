@@ -47,7 +47,7 @@ import org.koin.androidx.compose.koinViewModel
 fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
     val navController = LocalRouterProvider.current
     val listState = rememberLazyListState()
-    PageScrollEffect(vm.state.loadedPage) { listState.scrollToItem(0) }
+    PageScrollEffect(vm.state.feed.loadedPage) { listState.scrollToItem(0) }
 
     Scaffold(
         topBar = {
@@ -57,11 +57,11 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
             )
         },
         bottomBar = {
-            if (vm.state.count > 0) {
+            if (vm.state.feed.total > 0) {
                 PaginationBar(
-                    page = vm.state.page,
-                    limit = vm.state.limit,
-                    total = vm.state.count,
+                    page = vm.state.feed.page,
+                    limit = vm.state.feed.limit,
+                    total = vm.state.feed.total,
                     onPageChange = vm::jumpPage,
                 )
             }
@@ -70,14 +70,14 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
         SwipeRefresh(
             state =
                 rememberSwipeRefreshState(
-                    vm.state.uiState is UiState.Loading,
-                    isError = vm.state.uiState is UiState.Error,
+                    vm.state.feed.uiState is UiState.Loading,
+                    isError = vm.state.feed.uiState is UiState.Error,
                 ),
             onRefresh = { vm.loadConversations(refresh = true)?.await() ?: RefreshResult.Ignored },
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
         ) {
             UiStateBox(
-                state = vm.state.uiState,
+                state = vm.state.feed.uiState,
                 modifier = Modifier.fillMaxSize(),
                 onErrorRetry = { vm.loadConversations(force = true) },
             ) {
@@ -87,7 +87,7 @@ fun ConversationsPage(vm: ConversationsVM = koinViewModel()) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(vm.state.conversations, key = { it.id }) { conversation ->
+                    items(vm.state.feed.items, key = { it.id }) { conversation ->
                         ConversationCard(
                             conversation = conversation,
                             onClick = {

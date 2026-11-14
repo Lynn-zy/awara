@@ -56,7 +56,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
-import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.dto.CommentCreationDto
 import me.rerere.awara.ui.component.common.Spin
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
@@ -300,7 +300,7 @@ fun CommentList(
                         Icon(Icons.Outlined.ArrowBack, null)
                     }
 
-                    Text("评论详情")
+                    Text(stringResource(R.string.comment_detail_title))
                 }
             }
         }

@@ -37,14 +37,13 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
-import java.net.URI
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.iwara.RichText
+import me.rerere.awara.ui.component.iwara.isSafeImageUrl
+import me.rerere.awara.ui.component.iwara.parseCommonMarkTree
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.getTextInNode
-import org.intellij.markdown.flavours.commonmark.CommonMarkFlavourDescriptor
-import org.intellij.markdown.parser.MarkdownParser
 
 /** 评论图片自动加载偏好；默认关闭，与设置页共用同一个存储键。 */
 const val PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD = "setting.comment_image_auto_load"
@@ -56,33 +55,6 @@ sealed interface CommentBodySegment {
 
     /** Markdown 内嵌图片 */
     data class Image(val alt: String, val url: String) : CommentBodySegment
-}
-
-// 仅允许安全的 HTTP/HTTPS 协议图片
-private val ALLOWED_IMAGE_SCHEMES = setOf("http", "https")
-private val REJECTED_IMAGE_SCHEMES =
-    setOf("javascript", "file", "intent", "content", "data", "about")
-
-/**
- * 校验图片 URL 是否为安全合规的 HTTP/HTTPS 网络地址 严格拒绝 file, content, data, javascript 等高危或本地协议
- *
- * @param url 待校验的图片 URL
- * @return 若安全有效则返回 true
- */
-internal fun isSafeImageUrl(url: String): Boolean {
-    val trimmed = url.trim()
-    val colonIdx = trimmed.indexOf(':')
-    if (colonIdx <= 0) return false
-    val scheme = trimmed.substring(0, colonIdx).lowercase()
-    if (scheme in REJECTED_IMAGE_SCHEMES) return false
-    if (scheme !in ALLOWED_IMAGE_SCHEMES) return false
-    return try {
-        val uri = URI(trimmed)
-        val uriScheme = uri.scheme?.lowercase()
-        (uriScheme == "http" || uriScheme == "https") && !uri.host.isNullOrBlank()
-    } catch (_: Exception) {
-        false
-    }
 }
 
 private data class ImageNodeRange(
@@ -104,8 +76,7 @@ private data class ImageNodeRange(
 fun splitCommentBody(body: String): List<CommentBodySegment> {
     if (body.isEmpty()) return emptyList()
 
-    val parser = MarkdownParser(CommonMarkFlavourDescriptor())
-    val root = parser.buildMarkdownTreeFromString(body)
+    val root = parseCommonMarkTree(body)
 
     val imageNodes = mutableListOf<ImageNodeRange>()
 

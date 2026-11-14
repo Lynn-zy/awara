@@ -32,7 +32,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.time.Instant
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.Comment
-import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.dto.CommentCreationDto
 import me.rerere.awara.data.entity.User
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.DialogProvider

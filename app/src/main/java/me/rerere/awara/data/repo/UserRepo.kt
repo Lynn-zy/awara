@@ -1,11 +1,10 @@
 package me.rerere.awara.data.repo
 
+import me.rerere.awara.data.dto.ConversationCreationDto
 import me.rerere.awara.data.dto.LoginReq
+import me.rerere.awara.data.dto.MessageCreationDto
 import me.rerere.awara.data.dto.ProfileDto
-import me.rerere.awara.data.entity.ConversationCreationDto
-import me.rerere.awara.data.entity.MessageCreationDto
 import me.rerere.awara.data.source.IwaraAPI
-import retrofit2.HttpException
 
 class UserRepo(private val iwaraAPI: IwaraAPI) {
     suspend fun login(email: String, password: String) =
@@ -17,9 +16,11 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
 
     suspend fun getProfile(username: String): ProfileDto = iwaraAPI.getProfile(username)
 
-    suspend fun followUser(id: String) = iwaraAPI.followUser(id)
+    /** 关注指定用户；非 2xx 响应抛出 HttpException 交由上层处理。 */
+    suspend fun followUser(id: String) = iwaraAPI.followUser(id).requireSuccess()
 
-    suspend fun unfollowUser(id: String) = iwaraAPI.unfollowUser(id)
+    /** 取消关注指定用户；非 2xx 响应抛出 HttpException 交由上层处理。 */
+    suspend fun unfollowUser(id: String) = iwaraAPI.unfollowUser(id).requireSuccess()
 
     suspend fun getFollowerCount(userId: String) =
         iwaraAPI.getUserFollowers(userId, mapOf("limit" to "1")).count
@@ -39,16 +40,10 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
     suspend fun getFriendsStatus(userId: String) = iwaraAPI.getFriendStatus(userId)
 
     /** 发送好友申请或同意对方请求；非 2xx 响应抛出 HttpException 交由上层统一处理。 */
-    suspend fun addFriend(userId: String) {
-        val response = iwaraAPI.addFriend(userId)
-        if (!response.isSuccessful) throw HttpException(response)
-    }
+    suspend fun addFriend(userId: String) = iwaraAPI.addFriend(userId).requireSuccess()
 
     /** 解除好友关系或拒绝/取消好友申请；非 2xx 响应抛出 HttpException 交由上层统一处理。 */
-    suspend fun removeFriend(userId: String) {
-        val response = iwaraAPI.removeFriend(userId)
-        if (!response.isSuccessful) throw HttpException(response)
-    }
+    suspend fun removeFriend(userId: String) = iwaraAPI.removeFriend(userId).requireSuccess()
 
     suspend fun getUserFriends(userId: String, page: Int) =
         iwaraAPI.getUserFriends(userId, mapOf("page" to page.toString()))
@@ -75,10 +70,10 @@ class UserRepo(private val iwaraAPI: IwaraAPI) {
     suspend fun getNotifications(userId: String) = iwaraAPI.getNotifications(userId)
 
     suspend fun markNotificationAsRead(notificationId: String) {
-        check(iwaraAPI.markNotificationAsRead(notificationId).isSuccessful) { "标记通知已读失败" }
+        iwaraAPI.markNotificationAsRead(notificationId).requireSuccess { "标记通知已读失败" }
     }
 
     suspend fun markAllNotificationsAsRead() {
-        check(iwaraAPI.markAllNotificationsAsRead().isSuccessful) { "全部标记已读失败" }
+        iwaraAPI.markAllNotificationsAsRead().requireSuccess { "全部标记已读失败" }
     }
 }

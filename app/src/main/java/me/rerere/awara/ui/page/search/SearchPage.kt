@@ -26,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
+import me.rerere.awara.data.repo.SearchSort
+import me.rerere.awara.data.repo.SearchType
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.EmptyStatus
 import me.rerere.awara.ui.component.common.SearchInput
@@ -52,11 +54,12 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
     // 用户搜索不隐藏账号，以便始终可以主动进入其主页。
     val visibleVideos = rememberUnblockedWorks(vm.state.videoList) { it.user?.id }
     val visibleImages = rememberUnblockedWorks(vm.state.imageList) { it.user?.id }
+    val displaySearchType = vm.state.loadedSearchType ?: vm.state.searchType
     val hasVisibleResults =
-        when (vm.state.loadedSearchType ?: vm.state.searchType) {
-            "video" -> visibleVideos.isNotEmpty()
-            "image" -> visibleImages.isNotEmpty()
-            else -> vm.state.userList.isNotEmpty()
+        when (displaySearchType) {
+            SearchType.VIDEO -> visibleVideos.isNotEmpty()
+            SearchType.IMAGE -> visibleImages.isNotEmpty()
+            SearchType.USER -> vm.state.userList.isNotEmpty()
         }
     val gridState = key(vm.state.loadedSearchType) { rememberLazyStaggeredGridState() }
     PageScrollEffect(vm.state.loadedPage) { gridState.scrollToItem(0) }
@@ -76,20 +79,23 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                 contentPadding = WindowInsets.navigationBars.asPaddingValues(),
                 leading = {
                     SortButton(
-                        sort = vm.state.sort,
-                        onSortChange = vm::updateSort,
+                        sort = vm.state.sort.apiValue,
+                        onSortChange = { apiValue ->
+                            SearchSort.fromApiValue(apiValue)?.let(vm::updateSort)
+                        },
                         sortOptions =
-                            searchSortKeys(vm.state.searchType).map { key ->
+                            vm.state.searchType.availableSorts().map { sort ->
                                 SortOption(
-                                    name = key,
+                                    name = sort.apiValue,
                                     label = {
                                         Text(
                                             stringResource(
-                                                when (key) {
-                                                    "date" -> R.string.search_sort_date
-                                                    "views" -> R.string.sort_views
-                                                    "likes" -> R.string.sort_likes
-                                                    else -> R.string.search_sort_relevance
+                                                when (sort) {
+                                                    SearchSort.DATE -> R.string.search_sort_date
+                                                    SearchSort.VIEWS -> R.string.sort_views
+                                                    SearchSort.LIKES -> R.string.sort_likes
+                                                    SearchSort.RELEVANCE ->
+                                                        R.string.search_sort_relevance
                                                 }
                                             ),
                                             maxLines = 1,
@@ -134,8 +140,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                     modifier = Modifier.fillMaxSize(),
                     state = onlineWorksState(vm.state.uiState, hasVisibleResults),
                     emptyStatus = {
-                        if ((vm.state.loadedSearchType ?: vm.state.searchType) == "user")
-                            EmptyStatus()
+                        if (displaySearchType == SearchType.USER) EmptyStatus()
                         else OnlineWorksEmptyStatus()
                     },
                     onErrorRetry = { vm.search(force = true) },
@@ -148,16 +153,16 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                         verticalItemSpacing = 8.dp,
                         modifier = Modifier.matchParentSize(),
                     ) {
-                        when (vm.state.loadedSearchType ?: vm.state.searchType) {
-                            "video" -> {
+                        when (displaySearchType) {
+                            SearchType.VIDEO -> {
                                 items(visibleVideos, key = { it.id }) { MediaCard(media = it) }
                             }
 
-                            "image" -> {
+                            SearchType.IMAGE -> {
                                 items(visibleImages, key = { it.id }) { MediaCard(media = it) }
                             }
 
-                            "user" -> {
+                            SearchType.USER -> {
                                 items(vm.state.userList, key = { it.id }) { UserCard(user = it) }
                             }
                         }
@@ -170,7 +175,7 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
 
 private val SearchOptions =
     listOf(
-        SelectOption(value = "video", label = { Text(stringResource(R.string.video)) }),
-        SelectOption(value = "image", label = { Text(stringResource(R.string.image)) }),
-        SelectOption(value = "user", label = { Text(stringResource(R.string.user)) }),
+        SelectOption(value = SearchType.VIDEO, label = { Text(stringResource(R.string.video)) }),
+        SelectOption(value = SearchType.IMAGE, label = { Text(stringResource(R.string.image)) }),
+        SelectOption(value = SearchType.USER, label = { Text(stringResource(R.string.user)) }),
     )

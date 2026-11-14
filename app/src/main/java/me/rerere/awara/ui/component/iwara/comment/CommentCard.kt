@@ -133,7 +133,7 @@ fun CommentCard(
                 if (currentUserId != null && comment.user?.id == currentUserId) {
                     Surface(shape = RoundedCornerShape(4.dp), tonalElevation = 4.dp) {
                         Text(
-                            text = "我",
+                            text = stringResource(R.string.comment_me_badge),
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.padding(vertical = 4.dp, horizontal = 8.dp),
                         )
@@ -204,7 +204,7 @@ fun CommentCard(
                         contentPadding = PaddingValues(4.dp),
                     ) {
                         Text(
-                            text = "共${comment.numReplies}条回复",
+                            text = stringResource(R.string.comment_replies_count, comment.numReplies),
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Icon(Icons.Outlined.KeyboardArrowDown, null)

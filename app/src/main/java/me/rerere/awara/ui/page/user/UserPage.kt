@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -21,9 +20,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
-import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -43,7 +39,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState as collectFlowAsState
 import androidx.compose.runtime.getValue
@@ -74,28 +69,26 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendStatus
 import me.rerere.awara.data.dto.ProfileDto
+import me.rerere.awara.data.entity.Media
 import me.rerere.awara.data.entity.toHeaderUrl
 import me.rerere.awara.data.source.stringResource as apiStringResource
-import me.rerere.awara.ui.LocalDialogProvider
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
-import me.rerere.awara.ui.component.common.DialogRequest
-import me.rerere.awara.ui.component.common.EmptyStatus
 import me.rerere.awara.ui.component.common.ErrorStatus
 import me.rerere.awara.ui.component.common.Spin
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.MediaCard
-import me.rerere.awara.ui.component.iwara.PaginationBar
+import me.rerere.awara.ui.component.iwara.PagedFeedState
+import me.rerere.awara.ui.component.iwara.PagedStaggeredGridPage
 import me.rerere.awara.ui.component.iwara.RichText
 import me.rerere.awara.ui.component.iwara.UserStatus
 import me.rerere.awara.ui.component.iwara.comment.CommentList
-import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 import me.rerere.awara.util.openUrl
@@ -108,20 +101,16 @@ fun UserPage(vm: UserVM = koinViewModel()) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val message = LocalMessageProvider.current
-    val dialogHolder = LocalDialogProvider.current
     val navController = LocalRouterProvider.current
     val userStoreState = LocalUserStore.current.collectAsState()
 
     // 展开状态采用 rememberSaveable，在屏幕旋转与重组时保持展开状态
     var expand by rememberSaveable { mutableStateOf(false) }
 
-    // 发起私信弹窗相关状态（标题与内容草稿）
+    // 发起私信弹窗状态及标题、内容草稿
+    var showConversationDialog by rememberSaveable { mutableStateOf(false) }
     var titleDraft by rememberSaveable { mutableStateOf("") }
     var bodyDraft by rememberSaveable { mutableStateOf("") }
-    var dismissDialogCallback by remember { mutableStateOf<(() -> Unit)?>(null) }
-
-    // 返回或切换路由时销毁附着在全局提供器中的弹窗，避免留在下一页。
-    DisposableEffect(vm) { onDispose { dismissDialogCallback?.invoke() } }
 
     // 校验发起私信条件：登录且资料已加载，且不能向自己或注销账号发起会话
     val currentUser = userStoreState.user
@@ -130,90 +119,80 @@ fun UserPage(vm: UserVM = koinViewModel()) {
     val canStartConversation =
         currentUser != null && targetUser != null && !isSelf && targetUser.deletedAt == null
 
-    // 打开新建会话对话框（使用现有 DialogHolder）
-    fun showNewConversationDialog() {
-        if (dismissDialogCallback != null) return
-        dialogHolder.dialogs.add(
-            DialogRequest { dismiss ->
-                val dialogUserId = LocalUserStore.current.collectAsState().user?.id
-                DisposableEffect(Unit) {
-                    dismissDialogCallback = dismiss
-                    onDispose { dismissDialogCallback = null }
+    if (showConversationDialog) {
+        val dialogUserId = currentUser?.id
+        AlertDialog(
+            onDismissRequest = {
+                // 创建中禁止通过蒙层关闭弹窗
+                if (!vm.state.conversationCreating) {
+                    showConversationDialog = false
                 }
-                AlertDialog(
-                    onDismissRequest = {
-                        // 创建中禁止通过蒙层关闭弹窗
-                        if (!vm.state.conversationCreating) {
-                            dismiss()
-                        }
-                    },
-                    title = { Text(stringResource(R.string.conversation_new)) },
-                    text = {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            OutlinedTextField(
-                                value = titleDraft,
-                                onValueChange = { titleDraft = it },
-                                label = { Text(stringResource(R.string.conversation_title)) },
-                                singleLine = true,
-                                enabled = !vm.state.conversationCreating,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            OutlinedTextField(
-                                value = bodyDraft,
-                                onValueChange = { bodyDraft = it },
-                                label = { Text(stringResource(R.string.conversation_body)) },
-                                maxLines = 5,
-                                enabled = !vm.state.conversationCreating,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                if (vm.state.conversationCreating) return@TextButton
-                                if (titleDraft.isBlank()) {
-                                    message.error {
-                                        Text(stringResource(R.string.conversation_title_empty))
-                                    }
-                                    return@TextButton
-                                }
-                                if (bodyDraft.isBlank()) {
-                                    message.error {
-                                        Text(stringResource(R.string.conversation_body_empty))
-                                    }
-                                    return@TextButton
-                                }
-                                if (dialogUserId == null) return@TextButton
-                                vm.createConversation(
-                                    title = titleDraft.trim(),
-                                    body = bodyDraft.trim(),
-                                )
-                            },
-                            enabled = !vm.state.conversationCreating && dialogUserId != null,
-                        ) {
-                            if (vm.state.conversationCreating) {
-                                Spin(show = true) {
-                                    Text(stringResource(R.string.conversation_start))
-                                }
-                            } else {
-                                Text(stringResource(R.string.conversation_start))
+            },
+            title = { Text(stringResource(R.string.conversation_new)) },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    OutlinedTextField(
+                        value = titleDraft,
+                        onValueChange = { titleDraft = it },
+                        label = { Text(stringResource(R.string.conversation_title)) },
+                        singleLine = true,
+                        enabled = !vm.state.conversationCreating,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = bodyDraft,
+                        onValueChange = { bodyDraft = it },
+                        label = { Text(stringResource(R.string.conversation_body)) },
+                        maxLines = 5,
+                        enabled = !vm.state.conversationCreating,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (vm.state.conversationCreating) return@TextButton
+                        if (titleDraft.isBlank()) {
+                            message.error {
+                                Text(stringResource(R.string.conversation_title_empty))
                             }
+                            return@TextButton
                         }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { dismiss() },
-                            enabled = !vm.state.conversationCreating,
-                        ) {
-                            Text(stringResource(R.string.cancel))
+                        if (bodyDraft.isBlank()) {
+                            message.error {
+                                Text(stringResource(R.string.conversation_body_empty))
+                            }
+                            return@TextButton
                         }
+                        if (dialogUserId == null) return@TextButton
+                        vm.createConversation(
+                            title = titleDraft.trim(),
+                            body = bodyDraft.trim(),
+                        )
                     },
-                )
-            }
+                    enabled = !vm.state.conversationCreating && dialogUserId != null,
+                ) {
+                    if (vm.state.conversationCreating) {
+                        Spin(show = true) {
+                            Text(stringResource(R.string.conversation_start))
+                        }
+                    } else {
+                        Text(stringResource(R.string.conversation_start))
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showConversationDialog = false },
+                    enabled = !vm.state.conversationCreating,
+                ) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
         )
     }
 
@@ -279,7 +258,7 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                 }
                 is UserVM.UserVMEvent.ConversationCreated -> {
                     // 创建成功：关闭弹窗、清空草稿、导航至消息页面并弹出提示
-                    dismissDialogCallback?.invoke()
+                    showConversationDialog = false
                     titleDraft = ""
                     bodyDraft = ""
                     navController.navigate("conversation/${event.conversationId}/messages")
@@ -313,18 +292,6 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                 is UserVM.UserVMEvent.ProfileLoadException -> {
                     message.error { Text(event.throwable.localizedMessage.orEmpty()) }
                 }
-                is UserVM.UserVMEvent.VideoLoadFailed -> {
-                    message.error { Text(apiStringResource(event.error)) }
-                }
-                is UserVM.UserVMEvent.VideoLoadException -> {
-                    message.error { Text(event.throwable.localizedMessage.orEmpty()) }
-                }
-                is UserVM.UserVMEvent.ImageLoadFailed -> {
-                    message.error { Text(apiStringResource(event.error)) }
-                }
-                is UserVM.UserVMEvent.ImageLoadException -> {
-                    message.error { Text(event.throwable.localizedMessage.orEmpty()) }
-                }
             }
         }
     }
@@ -342,7 +309,10 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                 onUnblock = vm::unblockUser,
             )
         }
-        IconButton(onClick = { showNewConversationDialog() }, enabled = canStartConversation) {
+        IconButton(
+            onClick = { showConversationDialog = true },
+            enabled = canStartConversation,
+        ) {
             Icon(
                 imageVector = Icons.Outlined.Message,
                 contentDescription = stringResource(R.string.conversation_new),
@@ -375,7 +345,8 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                     CircularProgressIndicator()
                 } else {
                     ErrorStatus(
-                        message = vm.state.profileError ?: stringResource(R.string.retry),
+                        message =
+                            vm.state.profileError?.asString() ?: stringResource(R.string.retry),
                         onRetry = { vm.loadUser() },
                     )
                 }
@@ -401,17 +372,17 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                             Tab(
                                 selected = pagerState.currentPage == 0,
                                 onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
-                                text = { Text("视频") },
+                                text = { Text(stringResource(R.string.video)) },
                             )
                             Tab(
                                 selected = pagerState.currentPage == 1,
                                 onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
-                                text = { Text("图片") },
+                                text = { Text(stringResource(R.string.image)) },
                             )
                             Tab(
                                 selected = pagerState.currentPage == 2,
                                 onClick = { scope.launch { pagerState.animateScrollToPage(2) } },
-                                text = { Text("留言") },
+                                text = { Text(stringResource(R.string.comments)) },
                             )
                         }
 
@@ -421,8 +392,18 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         ) { page ->
                             when (page) {
-                                0 -> VideoPage(vm)
-                                1 -> ImagePage(vm)
+                                0 ->
+                                    UserMediaTabPage(
+                                        feed = vm.state.videos,
+                                        onPageChange = { vm.changeVideoPage(it) },
+                                        onRetry = { vm.loadVideoList(force = true) },
+                                    )
+                                1 ->
+                                    UserMediaTabPage(
+                                        feed = vm.state.images,
+                                        onPageChange = { vm.changeImagePage(it) },
+                                        onRetry = { vm.loadImageList(force = true) },
+                                    )
                                 2 -> {
                                     CommentList(
                                         modifier = Modifier.fillMaxSize(),
@@ -756,76 +737,24 @@ private fun UserCard(
     }
 }
 
+/** 用户主页作品标签页共享网格（保持本机黑名单豁免，展示完整作者作品）。 */
 @Composable
-private fun VideoPage(vm: UserVM) {
-    val gridState = rememberLazyStaggeredGridState()
-    // 仅在成功加载新页码数据后才触发列表回顶，避免旧内容过早回顶
-    PageScrollEffect(vm.state.videoLoadedPage) { gridState.scrollToItem(0) }
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Spin(
-                modifier = Modifier.fillMaxSize(),
-                show = vm.state.videoLoading && vm.state.videoList.isEmpty(),
-            ) {
-                if (vm.state.videoList.isEmpty() && !vm.state.videoLoading) {
-                    EmptyStatus()
-                } else if (vm.state.videoList.isNotEmpty()) {
-                    LazyVerticalStaggeredGrid(
-                        state = gridState,
-                        columns = DynamicStaggeredGridCells(150.dp, 2, 4),
-                        modifier = Modifier.fillMaxSize(),
-                        verticalItemSpacing = 8.dp,
-                        contentPadding = PaddingValues(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(vm.state.videoList) { MediaCard(media = it) }
-                    }
-                }
-            }
-        }
-        PaginationBar(
-            page = vm.state.videoPage,
-            limit = 32,
-            total = vm.state.videoCount,
-            onPageChange = { vm.changeVideoPage(it) },
-            contentPadding = WindowInsets.navigationBars.asPaddingValues(),
-        )
-    }
-}
-
-@Composable
-private fun ImagePage(vm: UserVM) {
-    val gridState = rememberLazyStaggeredGridState()
-    // 仅在成功加载新页码数据后才触发列表回顶，避免旧内容过早回顶
-    PageScrollEffect(vm.state.imageLoadedPage) { gridState.scrollToItem(0) }
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Spin(
-                modifier = Modifier.fillMaxSize(),
-                show = vm.state.imageLoading && vm.state.imageList.isEmpty(),
-            ) {
-                if (vm.state.imageList.isEmpty() && !vm.state.imageLoading) {
-                    EmptyStatus()
-                } else if (vm.state.imageList.isNotEmpty()) {
-                    LazyVerticalStaggeredGrid(
-                        state = gridState,
-                        columns = DynamicStaggeredGridCells(150.dp, 2, 4),
-                        modifier = Modifier.fillMaxSize(),
-                        verticalItemSpacing = 8.dp,
-                        contentPadding = PaddingValues(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(vm.state.imageList) { MediaCard(media = it) }
-                    }
-                }
-            }
-        }
-        PaginationBar(
-            page = vm.state.imagePage,
-            limit = 32,
-            total = vm.state.imageCount,
-            onPageChange = { vm.changeImagePage(it) },
-            contentPadding = WindowInsets.navigationBars.asPaddingValues(),
-        )
+private fun <T : Media> UserMediaTabPage(
+    feed: PagedFeedState<T>,
+    onPageChange: (Int) -> Unit,
+    onRetry: () -> Unit,
+) {
+    PagedStaggeredGridPage(
+        feed = feed,
+        displayItems = feed.items,
+        displayUiState = feed.uiState,
+        itemKey = { it.id },
+        onPageChange = onPageChange,
+        onErrorRetry = onRetry,
+        onRefresh = null,
+        columns = DynamicStaggeredGridCells(150.dp, 2, 4),
+        paginationPadding = WindowInsets.navigationBars.asPaddingValues(),
+    ) { media ->
+        MediaCard(media = media)
     }
 }

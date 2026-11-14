@@ -1,6 +1,8 @@
 package me.rerere.awara.ui.page.search
 
 import me.rerere.awara.data.repo.MediaRepo
+import me.rerere.awara.data.repo.SearchSort
+import me.rerere.awara.data.repo.SearchType
 import me.rerere.awara.data.source.IwaraAPI
 import me.rerere.awara.util.SerializationConverterFactory
 import okhttp3.OkHttpClient
@@ -21,36 +23,43 @@ class SearchSortTest {
 
     @Test
     fun availableSortsMatchEachWebsiteCategory() {
-        assertEquals(listOf("relevance", "date", "views", "likes"), searchSortKeys("video"))
-        assertEquals(searchSortKeys("video"), searchSortKeys("image"))
-        assertEquals(listOf("relevance", "date"), searchSortKeys("user"))
+        assertEquals(
+            listOf(SearchSort.RELEVANCE, SearchSort.DATE, SearchSort.VIEWS, SearchSort.LIKES),
+            SearchType.VIDEO.availableSorts(),
+        )
+        assertEquals(SearchType.VIDEO.availableSorts(), SearchType.IMAGE.availableSorts())
+        assertEquals(
+            listOf(SearchSort.RELEVANCE, SearchSort.DATE),
+            SearchType.USER.availableSorts(),
+        )
     }
 
     @Test
     fun changingSortStartsAtFirstPageAndIgnoresUnsupportedValues() {
         val vm = viewModel()
         vm.jumpToPage(5)
-        vm.updateSort("likes")
-        assertEquals("likes", vm.state.sort)
+        vm.updateSort(SearchSort.LIKES)
+        assertEquals(SearchSort.LIKES, vm.state.sort)
         assertEquals(1, vm.state.page)
-        vm.updateSort("invalid")
-        assertEquals("likes", vm.state.sort)
+        vm.updateSearchType(SearchType.USER)
+        vm.updateSort(SearchSort.VIEWS)
+        assertEquals(SearchSort.RELEVANCE, vm.state.sort)
     }
 
     @Test
     fun switchingToUsersResetsUnsupportedSortButKeepsSupportedSort() {
         val vm = viewModel()
-        vm.updateSort("views")
+        vm.updateSort(SearchSort.VIEWS)
         vm.jumpToPage(4)
-        vm.updateSearchType("user")
-        assertEquals("relevance", vm.state.sort)
+        vm.updateSearchType(SearchType.USER)
+        assertEquals(SearchSort.RELEVANCE, vm.state.sort)
         assertEquals(1, vm.state.page)
-        vm.updateSort("date")
-        vm.updateSearchType("video")
-        assertEquals("date", vm.state.sort)
-        vm.updateSearchType("user")
-        vm.updateSort("likes")
-        assertEquals("date", vm.state.sort)
+        vm.updateSort(SearchSort.DATE)
+        vm.updateSearchType(SearchType.VIDEO)
+        assertEquals(SearchSort.DATE, vm.state.sort)
+        vm.updateSearchType(SearchType.USER)
+        vm.updateSort(SearchSort.LIKES)
+        assertEquals(SearchSort.DATE, vm.state.sort)
     }
 
     @Test

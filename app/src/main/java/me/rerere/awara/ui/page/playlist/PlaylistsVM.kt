@@ -1,26 +1,22 @@
 package me.rerere.awara.ui.page.playlist
 
-import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.isActive
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.Playlist
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
-import me.rerere.awara.data.source.onError
-import me.rerere.awara.data.source.onException
-import me.rerere.awara.data.source.onSuccess
-import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.iwara.LocalizedException
+import me.rerere.awara.ui.component.iwara.PagedFeedState
+import me.rerere.awara.ui.component.iwara.PagedListLoader
 
+/** 播单列表 ViewModel，使用共享分页加载器与标准 `UiState` 托管列表加载。 */
 class PlaylistsVM(
     savedStateHandle: SavedStateHandle,
     private val mediaRepo: MediaRepo,
@@ -28,98 +24,43 @@ class PlaylistsVM(
 ) : ViewModel() {
     private val username = savedStateHandle.get<String>("username")
     private var resolvedUserId = savedStateHandle.get<String>("userId")
-    private var loadJob: Job? = null
+
     var state by mutableStateOf(PlaylistsState())
         private set
+
+    private val loader =
+        PagedListLoader(
+            scope = viewModelScope,
+            fallbackErrorResId = R.string.load_failed,
+            getState = { state.feed },
+            updateState = { state = state.copy(feed = it) },
+            fetchPage = { page ->
+                val userId = resolveUserId()
+                mediaRepo.getPlaylists(userId = userId, page = page - 1)
+            },
+        )
 
     init {
         loadPlaylist()
     }
 
-    fun jumpToPage(page: Int) {
-        if (page < 1 || page == state.page) return
-        state = state.copy(page = page)
-        loadPlaylist(force = true)
+    /** 按直传 ID 或用户名解析目标用户 ID。 */
+    private suspend fun resolveUserId(): String {
+        resolvedUserId?.takeIf { it.isNotBlank() }?.let { return it }
+        val targetUsername =
+            username?.takeIf { it.isNotBlank() }
+                ?: throw LocalizedException(R.string.user_not_found)
+        val profile = userRepo.getProfile(targetUsername)
+        val userId = profile.user?.id ?: throw LocalizedException(R.string.user_not_found)
+        return userId.also { resolvedUserId = it }
     }
 
-    /** 转发重新加载请求，支持手势刷新标记与守门 */
-    fun reload(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
-        loadPlaylist(force = force, refresh = refresh)
+    /** 跳转播单页码。 */
+    fun jumpToPage(page: Int) = loader.jumpPage(page)
 
-    /** 加载播单列表；手势刷新失败恢复原数据，由 RefreshResult 返回错误 */
-    fun loadPlaylist(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (loadJob?.isActive == true && !force) return null
-        loadJob?.cancel()
-        val requestedPage = state.page
-        val page = requestedPage - 1
-        val oldError = state.error
-        val oldList = state.list
-        val oldCount = state.count
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(loading = true, error = null)
-                var outcome: RefreshResult = RefreshResult.Success
-                try {
-                    runAPICatching {
-                            // 外部资料链接携带 username，播单请求必须使用解析后的真实用户 ID。
-                            val userId =
-                                resolvedUserId
-                                    ?: checkNotNull(
-                                            userRepo.getProfile(checkNotNull(username)).user
-                                        ) {
-                                            "用户不存在"
-                                        }
-                                        .id
-                                        .also { resolvedUserId = it }
-                            mediaRepo.getPlaylists(userId = userId, page = page)
-                        }
-                        .onSuccess {
-                            state =
-                                state.copy(
-                                    list = it.results,
-                                    count = it.count,
-                                    error = null,
-                                    loadedPage = requestedPage,
-                                )
-                            outcome = RefreshResult.Success
-                        }
-                        .onError {
-                            val msg = it.message
-                            if (refresh) {
-                                state =
-                                    state.copy(error = oldError, list = oldList, count = oldCount)
-                            } else {
-                                state = state.copy(error = msg)
-                            }
-                            outcome = RefreshResult.Failure { Text(msg) }
-                        }
-                        .onException {
-                            if (it.exception is CancellationException) throw it.exception
-                            val msg = it.exception.message ?: "加载失败"
-                            if (refresh) {
-                                state =
-                                    state.copy(error = oldError, list = oldList, count = oldCount)
-                            } else {
-                                state = state.copy(error = msg)
-                            }
-                            outcome = RefreshResult.Failure { Text(msg) }
-                        }
-                    outcome
-                } finally {
-                    if (isActive) state = state.copy(loading = false)
-                }
-            }
-        loadJob = deferred
-        return deferred
-    }
+    /** 转发重新加载请求，支持手势刷新标记与强制取消重入。 */
+    fun loadPlaylist(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
+        loader.load(force = force, refresh = refresh)
 
-    data class PlaylistsState(
-        val loading: Boolean = false,
-        val page: Int = 1,
-        /** 记录已成功渲染的播单列表页码，仅在数据更新时触发回顶。 */
-        val loadedPage: Int? = null,
-        val count: Int = 0,
-        val list: List<Playlist> = emptyList(),
-        val error: String? = null,
-    )
+    data class PlaylistsState(val feed: PagedFeedState<Playlist> = PagedFeedState())
 }

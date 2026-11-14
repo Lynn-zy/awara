@@ -1,7 +1,7 @@
 package me.rerere.awara.data.repo
 
-import me.rerere.awara.data.entity.CommentCreationDto
-import me.rerere.awara.data.entity.CommentUpdateDto
+import me.rerere.awara.data.dto.CommentCreationDto
+import me.rerere.awara.data.dto.CommentUpdateDto
 import me.rerere.awara.data.source.IwaraAPI
 
 class CommentRepo(private val iwaraAPI: IwaraAPI) {
@@ -56,7 +56,7 @@ class CommentRepo(private val iwaraAPI: IwaraAPI) {
      */
     suspend fun updateComment(id: String, content: String) {
         val response = iwaraAPI.updateComment(id, CommentUpdateDto(body = content))
-        check(response.isSuccessful) { "更新评论失败: ${response.code()}" }
+        response.requireSuccess { "更新评论失败: ${response.code()}" }
     }
 
     /**
@@ -66,6 +66,6 @@ class CommentRepo(private val iwaraAPI: IwaraAPI) {
      */
     suspend fun deleteComment(id: String) {
         val response = iwaraAPI.deleteComment(id)
-        check(response.isSuccessful) { "删除评论失败: ${response.code()}" }
+        response.requireSuccess { "删除评论失败: ${response.code()}" }
     }
 }

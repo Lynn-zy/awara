@@ -30,22 +30,8 @@ import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.acceptChildren
 import org.intellij.markdown.ast.getTextInNode
 import org.intellij.markdown.ast.visitors.Visitor
-import org.intellij.markdown.flavours.commonmark.CommonMarkFlavourDescriptor
-import org.intellij.markdown.parser.MarkdownParser
 
-private val ALLOWED_SCHEMES = setOf("http", "https", "mailto")
-private val REJECTED_SCHEMES = setOf("javascript", "file", "intent", "content", "data", "about")
 private val BARE_URL_REGEX = Regex("""(?i)\b(?:https?://|mailto:)[^\s<>"'`，。；！？、（）【】]+""")
-
-// 校验URL协议头是否安全，防范恶意URI调用
-internal fun isSafeUrl(url: String): Boolean {
-    val trimmed = url.trim()
-    val colonIdx = trimmed.indexOf(':')
-    if (colonIdx <= 0) return false
-    val scheme = trimmed.substring(0, colonIdx).lowercase()
-    if (scheme in REJECTED_SCHEMES) return false
-    return scheme in ALLOWED_SCHEMES
-}
 
 // 剔除URL尾部标点并将安全链接高亮，非安全或普通字符按原样输出
 @OptIn(ExperimentalTextApi::class)
@@ -173,8 +159,7 @@ data class RichTextTheme(
 )
 
 internal fun AnnotatedString.Builder.toAnnotatedString(text: String, theme: RichTextTheme) {
-    val parser = MarkdownParser(CommonMarkFlavourDescriptor())
-    val syntaxTree = parser.buildMarkdownTreeFromString(text)
+    val syntaxTree = parseCommonMarkTree(text)
     val rendered = buildAnnotatedString { handle(this, syntaxTree, text, theme) }
     appendSafeTextAndUrls(this, rendered, theme)
 }

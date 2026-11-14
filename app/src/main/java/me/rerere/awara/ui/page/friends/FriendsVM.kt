@@ -1,6 +1,5 @@
 package me.rerere.awara.ui.page.friends
 
-import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -9,198 +8,84 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendRequestDto
 import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.repo.UserRepo
-import me.rerere.awara.data.source.APIResult
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
-import me.rerere.awara.data.source.stringResource
-import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.iwara.PagedFeedState
+import me.rerere.awara.ui.component.iwara.PagedListLoader
+import me.rerere.awara.ui.component.iwara.UiText
 
+/** 好友及好友申请页 ViewModel，统一托管双分页状态与操作错误事件。 */
 class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRepo) : ViewModel() {
     private val userId = checkNotNull(savedStateHandle.get<String>("userId"))
     val self = checkNotNull(savedStateHandle.get<Boolean>("self"))
+
     var state by mutableStateOf(FriendsState())
         private set
 
-    private var friendsJob: Job? = null
-    private var requestsJob: Job? = null
-    private val eventChannel = Channel<FriendsEvent>(Channel.BUFFERED)
-    val events = eventChannel.receiveAsFlow()
+    val events = MutableSharedFlow<FriendsEvent>()
+
+    private val friendsLoader =
+        PagedListLoader(
+            scope = viewModelScope,
+            fallbackErrorResId = R.string.load_failed,
+            getState = { state.friends },
+            updateState = { state = state.copy(friends = it) },
+            fetchPage = { page -> userRepo.getUserFriends(userId, page - 1) },
+        )
+
+    private val requestsLoader =
+        PagedListLoader(
+            scope = viewModelScope,
+            fallbackErrorResId = R.string.load_failed,
+            getState = { state.requests },
+            updateState = { state = state.copy(requests = it) },
+            fetchPage = { page -> userRepo.getFriendRequests(userId, page - 1) },
+        )
 
     init {
         loadFriends()
-        loadRequests()
-    }
-
-    fun loadFriends(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        // 重复加载守门
-        if (force) {
-            friendsJob?.cancel()
-        } else if (friendsJob?.isActive == true) {
-            return null
+        if (self) {
+            loadRequests()
         }
-        val requestedPage = state.friendsPage
-        val previousState = state.friendsUiState
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(friendsUiState = UiState.Loading)
-                var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching { userRepo.getUserFriends(userId, requestedPage - 1) }
-                    .onSuccess {
-                        outcome = RefreshResult.Success
-                        state =
-                            state.copy(
-                                friendsUiState =
-                                    if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                                friendsData = it.results,
-                                friendsCount = it.count,
-                                friendsLoadedPage = requestedPage,
-                            )
-                    }
-                    .onError {
-                        outcome = RefreshResult.Failure { Text(stringResource(error = it)) }
-                        // 下拉刷新失败恢复旧状态保留数据，初始或分页失败展示错误页
-                        state =
-                            if (refresh) {
-                                state.copy(friendsUiState = previousState)
-                            } else {
-                                state.copy(
-                                    friendsUiState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = it)) }
-                                        )
-                                )
-                            }
-                    }
-                    .onException {
-                        // 取消异常正常抛出不吞
-                        if (it.exception is CancellationException) throw it.exception
-                        outcome =
-                            RefreshResult.Failure {
-                                Text(it.exception.localizedMessage ?: "Unknown Error")
-                            }
-                        state =
-                            if (refresh) {
-                                state.copy(friendsUiState = previousState)
-                            } else {
-                                state.copy(
-                                    friendsUiState =
-                                        UiState.Error(
-                                            message = {
-                                                Text(
-                                                    it.exception.localizedMessage ?: "Unknown Error"
-                                                )
-                                            }
-                                        )
-                                )
-                            }
-                    }
-                outcome
-            }
-        friendsJob = deferred
-        return deferred
     }
 
-    fun loadRequests(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (!self) return null
-        // 重复加载守门
-        if (force) {
-            requestsJob?.cancel()
-        } else if (requestsJob?.isActive == true) {
-            return null
-        }
-        val requestedPage = state.requestsPage
-        val previousState = state.requestsUiState
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(requestsUiState = UiState.Loading)
-                var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching { userRepo.getFriendRequests(userId, requestedPage - 1) }
-                    .onSuccess {
-                        outcome = RefreshResult.Success
-                        state =
-                            state.copy(
-                                requestsUiState =
-                                    if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                                requestsData = it.results,
-                                requestsCount = it.count,
-                                requestsLoadedPage = requestedPage,
-                            )
-                    }
-                    .onError {
-                        outcome = RefreshResult.Failure { Text(stringResource(error = it)) }
-                        // 下拉刷新失败恢复旧状态保留数据，初始或分页失败展示错误页
-                        state =
-                            if (refresh) {
-                                state.copy(requestsUiState = previousState)
-                            } else {
-                                state.copy(
-                                    requestsUiState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = it)) }
-                                        )
-                                )
-                            }
-                    }
-                    .onException {
-                        // 取消异常正常抛出不吞
-                        if (it.exception is CancellationException) throw it.exception
-                        outcome =
-                            RefreshResult.Failure {
-                                Text(it.exception.localizedMessage ?: "Unknown Error")
-                            }
-                        state =
-                            if (refresh) {
-                                state.copy(requestsUiState = previousState)
-                            } else {
-                                state.copy(
-                                    requestsUiState =
-                                        UiState.Error(
-                                            message = {
-                                                Text(
-                                                    it.exception.localizedMessage ?: "Unknown Error"
-                                                )
-                                            }
-                                        )
-                                )
-                            }
-                    }
-                outcome
-            }
-        requestsJob = deferred
-        return deferred
-    }
+    /** 加载好友列表分页。 */
+    fun loadFriends(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
+        friendsLoader.load(force = force, refresh = refresh)
 
-    /**
-     * 执行好友关系变更请求并在失败时发送提示事件，同时透传协程取消异常
-     */
+    /** 加载好友申请列表分页。 */
+    fun loadRequests(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
+        requestsLoader.load(force = force, refresh = refresh)
+
     private fun executeFriendAction(
+        refreshFriendsAfter: Boolean,
         action: suspend () -> Unit,
-        onSuccessAction: () -> Unit,
     ) {
+        if (state.loadingFriendChange) return
         viewModelScope.launch {
             state = state.copy(loadingFriendChange = true)
             try {
                 runAPICatching { action() }
-                    .onSuccess { onSuccessAction() }
-                    .onError { eventChannel.send(FriendsEvent.ActionError(it)) }
+                    .onSuccess {
+                        loadRequests(force = true)
+                        if (refreshFriendsAfter) {
+                            loadFriends(force = true)
+                        }
+                    }
+                    .onError { events.emit(FriendsEvent.ActionFailed(UiText.ApiError(it))) }
                     .onException {
-                        // 取消异常必须继续向外抛出，避免静默吞掉协程取消
                         if (it.exception is CancellationException) throw it.exception
-                        eventChannel.send(
-                            FriendsEvent.ActionException(
-                                it.exception.localizedMessage ?: "Unknown Error"
-                            )
+                        events.emit(
+                            FriendsEvent.ActionFailed(UiText.fromException(it.exception))
                         )
                     }
             } finally {
@@ -209,56 +94,29 @@ class FriendsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
         }
     }
 
-    /** 接受好友申请并在成功后刷新好友与申请列表。 */
+    /** 接受好友申请并同步刷新好友与申请列表。 */
     fun addFriends(userId: String) {
-        executeFriendAction(
-            action = { userRepo.addFriend(userId) },
-            onSuccessAction = {
-                loadFriends(force = true)
-                loadRequests(force = true)
-            },
-        )
+        executeFriendAction(refreshFriendsAfter = true) { userRepo.addFriend(userId) }
     }
 
-    /** 拒绝或取消好友申请，并在成功后刷新申请列表。 */
+    /** 拒绝或移除好友申请并刷新申请列表。 */
     fun removeFriends(userId: String) {
-        executeFriendAction(
-            action = { userRepo.removeFriend(userId) },
-            onSuccessAction = { loadRequests(force = true) },
-        )
+        executeFriendAction(refreshFriendsAfter = false) { userRepo.removeFriend(userId) }
     }
 
-    fun jumpFriendsPage(page: Int) {
-        if (page == state.friendsPage || page < 1) return
-        state = state.copy(friendsPage = page)
-        loadFriends(force = true)
-    }
+    /** 跳转好友列表页码。 */
+    fun jumpFriendsPage(page: Int) = friendsLoader.jumpPage(page)
 
-    fun jumpRequestsPage(it: Int) {
-        if (it == state.requestsPage || it < 1) return
-        state = state.copy(requestsPage = it)
-        loadRequests(force = true)
-    }
+    /** 跳转好友申请列表页码。 */
+    fun jumpRequestsPage(page: Int) = requestsLoader.jumpPage(page)
 
     data class FriendsState(
-        val friendsUiState: UiState = UiState.Initial,
-        val friendsPage: Int = 1,
-        /** 记录已成功渲染的好友页码，仅在数据更新时触发回顶。 */
-        val friendsLoadedPage: Int? = null,
-        val friendsCount: Int = 0,
-        val friendsData: List<User> = emptyList(),
-        val requestsUiState: UiState = UiState.Initial,
-        val requestsPage: Int = 1,
-        /** 记录已成功渲染的好友请求页码，仅在数据更新时触发回顶。 */
-        val requestsLoadedPage: Int? = null,
-        val requestsCount: Int = 0,
-        val requestsData: List<FriendRequestDto> = emptyList(),
+        val friends: PagedFeedState<User> = PagedFeedState(),
+        val requests: PagedFeedState<FriendRequestDto> = PagedFeedState(),
         val loadingFriendChange: Boolean = false,
     )
 
-    sealed class FriendsEvent {
-        data class ActionError(val error: APIResult.Error) : FriendsEvent()
-
-        data class ActionException(val message: String) : FriendsEvent()
+    sealed interface FriendsEvent {
+        data class ActionFailed(val message: UiText) : FriendsEvent
     }
 }

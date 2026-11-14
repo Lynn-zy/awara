@@ -3,6 +3,19 @@ package me.rerere.awara.ui.page.notification
 import java.net.URLEncoder
 import me.rerere.awara.data.entity.Notification
 
+/** 通知业务类型枚举，收敛已知服务端通知事件并安全兜底未知类型。 */
+enum class NotificationType(val wireValue: String) {
+    NEW_REPLY("newReply"),
+    NEW_COMMENT("newComment"),
+    UNKNOWN("");
+
+    companion object {
+        /** 将服务端通知类型字段映射为强类型枚举；未识别值归入 [UNKNOWN]。 */
+        fun fromWireValue(value: String): NotificationType =
+            values().firstOrNull { it != UNKNOWN && it.wireValue == value } ?: UNKNOWN
+    }
+}
+
 /** 只合并成功确认的通知，不能将批量操作之后的新消息也自动视为已读。 */
 internal fun mergeNotificationReadState(
     notifications: List<Notification>,
@@ -26,7 +39,7 @@ internal fun safeUrlEncode(value: String): String =
 /**
  * 根据通知类型和关联对象计算导航目标路由。
  * - 当通知关联有效视频时，普通跳转到视频详情，不自动查找评论。
- * - 当通知类型为 newComment 且无视频时：跳转用户个人主页 `user/{profileIdentifier}`；
+ * - 当通知类型为 [NotificationType.NEW_COMMENT] 且无视频时：跳转用户个人主页 `user/{profileIdentifier}`；
  * - 其它情况无明确有效目标，返回 null 避免无效跳转。
  *
  * @param notification 通知实体对象
@@ -37,12 +50,13 @@ fun notificationDestination(notification: Notification): String? {
     if (videoId != null) {
         return "video/${safeUrlEncode(videoId)}"
     }
-    return when (notification.type) {
-        "newComment" ->
+    return when (NotificationType.fromWireValue(notification.type)) {
+        NotificationType.NEW_COMMENT ->
             notification.profile
                 ?.profileIdentifier
                 ?.takeIf { it.isNotBlank() }
                 ?.let { "user/${safeUrlEncode(it)}" }
-        else -> null
+        NotificationType.NEW_REPLY,
+        NotificationType.UNKNOWN -> null
     }
 }

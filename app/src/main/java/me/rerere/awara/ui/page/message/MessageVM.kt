@@ -12,9 +12,8 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.Message
 import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.data.source.onError
@@ -24,75 +23,61 @@ import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.iwara.RefreshRunner
+import me.rerere.awara.ui.component.iwara.UiText
 
-/** 管理单个会话的消息、输入草稿与发送状态。 */
+/** 私信消息详情页 ViewModel，复用通用 `RefreshRunner` 托管加载并发与下拉刷新回滚。 */
 class MessageVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRepo) : ViewModel() {
-    // 会话标识由路由传入，禁止使用空标识请求接口。
     private val conversationId = checkNotNull(savedStateHandle.get<String>("id"))
 
     var state by mutableStateOf(MessageState())
         private set
 
-    private var loadJob: Job? = null
+    private val runner = RefreshRunner<List<Message>>(viewModelScope, R.string.load_failed)
 
     init {
         loadMessages()
     }
 
-    /** 加载当前会话消息；手势刷新失败恢复旧状态保留原消息列表，非手势失败发布可重试错误 */
+    /** 拉取当前会话消息；下拉刷新失败保留已有消息列表，初始失败转入 Error 状态。 */
     fun loadMessages(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (state.sending) return null
-        if (force) {
-            loadJob?.cancel()
-        } else if (state.uiState == UiState.Loading || loadJob?.isActive == true) {
-            return null
-        }
         val oldUiState = state.uiState
         val oldMessages = state.messages
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(uiState = UiState.Loading)
-                var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching { userRepo.getMessages(conversationId, currentTimestamp()) }
-                    .onSuccess {
-                        state =
-                            state.copy(
-                                uiState =
-                                    if (it.results.isEmpty()) UiState.Empty else UiState.Success,
-                                messages =
-                                    it.results.sortedByDescending { message -> message.createdAt },
-                            )
-                        outcome = RefreshResult.Success
+        return runner.run(
+            force = force,
+            refresh = refresh,
+            onStart = { state = state.copy(uiState = UiState.Loading) },
+            request = {
+                userRepo
+                    .getMessages(conversationId, currentTimestamp())
+                    .results
+                    .sortedByDescending { it.createdAt }
+            },
+            onSuccess = { messages ->
+                state =
+                    state.copy(
+                        uiState = if (messages.isEmpty()) UiState.Empty else UiState.Success,
+                        messages = messages,
+                    )
+            },
+            onFailure = { isRefresh, uiText, throwable ->
+                state =
+                    if (isRefresh) {
+                        val restoredUiState =
+                            if (oldUiState == UiState.Loading) {
+                                if (oldMessages.isEmpty()) UiState.Empty else UiState.Success
+                            } else {
+                                oldUiState
+                            }
+                        state.copy(uiState = restoredUiState, messages = oldMessages)
+                    } else {
+                        state.copy(
+                            uiState =
+                                UiState.Error(throwable = throwable) { Text(uiText.asString()) }
+                        )
                     }
-                    .onError { error ->
-                        if (refresh) {
-                            state = state.copy(uiState = oldUiState, messages = oldMessages)
-                        } else {
-                            state =
-                                state.copy(
-                                    uiState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = error)) }
-                                        )
-                                )
-                        }
-                        outcome = RefreshResult.Failure { Text(stringResource(error = error)) }
-                    }
-                    .onException { exception ->
-                        if (exception.exception is CancellationException) throw exception.exception
-                        val errorMsg = exception.exception.localizedMessage ?: "Unknown Error"
-                        if (refresh) {
-                            state = state.copy(uiState = oldUiState, messages = oldMessages)
-                        } else {
-                            state =
-                                state.copy(uiState = UiState.Error(message = { Text(errorMsg) }))
-                        }
-                        outcome = RefreshResult.Failure { Text(errorMsg) }
-                    }
-                outcome
-            }
-        loadJob = deferred
-        return deferred
+            },
+        )
     }
 
     /** 更新未发送的草稿，发送期间保持请求正文不变。 */
@@ -122,10 +107,8 @@ class MessageVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRe
                     }
                     .onException {
                         if (it.exception is CancellationException) throw it.exception
-                        state =
-                            state.copy(
-                                sendError = { Text(it.exception.localizedMessage.orEmpty()) }
-                            )
+                        val uiText = UiText.fromException(it.exception)
+                        state = state.copy(sendError = { Text(uiText.asString()) })
                     }
             } finally {
                 state = state.copy(sending = false)

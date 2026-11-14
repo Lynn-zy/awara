@@ -9,18 +9,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import me.rerere.awara.R
 import me.rerere.awara.data.entity.Notification
 import me.rerere.awara.data.repo.UserRepo
-import me.rerere.awara.data.source.onError
-import me.rerere.awara.data.source.onException
-import me.rerere.awara.data.source.onSuccess
-import me.rerere.awara.data.source.runAPICatching
-import me.rerere.awara.data.source.stringResource
+import me.rerere.awara.data.source.Pager
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.iwara.RefreshRunner
+import me.rerere.awara.ui.component.iwara.UiText
 
 /** 加载登录用户的通知列表，重试沿用同一请求入口。 */
 class NotificationsVM(savedStateHandle: SavedStateHandle, private val userRepo: UserRepo) :
@@ -29,7 +26,8 @@ class NotificationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
     var state by mutableStateOf(NotificationsState())
         private set
 
-    private var loadJob: Job? = null
+    private val loadRunner =
+        RefreshRunner<Pager<Notification>>(viewModelScope, fallbackErrorResId = R.string.unknown_error)
 
     /** 已确认标记为已读的通知 ID 集合，用于防止远端旧快照响应在刷新时覆盖已读状态 */
     private val confirmedReadIds = mutableSetOf<String>()
@@ -40,62 +38,46 @@ class NotificationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
 
     /** 加载通知列表；手势刷新失败恢复旧状态保留原列表，非手势失败发布可重试错误 */
     fun load(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (force) {
-            loadJob?.cancel()
-        } else if (state.uiState == UiState.Loading || loadJob?.isActive == true) {
-            return null
-        }
         val oldUiState = state.uiState
-        val deferred =
-            viewModelScope.async {
+        return loadRunner.run(
+            force = force,
+            refresh = refresh,
+            onStart = {
                 if (!refresh) {
                     state = state.copy(uiState = UiState.Loading)
                 }
-                var outcome: RefreshResult = RefreshResult.Success
-                runAPICatching { userRepo.getNotifications(userId) }
-                    .onSuccess {
-                        // 刷新或重新加载时，合并本地已确认的已读记录，防止服务端旧快照响应覆盖最新标读状态
-                        val syncedResults = mergeNotificationReadState(it.results, confirmedReadIds)
-                        state =
-                            state.copy(
-                                uiState =
-                                    if (syncedResults.isEmpty()) UiState.Empty else UiState.Success,
-                                data = syncedResults,
-                            )
-                        outcome = RefreshResult.Success
-                    }
-                    .onError { error ->
-                        if (refresh) {
-                            state = state.copy(uiState = oldUiState)
-                        } else {
-                            state =
-                                state.copy(
-                                    uiState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = error)) }
-                                        )
-                                )
-                        }
-                        outcome = RefreshResult.Failure { Text(stringResource(error = error)) }
-                    }
-                    .onException { exception ->
-                        if (exception.exception is CancellationException) throw exception.exception
-                        val errorMsg =
-                            exception.exception.localizedMessage.orEmpty().ifBlank {
-                                "Unknown Error"
+            },
+            request = { userRepo.getNotifications(userId) },
+            onSuccess = { pager ->
+                // 刷新或重新加载时，合并本地已确认的已读记录，防止服务端旧快照响应覆盖最新标读状态
+                val syncedResults = mergeNotificationReadState(pager.results, confirmedReadIds)
+                state =
+                    state.copy(
+                        uiState = if (syncedResults.isEmpty()) UiState.Empty else UiState.Success,
+                        data = syncedResults,
+                    )
+            },
+            onFailure = { isRefresh, uiText, throwable ->
+                state =
+                    if (isRefresh) {
+                        val restoredUiState =
+                            if (oldUiState == UiState.Loading) {
+                                if (state.data.isEmpty()) UiState.Empty else UiState.Success
+                            } else {
+                                oldUiState
                             }
-                        if (refresh) {
-                            state = state.copy(uiState = oldUiState)
-                        } else {
-                            state =
-                                state.copy(uiState = UiState.Error(message = { Text(errorMsg) }))
-                        }
-                        outcome = RefreshResult.Failure { Text(errorMsg) }
+                        state.copy(uiState = restoredUiState)
+                    } else {
+                        state.copy(
+                            uiState =
+                                UiState.Error(
+                                    throwable = throwable,
+                                    message = { Text(uiText.asString()) },
+                                )
+                        )
                     }
-                outcome
-            }
-        loadJob = deferred
-        return deferred
+            },
+        )
     }
 
     /**
@@ -123,7 +105,14 @@ class NotificationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
-                state = state.copy(readError = exception.localizedMessage ?: "标记通知已读失败")
+                state =
+                    state.copy(
+                        readError =
+                            UiText.fromException(
+                                exception,
+                                R.string.notification_mark_read_failed,
+                            )
+                    )
             } finally {
                 state = state.copy(pendingReadIds = state.pendingReadIds - notificationId)
             }
@@ -149,13 +138,21 @@ class NotificationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
-                state = state.copy(readError = exception.localizedMessage ?: "全部标记已读失败")
+                state =
+                    state.copy(
+                        readError =
+                            UiText.fromException(
+                                exception,
+                                R.string.notification_mark_all_read_failed,
+                            )
+                    )
             } finally {
                 state = state.copy(readAllLoading = false)
             }
         }
     }
 
+    /** 清除已展示的单条或批量标读错误提示。 */
     fun clearReadError() {
         state = state.copy(readError = null)
     }
@@ -165,7 +162,7 @@ class NotificationsVM(savedStateHandle: SavedStateHandle, private val userRepo: 
         val uiState: UiState = UiState.Initial,
         val data: List<Notification> = emptyList(),
         val readAllLoading: Boolean = false,
-        val readError: String? = null,
+        val readError: UiText? = null,
         val pendingReadIds: Set<String> = emptySet(),
     )
 }

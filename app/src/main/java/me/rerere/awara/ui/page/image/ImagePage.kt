@@ -67,7 +67,12 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(text = state.state?.title ?: "Image", maxLines = 1) },
+                title = {
+                    Text(
+                        text = state.state?.title ?: stringResource(R.string.image),
+                        maxLines = 1,
+                    )
+                },
                 navigationIcon = { BackButton() },
             )
         },
@@ -215,7 +220,7 @@ fun ImagePage(vm: ImageVM = koinViewModel()) {
                 }
                 state.error?.let { error ->
                     ErrorStatus(
-                        message = error,
+                        message = error.asString(),
                         onRetry = { vm.load() },
                         modifier = Modifier.align(Alignment.Center),
                     )

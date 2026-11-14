@@ -15,7 +15,4 @@ data class Comment(
     val parent: Comment? = null,
 )
 
-@Serializable data class CommentCreationDto(val body: String, val parentId: String? = null)
 
-/** 评论更新数据传输对象。 对应 PUT /comment/{id} 接口请求体，仅包含正文，严禁携带 parentId。 */
-@Serializable data class CommentUpdateDto(val body: String)

@@ -18,10 +18,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.rerere.awara.R
 import me.rerere.awara.data.SearchCategory
 import me.rerere.awara.data.history.HistoryRetention
 import me.rerere.awara.data.history.HistoryRetentionPeriod
 import me.rerere.awara.di.AppDatabase
+import me.rerere.awara.ui.component.iwara.UiText
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryVM(private val database: AppDatabase) : ViewModel() {
@@ -35,7 +37,7 @@ class HistoryVM(private val database: AppDatabase) : ViewModel() {
     var operationInProgress by mutableStateOf(false)
         private set
 
-    var operationError by mutableStateOf<String?>(null)
+    var operationError by mutableStateOf<UiText?>(null)
         private set
 
     val historyItems =
@@ -107,7 +109,8 @@ class HistoryVM(private val database: AppDatabase) : ViewModel() {
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
-                operationError = exception.localizedMessage ?: "历史记录操作失败，请重试"
+                operationError =
+                    UiText.fromException(exception, R.string.history_operation_failed)
             } finally {
                 operationInProgress = false
             }

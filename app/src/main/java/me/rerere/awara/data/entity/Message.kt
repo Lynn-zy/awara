@@ -25,5 +25,4 @@ data class MessageList(
     @Serializable(with = InstantSerializer::class) val last: Instant?,
 )
 
-/** 发送消息请求仅包含正文。 */
-@Serializable data class MessageCreationDto(val body: String)
+

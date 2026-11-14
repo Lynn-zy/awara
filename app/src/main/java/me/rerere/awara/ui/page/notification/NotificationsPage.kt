@@ -58,7 +58,7 @@ fun NotificationsPage(vm: NotificationsVM = koinViewModel()) {
     val message = LocalMessageProvider.current
     LaunchedEffect(vm.state.readError) {
         val error = vm.state.readError ?: return@LaunchedEffect
-        message.error { Text(error) }
+        message.error { Text(error.asString()) }
         vm.clearReadError()
     }
     Scaffold(
@@ -141,23 +141,25 @@ private fun NotificationCard(
             ?: stringResource(R.string.user_unknown)
 
     // 当 newComment 包含关联视频时为视频下评论，文案不声称主页留言
+    val notificationType = NotificationType.fromWireValue(notification.type)
     val headline =
-        when (notification.type) {
-            "newReply" -> stringResource(R.string.notification_new_reply, authorName)
-            "newComment" -> {
+        when (notificationType) {
+            NotificationType.NEW_REPLY -> stringResource(R.string.notification_new_reply, authorName)
+            NotificationType.NEW_COMMENT -> {
                 if (notification.video != null) {
                     stringResource(R.string.notification_video_comment, authorName)
                 } else {
                     stringResource(R.string.notification_new_comment, authorName)
                 }
             }
-            else -> stringResource(R.string.notification_unsupported, notification.type)
+            NotificationType.UNKNOWN ->
+                stringResource(R.string.notification_unsupported, notification.type)
         }
     val icon =
-        when (notification.type) {
-            "newReply" -> Icons.Outlined.Quickreply
-            "newComment" -> Icons.Outlined.Comment
-            else -> Icons.Outlined.ErrorOutline
+        when (notificationType) {
+            NotificationType.NEW_REPLY -> Icons.Outlined.Quickreply
+            NotificationType.NEW_COMMENT -> Icons.Outlined.Comment
+            NotificationType.UNKNOWN -> Icons.Outlined.ErrorOutline
         }
 
     // 卡片遵循应用既有风格，圆角设置为 8.dp (<= 8.dp)

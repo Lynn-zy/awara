@@ -43,7 +43,6 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.iwara.Avatar
 import me.rerere.awara.ui.component.iwara.RequireLoginVisible
 import me.rerere.awara.ui.stores.LocalUserStore
-import me.rerere.awara.ui.stores.UserStoreAction
 import me.rerere.awara.ui.stores.collectAsState
 
 @Composable
@@ -82,7 +81,7 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
             // User nick name
             val displayName =
                 if (userState.user == null) {
-                    "未登录"
+                    stringResource(R.string.user_not_logged_in)
                 } else {
                     userState.user.name?.takeIf { it.isNotBlank() }
                         ?: userState.user.username?.takeIf { it.isNotBlank() }
@@ -107,11 +106,11 @@ fun ColumnScope.IndexDrawer(vm: IndexVM) {
         Spacer(modifier = Modifier.weight(1f))
         IconButton(
             onClick = {
-                userStore(UserStoreAction.Logout)
-                message.info { Text("已登出") }
+                userStore.logout()
+                message.info { Text(stringResource(R.string.user_logged_out)) }
             }
         ) {
-            Icon(Icons.Outlined.ExitToApp, "Logout")
+            Icon(Icons.Outlined.ExitToApp, stringResource(R.string.logout))
         }
     }
 

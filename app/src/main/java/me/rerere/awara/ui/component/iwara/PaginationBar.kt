@@ -65,7 +65,7 @@ fun PaginationBar(
                     .clickable {
                         dialog.input(
                             title = {
-                                Text("Jump to page")
+                                Text(stringResource(R.string.pagination_jump_to_page))
                             }
                         ) {
                             val target = it.toIntOrNull()
@@ -73,7 +73,7 @@ fun PaginationBar(
                                 onPageChange(target)
                             } else {
                                 message.error {
-                                    Text("Invalid page number: $it")
+                                    Text(stringResource(R.string.pagination_invalid_page, it))
                                 }
                             }
                         }
@@ -89,7 +89,7 @@ fun PaginationBar(
                     }
                 },
             ) {
-                Icon(Icons.Outlined.KeyboardArrowLeft, "Previous page")
+                Icon(Icons.Outlined.KeyboardArrowLeft, stringResource(R.string.pagination_prev_page))
             }
 
             // Next page
@@ -100,7 +100,7 @@ fun PaginationBar(
                     }
                 }
             ) {
-                Icon(Icons.Outlined.KeyboardArrowRight, "Next page")
+                Icon(Icons.Outlined.KeyboardArrowRight, stringResource(R.string.pagination_next_page))
             }
 
             if (trailing != null) {

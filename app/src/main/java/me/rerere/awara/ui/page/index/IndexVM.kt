@@ -1,17 +1,13 @@
 package me.rerere.awara.ui.page.index
 
 import android.util.Log
-import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
@@ -28,15 +24,17 @@ import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.resolveAvailableUpdate
 import me.rerere.awara.data.source.runAPICatching
-import me.rerere.awara.data.source.stringResource
-import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import me.rerere.awara.ui.component.iwara.PagedFeedState
+import me.rerere.awara.ui.component.iwara.PagedListLoader
 import me.rerere.awara.ui.component.iwara.param.FilterValue
 import me.rerere.awara.ui.component.iwara.param.sort.MediaSortOptions
 import me.rerere.awara.ui.component.iwara.param.toParams
 
 private const val TAG = "IndexVM"
+private const val INDEX_PAGE_LIMIT = 24
 
+/** 首页 ViewModel：通过三个独立 `PagedListLoader` 复用共享分页加载与下拉刷新状态机，同时托管计数与更新检测。 */
 class IndexVM(
     private val userRepo: UserRepo,
     private val mediaRepo: MediaRepo,
@@ -47,16 +45,66 @@ class IndexVM(
 
     var videoSort: String by mutableStateOf(MediaSortOptions.first().name)
     val videoFilters: MutableList<FilterValue> = mutableStateListOf()
+
     var imageSort: String by mutableStateOf(MediaSortOptions.first().name)
     val imageFilters: MutableList<FilterValue> = mutableStateListOf()
 
-    // 采用缓冲单次通道发送更新提示事件，既避免启动初期 UI 未订阅时丢失，又防止返回首页重复弹窗
     private val eventChannel = Channel<IndexEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
 
-    private var subscriptionJob: Job? = null
-    private var videoJob: Job? = null
-    private var imageJob: Job? = null
+    private val subscriptionLoader =
+        PagedListLoader(
+            scope = viewModelScope,
+            fallbackErrorResId = R.string.load_failed,
+            getState = { state.subscriptions },
+            updateState = { state = state.copy(subscriptions = it) },
+            fetchPage = { page ->
+                val param =
+                    mapOf(
+                        "subscribed" to "true",
+                        "limit" to INDEX_PAGE_LIMIT.toString(),
+                        "page" to (page - 1).toString(),
+                    )
+                when (state.subscriptionType) {
+                    SubscriptionType.VIDEO -> mediaRepo.getVideoList(param)
+                    SubscriptionType.IMAGE -> mediaRepo.getImageList(param)
+                }
+            },
+        )
+
+    private val videoLoader =
+        PagedListLoader(
+            scope = viewModelScope,
+            fallbackErrorResId = R.string.load_failed,
+            getState = { state.videos },
+            updateState = { state = state.copy(videos = it) },
+            fetchPage = { page ->
+                mediaRepo.getVideoList(
+                    mapOf(
+                        "limit" to INDEX_PAGE_LIMIT.toString(),
+                        "page" to (page - 1).toString(),
+                        "sort" to videoSort,
+                    ) + videoFilters.toParams()
+                )
+            },
+        )
+
+    private val imageLoader =
+        PagedListLoader(
+            scope = viewModelScope,
+            fallbackErrorResId = R.string.load_failed,
+            getState = { state.images },
+            updateState = { state = state.copy(images = it) },
+            fetchPage = { page ->
+                mediaRepo.getImageList(
+                    mapOf(
+                        "limit" to INDEX_PAGE_LIMIT.toString(),
+                        "page" to (page - 1).toString(),
+                        "sort" to imageSort,
+                    ) + imageFilters.toParams()
+                )
+            },
+        )
 
     init {
         loadSubscriptions()
@@ -65,9 +113,7 @@ class IndexVM(
         checkUpdate()
     }
 
-    /**
-     * 启动时异步查询 GitHub Releases 最新正式版本，仅当远端语义化版本高于当前版本时发送弹窗事件。
-     */
+    /** 启动时异步查询 GitHub Releases 最新正式版本，仅当远端语义化版本高于当前版本时发送弹窗事件。 */
     private fun checkUpdate() {
         viewModelScope.launch {
             kotlin
@@ -87,111 +133,27 @@ class IndexVM(
         }
     }
 
-    fun loadSubscriptions(
-        force: Boolean = false,
-        refresh: Boolean = false,
-    ): Deferred<RefreshResult>? {
-        if (force) {
-            subscriptionJob?.cancel()
-        } else if (subscriptionJob?.isActive == true) {
-            return null
-        }
-        val previousState = state.subscriptionState
-        val requestedPage = state.subscriptionPage
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(subscriptionState = UiState.Loading)
-                var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching {
-                        val param =
-                            mapOf(
-                                "subscribed" to "true",
-                                "limit" to "24",
-                                "page" to (requestedPage - 1).toString(),
-                            )
-                        when (state.subscriptionType) {
-                            SubscriptionType.VIDEO -> mediaRepo.getVideoList(param)
-                            SubscriptionType.IMAGE -> mediaRepo.getImageList(param)
-                        }
-                    }
-                    .onSuccess {
-                        outcome = RefreshResult.Success
-                        state =
-                            state.copy(
-                                subscriptions = it.results,
-                                subscriptionLoadedPage = requestedPage,
-                                subscriptionTotal = it.count,
-                                subscriptionState =
-                                    if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                            )
-                    }
-                    .onError {
-                        outcome = RefreshResult.Failure { Text(stringResource(error = it)) }
-                        // 下拉刷新失败恢复旧状态保留数据，初始或分页失败展示错误页
-                        state =
-                            if (refresh) {
-                                state.copy(subscriptionState = previousState)
-                            } else {
-                                state.copy(
-                                    subscriptionState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = it)) }
-                                        )
-                                )
-                            }
-                    }
-                    .onException {
-                        // 取消异常正常抛出不吞
-                        if (it.exception is CancellationException) throw it.exception
-                        outcome =
-                            RefreshResult.Failure {
-                                Text(it.exception.localizedMessage ?: "Unknown Error")
-                            }
-                        state =
-                            if (refresh) {
-                                state.copy(subscriptionState = previousState)
-                            } else {
-                                state.copy(
-                                    subscriptionState =
-                                        UiState.Error(
-                                            message = {
-                                                Text(
-                                                    it.exception.localizedMessage ?: "Unknown Error"
-                                                )
-                                            }
-                                        )
-                                )
-                            }
-                    }
-                outcome
-            }
-        subscriptionJob = deferred
-        return deferred
-    }
+    /** 加载当前页订阅流。 */
+    fun loadSubscriptions(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
+        subscriptionLoader.load(force = force, refresh = refresh)
 
+    /** 并发拉取侧边栏所需关注、粉丝、好友及未读通知计数。 */
     fun loadCounts(userId: String) {
         viewModelScope.launch {
             launch {
                 runAPICatching { userRepo.getFollowingCount(userId = userId) }
                     .onSuccess { state = state.copy(followingCount = it) }
                     .onError { Log.i(TAG, "loadCounts: $it") }
-                    .onSuccess { Log.i(TAG, "loadCounts: following count: $it") }
-                    .onException {
-                        it.exception.printStackTrace()
-                        Log.i(TAG, "loadCounts: $it")
-                    }
+                    .onException { Log.i(TAG, "loadCounts: $it") }
             }
-
             launch {
                 runAPICatching { userRepo.getFollowerCount(userId = userId) }
                     .onSuccess { state = state.copy(followerCount = it) }
             }
-
             launch {
                 runAPICatching { userRepo.getFriendCount(userId = userId) }
                     .onSuccess { state = state.copy(friendsCount = it) }
             }
-
             launch {
                 runAPICatching { userRepo.getNotificationCounts() }
                     .onSuccess { state = state.copy(notificationCounts = it) }
@@ -199,179 +161,31 @@ class IndexVM(
         }
     }
 
-    fun jumpToSubscriptionPage(page: Int) {
-        if (page == state.subscriptionPage || page < 1) return
-        state = state.copy(subscriptionPage = page)
+    /** 跳转订阅分页页码。 */
+    fun jumpToSubscriptionPage(page: Int) = subscriptionLoader.jumpPage(page)
+
+    /** 切换订阅流媒体类型并强制刷新当前分页。 */
+    fun changeSubscriptionType(type: SubscriptionType) {
+        state = state.copy(subscriptionType = type)
         loadSubscriptions(force = true)
     }
 
-    fun changeSubscriptionType(it: IndexVM.SubscriptionType) {
-        state = state.copy(subscriptionType = it)
-        loadSubscriptions(force = true)
-    }
+    /** 加载首页视频列表。 */
+    fun loadVideoList(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
+        videoLoader.load(force = force, refresh = refresh)
 
-    fun loadVideoList(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (force) {
-            videoJob?.cancel()
-        } else if (videoJob?.isActive == true) {
-            return null
-        }
-        val previousState = state.videoState
-        val requestedPage = state.videoPage
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(videoState = UiState.Loading)
-                var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching {
-                        mediaRepo.getVideoList(
-                            mapOf(
-                                "limit" to "24",
-                                "page" to (requestedPage - 1).toString(),
-                                "sort" to videoSort,
-                            ) + videoFilters.toParams()
-                        )
-                    }
-                    .onSuccess {
-                        outcome = RefreshResult.Success
-                        state =
-                            state.copy(
-                                videoList = it.results,
-                                videoLoadedPage = requestedPage,
-                                videoCount = it.count,
-                                videoState =
-                                    if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                            )
-                    }
-                    .onError {
-                        outcome = RefreshResult.Failure { Text(stringResource(error = it)) }
-                        // 下拉刷新失败恢复旧状态保留数据，初始或分页失败展示错误页
-                        state =
-                            if (refresh) {
-                                state.copy(videoState = previousState)
-                            } else {
-                                state.copy(
-                                    videoState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = it)) }
-                                        )
-                                )
-                            }
-                    }
-                    .onException {
-                        // 取消异常正常抛出不吞
-                        if (it.exception is CancellationException) throw it.exception
-                        outcome =
-                            RefreshResult.Failure {
-                                Text(it.exception.localizedMessage ?: "Unknown Error")
-                            }
-                        state =
-                            if (refresh) {
-                                state.copy(videoState = previousState)
-                            } else {
-                                state.copy(
-                                    videoState =
-                                        UiState.Error(
-                                            message = {
-                                                Text(
-                                                    it.exception.localizedMessage ?: "Unknown Error"
-                                                )
-                                            }
-                                        )
-                                )
-                            }
-                    }
-                outcome
-            }
-        videoJob = deferred
-        return deferred
-    }
+    /** 加载首页图片列表。 */
+    fun loadImageList(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? =
+        imageLoader.load(force = force, refresh = refresh)
 
-    fun loadImageList(force: Boolean = false, refresh: Boolean = false): Deferred<RefreshResult>? {
-        if (force) {
-            imageJob?.cancel()
-        } else if (imageJob?.isActive == true) {
-            return null
-        }
-        val previousState = state.imageState
-        val requestedPage = state.imagePage
-        val deferred =
-            viewModelScope.async {
-                state = state.copy(imageState = UiState.Loading)
-                var outcome: RefreshResult = RefreshResult.Ignored
-                runAPICatching {
-                        mediaRepo.getImageList(
-                            mapOf(
-                                "limit" to "24",
-                                "page" to (requestedPage - 1).toString(),
-                                "sort" to imageSort,
-                            ) + imageFilters.toParams()
-                        )
-                    }
-                    .onSuccess {
-                        outcome = RefreshResult.Success
-                        state =
-                            state.copy(
-                                imageList = it.results,
-                                imageLoadedPage = requestedPage,
-                                imageCount = it.count,
-                                imageState =
-                                    if (it.results.isNotEmpty()) UiState.Success else UiState.Empty,
-                            )
-                    }
-                    .onError {
-                        outcome = RefreshResult.Failure { Text(stringResource(error = it)) }
-                        // 下拉刷新失败恢复旧状态保留数据，初始或分页失败展示错误页
-                        state =
-                            if (refresh) {
-                                state.copy(imageState = previousState)
-                            } else {
-                                state.copy(
-                                    imageState =
-                                        UiState.Error(
-                                            message = { Text(stringResource(error = it)) }
-                                        )
-                                )
-                            }
-                    }
-                    .onException {
-                        // 取消异常正常抛出不吞
-                        if (it.exception is CancellationException) throw it.exception
-                        outcome =
-                            RefreshResult.Failure {
-                                Text(it.exception.localizedMessage ?: "Unknown Error")
-                            }
-                        state =
-                            if (refresh) {
-                                state.copy(imageState = previousState)
-                            } else {
-                                state.copy(
-                                    imageState =
-                                        UiState.Error(
-                                            message = {
-                                                Text(
-                                                    it.exception.localizedMessage ?: "Unknown Error"
-                                                )
-                                            }
-                                        )
-                                )
-                            }
-                    }
-                outcome
-            }
-        imageJob = deferred
-        return deferred
-    }
-
+    /** 更新视频排序方式并重新加载。 */
     fun updateVideoSort(sort: String) {
         videoSort = sort
         loadVideoList(force = true)
     }
 
-    fun updateVideoPage(it: Int) {
-        if (it == state.videoPage || it < 1) return
-        state = state.copy(videoPage = it)
-        loadVideoList(force = true)
-    }
+    /** 跳转视频列表页码。 */
+    fun updateVideoPage(page: Int) = videoLoader.jumpPage(page)
 
     fun addVideoFilter(filterValue: FilterValue) {
         videoFilters.add(filterValue)
@@ -381,16 +195,18 @@ class IndexVM(
         videoFilters.remove(filterValue)
     }
 
+    fun clearVideoFilter() {
+        videoFilters.clear()
+    }
+
+    /** 更新图片排序方式并重新加载。 */
     fun updateImageSort(sort: String) {
         imageSort = sort
         loadImageList(force = true)
     }
 
-    fun updateImagePage(it: Int) {
-        if (it == state.imagePage || it < 1) return
-        state = state.copy(imagePage = it)
-        loadImageList(force = true)
-    }
+    /** 跳转图片列表页码。 */
+    fun updateImagePage(page: Int) = imageLoader.jumpPage(page)
 
     fun addImageFilter(filterValue: FilterValue) {
         imageFilters.add(filterValue)
@@ -404,27 +220,11 @@ class IndexVM(
         imageFilters.clear()
     }
 
-    fun clearVideoFilter() {
-        videoFilters.clear()
-    }
-
     data class IndexState(
-        val subscriptionState: UiState = UiState.Initial,
-        val subscriptionPage: Int = 1,
-        val subscriptionLoadedPage: Int? = null,
-        val subscriptionTotal: Int = 0,
+        val subscriptions: PagedFeedState<Media> = PagedFeedState(limit = INDEX_PAGE_LIMIT),
         val subscriptionType: SubscriptionType = SubscriptionType.VIDEO,
-        val subscriptions: List<Media> = emptyList(),
-        val videoState: UiState = UiState.Initial,
-        val videoPage: Int = 1,
-        val videoLoadedPage: Int? = null,
-        val videoCount: Int = 0,
-        val videoList: List<Media> = emptyList(),
-        val imageState: UiState = UiState.Initial,
-        val imagePage: Int = 1,
-        val imageLoadedPage: Int? = null,
-        val imageCount: Int = 0,
-        val imageList: List<Media> = emptyList(),
+        val videos: PagedFeedState<Media> = PagedFeedState(limit = INDEX_PAGE_LIMIT),
+        val images: PagedFeedState<Media> = PagedFeedState(limit = INDEX_PAGE_LIMIT),
         val followingCount: Int = 0,
         val followerCount: Int = 0,
         val friendsCount: Int = 0,

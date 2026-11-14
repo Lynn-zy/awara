@@ -20,7 +20,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.awara.data.download.DownloadStorage
-import me.rerere.awara.data.entity.CommentCreationDto
+import me.rerere.awara.data.dto.CommentCreationDto
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.HistoryItem
 import me.rerere.awara.data.entity.HistoryType

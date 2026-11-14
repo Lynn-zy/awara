@@ -60,7 +60,7 @@ fun LoginPage(
             when (it) {
                 is LoginEvent.LoginSuccess -> {
                     messageProvider.success {
-                        Text("登录成功")
+                        Text(stringResource(R.string.login_success))
                     }
                     mmkvPreference.putString("refresh_token", it.token)
                     router.navigate("index") {
@@ -78,7 +78,7 @@ fun LoginPage(
 
                 is LoginEvent.Exception -> {
                     messageProvider.error {
-                        Text(it.message)
+                        Text(it.message.asString())
                     }
                 }
             }
@@ -162,7 +162,7 @@ fun LoginPage(
                             eulaVisible = true
                         }
                     ) {
-                        Text("用户协议")
+                        Text(stringResource(R.string.login_eula))
                     }
 
                     TextButton(
@@ -170,7 +170,7 @@ fun LoginPage(
                             context.openUrl("https://iwara.tv/register")
                         }
                     ) {
-                        Text("注册")
+                        Text(stringResource(R.string.login_register))
                     }
                 }
             }
@@ -189,29 +189,29 @@ private fun UserEula() {
     ) {
         item {
             Text(
-                text = "使用本软件，代表你已经同意以下协议:",
+                text = stringResource(R.string.login_eula_intro),
                 style = MaterialTheme.typography.titleLarge
             )
         }
 
         item {
-            Text("1. 本软件仅供学习交流使用，不得用于商业用途，不得二次开发植入收费内容，不得进行任何盈利行为，否则后果自负")
+            Text(stringResource(R.string.login_eula_1))
         }
 
         item {
-            Text("2. 请勿在任何公开社交平台上发布本软件的相关内容")
+            Text(stringResource(R.string.login_eula_2))
         }
 
         item {
-            Text("3. 使用本软件请遵守当地法律法规, 请勿使用本软件进行任何违法行为，本软件可能会根据你的设备语言进行内容限制")
+            Text(stringResource(R.string.login_eula_3))
         }
 
         item {
-            Text("4. 本软件不会收集任何用户数据，仅会与iwara.tv进行必要信息交互")
+            Text(stringResource(R.string.login_eula_4))
         }
 
         item {
-            Text("5. 本软件为Iwara客户端第三方客户端，与Iwara官方无关，且不提供任何在线服务，所有信息来自Iwara官方接口")
+            Text(stringResource(R.string.login_eula_5))
         }
     }
 }

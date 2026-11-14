@@ -6,12 +6,17 @@ import androidx.lifecycle.ViewModelStore
 import java.io.IOException
 import java.lang.reflect.Proxy
 import java.time.Instant
+import me.rerere.awara.data.dto.FriendStatusDto
 import me.rerere.awara.data.dto.ProfileDto
+import me.rerere.awara.data.entity.Comment
+import me.rerere.awara.data.entity.Image
 import me.rerere.awara.data.entity.User
+import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.repo.CommentRepo
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.data.source.IwaraAPI
+import me.rerere.awara.data.source.Pager
 import me.rerere.awara.data.user.UserBlocklist
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -97,15 +102,35 @@ class UserVMBlocklistTest {
         assertTrue(vm.state.profile!!.user!!.following)
     }
 
-    /** API 替身只替换服务端响应；真实业务仓库与 ViewModel 保持不变。 */
+    /** API 替身只替换服务端响应；真实业务仓库与 ViewModel 保持不变，通过公开接口驱动初始资料加载。 */
     private fun createViewModel(following: Boolean): UserVM {
+        val user =
+            User(
+                id = "author",
+                username = "name_author",
+                name = "Author",
+                createdAt = Instant.EPOCH,
+                updatedAt = Instant.EPOCH,
+                deletedAt = null,
+                followedBy = false,
+                following = following,
+                friend = false,
+                premium = false,
+                role = "user",
+                seenAt = null,
+                avatar = null,
+            )
         val api =
             Proxy.newProxyInstance(
                 IwaraAPI::class.java.classLoader,
                 arrayOf(IwaraAPI::class.java),
             ) { _, method, arguments ->
                 when (method.name) {
-                    "getProfile" -> throw IOException("initial profile unavailable")
+                    "getProfile" -> ProfileDto(user, null, Instant.EPOCH, null)
+                    "getVideoList" -> Pager<Video>(0, 32, 0, emptyList())
+                    "getImageList" -> Pager<Image>(0, 32, 0, emptyList())
+                    "getProfileComments" -> Pager<Comment>(0, 32, 0, emptyList())
+                    "getFriendStatus" -> FriendStatusDto("none")
                     "unfollowUser" -> {
                         unfollowed.add(arguments!![0] as String)
                         response
@@ -123,23 +148,6 @@ class UserVMBlocklistTest {
             )
         models.put("profile", vm)
         shadowOf(Looper.getMainLooper()).idle()
-        val user =
-            User(
-                id = "author",
-                username = "name_author",
-                name = "Author",
-                createdAt = Instant.EPOCH,
-                updatedAt = Instant.EPOCH,
-                deletedAt = null,
-                followedBy = false,
-                following = following,
-                friend = false,
-                premium = false,
-                role = "user",
-                seenAt = null,
-                avatar = null,
-            )
-        vm.state = UserVM.UserVMState(profile = ProfileDto(user, null, Instant.EPOCH, null))
         return vm
     }
 }

@@ -7,12 +7,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import me.rerere.awara.R
 import me.rerere.awara.data.repo.UserRepo
 import me.rerere.awara.data.source.APIResult
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
 import me.rerere.awara.data.source.runAPICatching
+import me.rerere.awara.ui.component.iwara.UiText
 
 class LoginVM(private val userRepo: UserRepo) : ViewModel() {
     var state by mutableStateOf(LoginState())
@@ -37,7 +39,11 @@ class LoginVM(private val userRepo: UserRepo) : ViewModel() {
             }.onError {
                 events.emit(LoginEvent.LoginFailed(it))
             }.onException {
-                events.emit(LoginEvent.Exception(it.exception.message ?: "Unknown error"))
+                events.emit(
+                    LoginEvent.Exception(
+                        UiText.fromException(it.exception, R.string.unknown_error)
+                    )
+                )
             }
             state = state.copy(
                 loading = false
@@ -60,6 +66,6 @@ sealed class LoginEvent {
     ) : LoginEvent()
 
     class Exception(
-        val message: String,
+        val message: UiText,
     ) : LoginEvent()
 }

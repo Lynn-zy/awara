@@ -15,6 +15,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import me.rerere.awara.ui.component.iwara.isSafeImageUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 

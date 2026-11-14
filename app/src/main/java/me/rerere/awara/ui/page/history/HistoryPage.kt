@@ -90,7 +90,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     LaunchedEffect(query, category) { gridState.scrollToItem(0) }
     LaunchedEffect(vm.operationError) {
         val error = vm.operationError ?: return@LaunchedEffect
-        message.error { Text(error) }
+        message.error { Text(error.asString()) }
         vm.clearOperationError()
     }
     var showClearDialog by remember { mutableStateOf(false) }
@@ -172,7 +172,9 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                 when {
                     refreshState is LoadState.Error && itemsPaged.itemCount == 0 ->
                         ErrorStatus(
-                            message = refreshState.error.localizedMessage ?: "历史记录加载失败",
+                            message =
+                                refreshState.error.localizedMessage
+                                    ?: stringResource(R.string.history_load_failed),
                             onRetry = { itemsPaged.retry() },
                         )
                     refreshState is LoadState.NotLoading && itemsPaged.itemCount == 0 ->
@@ -224,7 +226,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
             title = { Text(stringResource(R.string.history_retention)) },
             text = {
                 Column {
-                    Text("超出保留范围的历史记录会被删除。")
+                    Text(stringResource(R.string.history_retention_notice))
                     HistoryRetentionPeriod.values().forEach { period ->
                         Row(
                             modifier =

@@ -104,7 +104,11 @@ class NotificationRouteTest {
         val parent = createComment(id = "root-floor-id")
         val reply = createComment(id = "reply-id", parent = parent)
         val notif =
-            createNotification(type = "newReply", video = createVideo("vid-abc"), comment = reply)
+            createNotification(
+                type = NotificationType.NEW_REPLY.wireValue,
+                video = createVideo("vid-abc"),
+                comment = reply,
+            )
         assertEquals("video/vid-abc", notificationDestination(notif))
     }
 
@@ -113,7 +117,7 @@ class NotificationRouteTest {
         val comment = createComment(id = "top-level-comment-id")
         val notif =
             createNotification(
-                type = "newComment",
+                type = NotificationType.NEW_COMMENT.wireValue,
                 video = createVideo("vid-xyz"),
                 comment = comment,
             )
@@ -123,14 +127,23 @@ class NotificationRouteTest {
     @Test
     fun notificationDestinationWithVideoWithoutCommentResolvesToVideoOnly() {
         val notif =
-            createNotification(type = "newReply", video = createVideo("vid-alone"), comment = null)
+            createNotification(
+                type = NotificationType.NEW_REPLY.wireValue,
+                video = createVideo("vid-alone"),
+                comment = null,
+            )
         assertEquals("video/vid-alone", notificationDestination(notif))
     }
 
     @Test
     fun notificationDestinationForNewCommentWithoutVideoResolvesToUser() {
         val user = createUser(id = "user-id", username = "someone")
-        val notif = createNotification(type = "newComment", video = null, profile = user)
+        val notif =
+            createNotification(
+                type = NotificationType.NEW_COMMENT.wireValue,
+                video = null,
+                profile = user,
+            )
         assertEquals("user/someone", notificationDestination(notif))
     }
 
@@ -138,5 +151,8 @@ class NotificationRouteTest {
     fun notificationDestinationReturnsNullForUnknownOrIncompleteNotifications() {
         val notif = createNotification(type = "unknownType", video = null, profile = null)
         assertNull(notificationDestination(notif))
+        assertEquals(NotificationType.NEW_REPLY, NotificationType.fromWireValue("newReply"))
+        assertEquals(NotificationType.NEW_COMMENT, NotificationType.fromWireValue("newComment"))
+        assertEquals(NotificationType.UNKNOWN, NotificationType.fromWireValue("unknownType"))
     }
 }
