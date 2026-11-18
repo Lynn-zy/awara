@@ -2,10 +2,11 @@
 
 ## 构建、验证与测试门禁
 
-- **验证完成判据（Completion Criteria）**：任何代码改动完成后，必须执行并通过 `./gradlew testDebugUnitTest compileDebugAndroidTestKotlin lintVitalRelease`（与 [ci.yml](.github/workflows/ci.yml) 门禁一致）；涉及混淆规则、资源压缩或签名发版配置时，必须额外通过 `./gradlew assembleRelease`。
+- **验证完成判据（Completion Criteria）**：任何代码改动完成后，必须执行并通过 `./gradlew testDebugUnitTest lintVitalRelease`（与 [ci.yml](.github/workflows/ci.yml) 门禁一致）；涉及混淆规则、资源压缩或签名发版配置时，必须额外通过 `./gradlew assembleRelease`。
+- **真机验证约定**：本项目已移除 `androidTest` 仪器测试，不在本地启动 Android 模拟器执行自动化 UI 测试；需要真机交互、窗口或系统解码验证时，构建 Debug APK（`./gradlew assembleDebug`）并放置至 `apk/` 目录供用户手动安装验证。
 - **JDK 路径覆盖**：`gradle.properties` 中的 `org.gradle.java.home` 指向本地固定 Windows JDK 路径；若当前环境路径不同，执行 Gradle 时显式附加 `-Dorg.gradle.java.home="$JAVA_HOME"`。
 - **回环网络单测（Tight Loop）**：使用 `MockWebServer` 编写断流、重试或 CDN 换源单测时，必须将服务端绑定至 `InetAddress.getByName("127.0.0.1")` 并使用 `127.0.0.1` 构造请求 URL，规避双栈环境下 `localhost` 反向解析耗时或断流后切入未监听 IPv6 导致的偶发失败。
-- **测试资产隔离**：`androidTest` 通过 `sourceSets` 直接映射复用 `app/src/test/resources` 下的合成视频素材；测试素材、`Robolectric` 与 `LeakCanary` 仅限测试或 Debug 变体，严禁进入正式 `release` APK。
+- **测试资产隔离**：`app/src/test/resources` 下的测试素材、`Robolectric` 与 `LeakCanary` 仅限 JVM 单元测试或 Debug 变体，严禁进入正式 `release` APK。
 
 ## 多语言资源同步
 

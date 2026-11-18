@@ -34,7 +34,7 @@ jobs:
       - name: 配置 Gradle 与依赖缓存
         uses: gradle/actions/setup-gradle@v6
 
-      - name: 执行单元测试、仪器测试编译与 Release Lint 校验
+      - name: 执行单元测试与 Release Lint 校验
         run: |
           chmod +x ./gradlew
-          ./gradlew testDebugUnitTest compileDebugAndroidTestKotlin lintVitalRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"
+          ./gradlew testDebugUnitTest lintVitalRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"
