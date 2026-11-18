@@ -197,6 +197,16 @@ internal fun buildExternalWebIntent(
 }
 
 /**
+ * 从当前 Context 向上查找宿主 Activity；若未绑定 Activity（如 Application Context）则返回 null。
+ */
+tailrec fun Context.findActivityOrNull(): Activity? =
+    when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivityOrNull()
+        else -> null
+    }
+
+/**
  * Find the activity from the context
  *
  * @return Activity
@@ -204,13 +214,7 @@ internal fun buildExternalWebIntent(
  * @throws IllegalStateException if the context is not an activity
  */
 fun Context.findActivity(): Activity =
-    when (this) {
-        is Activity -> this
-        is ContextWrapper -> {
-            baseContext.findActivity()
-        }
-        else -> throw IllegalStateException("Context is not an Activity")
-    }
+    findActivityOrNull() ?: throw IllegalStateException("Context is not an Activity")
 
 /**
  * 将文本复制到剪贴板。

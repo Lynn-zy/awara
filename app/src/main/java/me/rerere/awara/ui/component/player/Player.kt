@@ -92,6 +92,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -132,6 +133,7 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.ui.component.common.CdnConnectionDebugText
+import me.rerere.awara.util.findActivityOrNull
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
 
@@ -331,6 +333,7 @@ internal fun PlayerController(
     cdnDebugEnabled: Boolean = false,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    val activity = LocalContext.current.findActivityOrNull()
     val windowInfo = LocalWindowInfo.current
     val view = LocalView.current
     val density = LocalDensity.current
@@ -367,14 +370,17 @@ internal fun PlayerController(
             )
         } else SeekThumbnailState()
 
-    // 媒体与窗口变更均使未提交预览失效，不能把旧目标提交到新视频。
-    DisposableEffect(state.player, lifecycleOwner, previewState, controls) {
-        val observer = LifecycleEventObserver { _, _ ->
+    // 媒体与窗口变更均使未提交预览失效，不能把旧目标提交到新视频；切到后台时自动暂停播放。
+    DisposableEffect(state, state.player, lifecycleOwner, activity, previewState, controls) {
+        val observer = LifecycleEventObserver { _, event ->
             foreground = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             if (!foreground) {
                 controls.restore()
                 previewState.cancel()
                 previewState.clearPending()
+            }
+            if (event == Lifecycle.Event.ON_STOP && activity?.isChangingConfigurations != true) {
+                state.pause()
             }
         }
         val listener =

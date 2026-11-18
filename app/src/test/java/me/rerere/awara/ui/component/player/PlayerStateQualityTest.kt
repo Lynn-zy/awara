@@ -1,10 +1,18 @@
 package me.rerere.awara.ui.component.player
 
+import android.net.Uri
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import me.rerere.awara.data.entity.videoQualityRank
 import me.rerere.awara.data.playback.PlaybackSourceRefresher
 import org.junit.Assert.assertEquals
@@ -665,5 +673,94 @@ class PlayerStateQualityTest {
         assertEquals("显式手动重试仍应允许发起刷新", freshUrl2, manual)
         assertEquals(2, calls)
         assertFalse("手动刷新所得新链接仍不重入自动刷新死循环", refresher.canAutoRefresh(freshUrl2))
+    }
+
+    /** 验证 HTTP 403 自动刷新尚未返回期间用户切入后台触发 [PlayerState.pause]，新链接就绪后保持暂停而不自动开播。 */
+    @OptIn(UnstableApi::class)
+    @Test
+    fun pauseDuringInFlightSourceRefreshPreventsAutoResume() = runBlocking {
+        val (player, handler) = createMockPlayer()
+        handler.playWhenReadyValue = true
+        val staleUrl = "https://cdn1.iwara.tv/view?filename=demo_src.mp4&path=2026&expires=1"
+        val freshUrl = "https://cdn2.iwara.tv/view?filename=demo_src.mp4&path=2026&expires=2"
+        val refreshStarted = CompletableDeferred<Unit>()
+        val deferredRefresh = CompletableDeferred<String?>()
+        val refresher =
+            PlaybackSourceRefresher(
+                refreshSource = {
+                    refreshStarted.complete(Unit)
+                    deferredRefresh.await()
+                },
+                trustedHostPredicate = { it.endsWith(".iwara.tv") },
+            )
+        val state =
+            PlayerState(
+                player = player,
+                initialQuality = "Source",
+                saveQualityPreference = {},
+                sourceRefresher = refresher,
+                coroutineScope = this,
+            )
+
+        val item =
+            PlayerState.PlayerItem(
+                quality = "Source",
+                mediaItem = MediaItem.Builder().setMediaId("v_403").setUri(staleUrl).build(),
+            )
+        state.updatePlayerItems(listOf(item), targetPlayWhenReady = true)
+
+        val httpCause =
+            HttpDataSource.InvalidResponseCodeException(
+                403,
+                "Forbidden",
+                null,
+                emptyMap(),
+                DataSpec(Uri.parse(staleUrl)),
+                ByteArray(0),
+            )
+        state.playbackListener.onPlayerError(
+            PlaybackException("HTTP 403", httpCause, PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS)
+        )
+        refreshStarted.await()
+        assertTrue("刷新请求应已发起", refreshStarted.isCompleted)
+
+        // 模拟退入后台调用 pause()
+        state.pause()
+        assertFalse(state.playWhenReady)
+
+        deferredRefresh.complete(freshUrl)
+        withTimeout(2_000L) {
+            while (handler.lastSetMediaItem?.localConfiguration?.uri?.toString() != freshUrl) {
+                yield()
+            }
+        }
+
+        assertEquals(freshUrl, handler.lastSetMediaItem?.localConfiguration?.uri?.toString())
+        assertFalse("刷新期间已暂停时切回新地址不应自动恢复播放", handler.playWhenReadyValue)
+        assertFalse("PlayerState.playWhenReady 应保持 false", state.playWhenReady)
+    }
+
+    /** 验证传入空列表会清理当前媒体上下文与已知视频尺寸，防止重播同视频时沿用陈旧尺寸。 */
+    @Test
+    fun updatePlayerItemsEmptyListClearsMediaStateAndVideoSize() {
+        val (player, _) = createMockPlayer()
+        val state = PlayerState(player = player, initialQuality = "Local", saveQualityPreference = {})
+        val item =
+            PlayerState.PlayerItem(
+                quality = "Local",
+                mediaItem = MediaItem.Builder().setMediaId("dl-1").build(),
+            )
+        state.updatePlayerItems(listOf(item), targetPlayWhenReady = true)
+        state.playbackListener.onVideoSizeChanged(androidx.media3.common.VideoSize(1920, 1080))
+        state.playbackListener.onRenderedFirstFrame()
+        assertEquals(PlayerState.VideoSize(1920, 1080), state.videoSize)
+        assertTrue(state.renderedFirstFrame)
+
+        state.updatePlayerItems(emptyList())
+
+        assertEquals(PlayerState.VideoSize.UNKNOWN, state.videoSize)
+        assertNull(state.currentMediaItem)
+        assertFalse(state.renderedFirstFrame)
+        assertTrue(state.playerItems.isEmpty())
     }
 }

@@ -90,10 +90,8 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import coil.compose.AsyncImage
 import com.airbnb.lottie.compose.LottieAnimation
@@ -407,14 +405,10 @@ fun DownloadPage(
             },
         )
     }
-    val state = rememberPlayerState {
-        ExoPlayer.Builder(it)
-            // 下载内置播放采用相同的对照策略，不向系统提交视频帧率请求。
-            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-            .build()
-    }
+    val state = rememberPlayerState(enableOnlineStreaming = false)
     var requestOrientation by rememberRequestedScreenOrientation()
     var fullscreen by remember { mutableStateOf(false) }
+    var playbackLaunchSeq by remember { mutableStateOf(0) }
     fun enterFullScreen() {
         Log.i("DownloadPage", "enterFullScreen: ${state.videoSize.width}")
         // 进入全屏时统一收起顶部与底部所有控件
@@ -428,10 +422,9 @@ fun DownloadPage(
         }
     }
 
-    LaunchedEffect(state.videoSize) {
-        if (state.videoSize != PlayerState.VideoSize.UNKNOWN) {
+    LaunchedEffect(fullscreen, playbackLaunchSeq, state.videoSize) {
+        if (fullscreen && state.videoSize != PlayerState.VideoSize.UNKNOWN) {
             enterFullScreen()
-            state.play()
         }
     }
 
@@ -439,6 +432,8 @@ fun DownloadPage(
         requestOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         fullscreen = false
         state.pause()
+        // 清空上一视频上下文与尺寸，确保再次进入同视频或同分辨率视频时仍能触发屏幕方向同步。
+        state.updatePlayerItems(emptyList())
     }
 
     BackHandler(fullscreen) { exitFullScreen() }
@@ -486,7 +481,7 @@ fun DownloadPage(
                 message.error { Text(stringResource(R.string.download_file_missing)) }
                 return@launch
             }
-            onReady(contentUri)
+            withContext(Dispatchers.Main.immediate) { onReady(contentUri) }
         }
     }
 
@@ -527,8 +522,24 @@ fun DownloadPage(
         }
         launchWithValidatedVideoUri(item) { contentUri ->
             try {
-                state.player.setMediaItem(MediaItem.Builder().setUri(contentUri).build())
-                state.player.prepare()
+                val playerItem =
+                    PlayerState.PlayerItem(
+                        quality = item.quality.ifBlank { "local" },
+                        mediaItem =
+                            MediaItem.Builder()
+                                .setMediaId(item.resourceId.ifBlank { contentUri.toString() })
+                                .setUri(contentUri)
+                                .build(),
+                    )
+                // 先复位旧媒体与尺寸，再应用当前条目与起播意图，统一走 PlayerState 解码兜底链路。
+                state.updatePlayerItems(emptyList())
+                state.updatePlayerItems(
+                    items = listOf(playerItem),
+                    preservePositionMs = 0L,
+                    targetPlayWhenReady = true,
+                )
+                state.markPlaybackStarted()
+                playbackLaunchSeq++
                 fullscreen = true
             } catch (e: Exception) {
                 val reason =
