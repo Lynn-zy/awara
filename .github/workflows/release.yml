@@ -64,7 +64,7 @@ jobs:
           chmod +x ./gradlew
           ./gradlew testDebugUnitTest lintVitalRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"
 
-      - name: 构建正式签名通用 Release APK
+      - name: 构建正式签名分架构及通用 Release APK
         env:
           SIGNING_STORE_FILE: ${{ runner.temp }}/awara-release.jks
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
@@ -73,37 +73,44 @@ jobs:
         run: |
           ./gradlew assembleRelease --no-daemon -Dorg.gradle.java.home="${JAVA_HOME}"
 
-      - name: 核验 APK 正式证书签名、版本号并生成 SHA-256 校验文件
+      - name: 核验多架构 APK 正式证书签名、版本号并生成 SHA-256 校验文件
         run: |
-          RAW_APK="app/build/outputs/apk/release/app-release.apk"
-          if [[ ! -f "$RAW_APK" ]]; then
-            echo "::error::未找到构建产物 $RAW_APK"
-            exit 1
-          fi
-
+          RELEASE_DIR="app/build/outputs/apk/release"
+          EXPECTED_ABIS=("arm64-v8a" "armeabi-v7a" "x86_64" "universal")
           SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           BUILD_TOOLS_DIR=$(ls -d "${SDK_DIR}/build-tools/"* | sort -V | tail -n 1)
-          CERT_INFO=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$RAW_APK")
-          echo "$CERT_INFO"
-
-          if echo "$CERT_INFO" | grep -qi "CN=Android Debug"; then
-            echo "::error::检测到 APK 使用了 Android Debug 调试证书，正式发布必须使用正式证书签名！"
-            exit 1
-          fi
-
-          BADGING=$("${BUILD_TOOLS_DIR}/aapt2" dump badging "$RAW_APK" | head -n 5)
-          echo "$BADGING"
           EXPECTED_VERSION="${{ steps.meta.outputs.version }}"
-          if ! echo "$BADGING" | grep -Fq "versionName='${EXPECTED_VERSION}'"; then
-            echo "::error::标签版本 (${EXPECTED_VERSION}) 与 APK 内置 versionName 不一致，请先同步更新 app/build.gradle.kts！"
-            exit 1
-          fi
 
           mkdir -p dist
-          TARGET_APK="dist/Awara-${EXPECTED_VERSION}-release.apk"
-          cp "$RAW_APK" "$TARGET_APK"
-          (cd dist && sha256sum "$(basename "$TARGET_APK")" > "$(basename "$TARGET_APK").sha256")
-          cat "${TARGET_APK}.sha256"
+
+          for ABI in "${EXPECTED_ABIS[@]}"; do
+            RAW_APK="${RELEASE_DIR}/app-${ABI}-release.apk"
+            if [[ ! -f "$RAW_APK" ]]; then
+              echo "::error::未找到期望架构构建产物 $RAW_APK"
+              exit 1
+            fi
+
+            echo "=== 校验 ${ABI}: ${RAW_APK} ==="
+            CERT_INFO=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$RAW_APK")
+            echo "$CERT_INFO"
+
+            if echo "$CERT_INFO" | grep -qi "CN=Android Debug"; then
+              echo "::error::检测到 ${RAW_APK} 使用了 Android Debug 调试证书，正式发布必须使用正式证书签名！"
+              exit 1
+            fi
+
+            BADGING=$("${BUILD_TOOLS_DIR}/aapt2" dump badging "$RAW_APK" | head -n 5)
+            echo "$BADGING"
+            if ! echo "$BADGING" | grep -Fq "versionName='${EXPECTED_VERSION}'"; then
+              echo "::error::标签版本 (${EXPECTED_VERSION}) 与 ${RAW_APK} 内置 versionName 不一致，请先同步更新 app/build.gradle.kts！"
+              exit 1
+            fi
+
+            TARGET_NAME="Awara-${EXPECTED_VERSION}-${ABI}-release.apk"
+            cp "$RAW_APK" "dist/${TARGET_NAME}"
+            (cd dist && sha256sum "${TARGET_NAME}" > "${TARGET_NAME}.sha256")
+            cat "dist/${TARGET_NAME}.sha256"
+          done
 
       - name: 生成 Release 更新说明（CHANGELOG.md 优先，Git Commits 兜底）
         env:

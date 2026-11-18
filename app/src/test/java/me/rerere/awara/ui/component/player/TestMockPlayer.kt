@@ -29,6 +29,11 @@ internal class MockPlayerInvocationHandler(
     var canSetSpeedAndPitch: Boolean = false
     var playbackParametersValue: PlaybackParameters = PlaybackParameters(1f, 1f)
     var lastSetPlaybackParameters: PlaybackParameters? = null
+    var repeatModeValue: Int = Player.REPEAT_MODE_OFF
+    var lastSetRepeatMode: Int? = null
+    var stopCount: Int = 0
+    var clearMediaItemsCount: Int = 0
+    var releaseCount: Int = 0
 
     /** 拦截 [Player] 接口调用并更新或返回对应测试桩状态。 */
     override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
@@ -75,6 +80,26 @@ internal class MockPlayerInvocationHandler(
                 val params = args!![0] as PlaybackParameters
                 playbackParametersValue = params
                 lastSetPlaybackParameters = params
+                return null
+            }
+            name == "getRepeatMode" && argCount == 0 -> return repeatModeValue
+            name == "setRepeatMode" && argCount == 1 -> {
+                val mode = args!![0] as Int
+                repeatModeValue = mode
+                lastSetRepeatMode = mode
+                return null
+            }
+            name == "stop" && argCount == 0 -> {
+                stopCount++
+                return null
+            }
+            name == "clearMediaItems" && argCount == 0 -> {
+                clearMediaItemsCount++
+                lastSetMediaItem = null
+                return null
+            }
+            name == "release" && argCount == 0 -> {
+                releaseCount++
                 return null
             }
             name == "setMediaItem" && argCount == 1 -> {

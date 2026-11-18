@@ -43,9 +43,16 @@ android {
         versionCode = 32
         versionName = "1.3.2"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
-        ndk { abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")) }
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
     }
 
     signingConfigs {
@@ -63,8 +70,15 @@ android {
 
     buildTypes {
         debug {
-            // 为 Debug 构建追加独立包名后缀，支持与正式签名 Release 包共存安装且数据隔离
+            // 为 Debug 构建追加独立包名后缀支持与正式版共存，同时启用 R8 与非可调试模式消除掉帧（仍保留 -dontobfuscate 便于排查堆栈）
             applicationIdSuffix = ".debug"
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
         release {
             // 检测到正式签名证书配置时使用 release 签名，未配置证书的开发克隆环境自动回退至 debug 签名
@@ -103,9 +117,11 @@ android {
             }
         }
     }
-    // 仪器测试复用 JVM 的合成视频素材，不复制文件，也不打入正式应用。
-    sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
-    packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
 }
 
 dependencies {
@@ -146,6 +162,8 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3Version")
     // 在线预览使用独立异步取帧器，不通过播放中的 ExoPlayer seek 取图。
     implementation("androidx.media3:media3-inspector-frame:$media3Version")
+    // 内嵌 libmpv 原生渲染引擎，在设备 MediaCodec 不支持 High 10 等格式时提供零转换 GPU 软解兜底。
+    implementation("dev.jdtech.mpv:libmpv:1.0.0")
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.8.1")
@@ -202,17 +220,16 @@ dependencies {
     // Profile Installer
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.10")
-
     // Test
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.10.0")
     testImplementation("org.robolectric:robolectric:4.17")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4:$composeVersion")
-    debugImplementation("androidx.compose.ui:ui-tooling:$composeVersion")
-    debugImplementation("androidx.compose.ui:ui-test-manifest:$composeVersion")
+}
+
+composeCompiler {
+    // 关闭 Compose 源码位置与 Trace 调试插桩，消除 Debug 与 Release 的无效重组开销
+    includeSourceInformation.set(false)
+    includeTraceMarkers.set(false)
 }
 
 kotlin {

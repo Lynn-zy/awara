@@ -25,8 +25,13 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import java.io.File
 import java.io.IOException
@@ -38,6 +43,7 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.data.cdn.CdnDirectory
 import me.rerere.awara.data.diagnostics.CdnConnectionTracker
 import me.rerere.awara.data.diagnostics.CdnTrackingDataSourceFactory
+import me.rerere.awara.data.playback.LocalDataSourceHttpProxy
 import me.rerere.awara.data.playback.PlaybackBufferSample
 import me.rerere.awara.data.playback.PlaybackCdnController
 import me.rerere.awara.data.playback.PlaybackReadAheadDataSource
@@ -64,10 +70,38 @@ internal fun normalizePlaybackSpeed(value: Float): Float =
         1f
     }
 
+/**
+ * 创建统一配置的主 ExoPlayer 实例：启用系统硬件 `MediaCodec` 并允许同族解码器回退，
+ * 同时锁定高刷屏幕帧率策略（设备不支持 High 10 等格式时由 [PlayerState] 按需切换至 `libmpv`）。
+ */
+@OptIn(UnstableApi::class)
+internal fun createAwaraExoPlayer(
+    context: Context,
+    mediaSourceFactory: MediaSource.Factory? = null,
+    loadControl: LoadControl? = null,
+): ExoPlayer {
+    val renderersFactory =
+        DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+    return ExoPlayer.Builder(context, renderersFactory)
+        .apply {
+            if (mediaSourceFactory != null) {
+                setMediaSourceFactory(mediaSourceFactory)
+            }
+            if (loadControl != null) {
+                setLoadControl(loadControl)
+            }
+        }
+        .setTrackSelector(DefaultTrackSelector(context))
+        .setHandleAudioBecomingNoisy(true)
+        .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+        .build()
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun rememberPlayerState(
     refreshPlaybackSource: suspend (String) -> String? = { null },
+    enableOnlineStreaming: Boolean = true,
     builder: ((Context) -> ExoPlayer)? = null,
 ): PlayerState {
     val context = LocalContext.current
@@ -76,18 +110,22 @@ fun rememberPlayerState(
     val scope = rememberCoroutineScope()
     val sourceRefresher = remember { PlaybackSourceRefresher(refreshSource = { refreshSource(it) }) }
     val connectionTracker = remember { CdnConnectionTracker() }
-    val httpFactory = remember {
-        CdnTrackingDataSourceFactory(
-            DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),
-            connectionTracker,
-        )
+    val httpFactory = remember(enableOnlineStreaming) {
+        if (enableOnlineStreaming) {
+            CdnTrackingDataSourceFactory(
+                DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),
+                connectionTracker,
+            )
+        } else {
+            null
+        }
     }
     // 优先复用 Koin 单例 OkHttpClient（继承其连接池与线程池，清除应用层拦截器），仅在无 Koin 的预览/测试场景回退兜底实例
     val sharedHttpClient = remember {
         GlobalContext.getOrNull()?.getOrNull<OkHttpClient>()
     }
-    val cdnController = remember {
-        if (builder == null && settings.multiCdnEnabled) {
+    val cdnController = remember(enableOnlineStreaming) {
+        if (enableOnlineStreaming && builder == null && settings.multiCdnEnabled && httpFactory != null) {
             val client =
                 (sharedHttpClient ?: OkHttpClient())
                     .newBuilder()
@@ -110,9 +148,33 @@ fun rememberPlayerState(
         } else null
     }
     // 仅包装播放 HTTP 上游；本地文件、磁盘缓存命中和缩略图继续使用原有路径。
-    val readAheadFactory = remember {
-        PlaybackReadAheadDataSource.Factory(cdnController ?: httpFactory)
+    val readAheadFactory = remember(enableOnlineStreaming) {
+        if (enableOnlineStreaming && httpFactory != null) {
+            PlaybackReadAheadDataSource.Factory(cdnController ?: httpFactory)
+        } else {
+            null
+        }
     }
+    val onlineDataSourceFactory =
+        remember(enableOnlineStreaming, readAheadFactory) {
+            if (enableOnlineStreaming && readAheadFactory != null) {
+                PlayerCache.get(context, readAheadFactory)
+            } else {
+                null
+            }
+        }
+    val localDataSourceFactory = remember { DefaultDataSource.Factory(context) }
+    val localProxy =
+        remember(builder, onlineDataSourceFactory, localDataSourceFactory) {
+            if (builder == null) {
+                LocalDataSourceHttpProxy(
+                    onlineDataSourceFactory = onlineDataSourceFactory ?: localDataSourceFactory,
+                    localDataSourceFactory = localDataSourceFactory,
+                )
+            } else {
+                null
+            }
+        }
     val initialSpeed = remember {
         val speedStr = mmkvPreference.getString(PREFERENCE_KEY_PLAYER_SPEED, "1.0")
         normalizePlaybackSpeed(speedStr?.toFloatOrNull() ?: 1f)
@@ -120,14 +182,13 @@ fun rememberPlayerState(
     val state by remember {
         val player =
             builder?.invoke(context)
-                ?: ExoPlayer.Builder(
-                        context,
-                        DefaultMediaSourceFactory(PlayerCache.get(context, readAheadFactory)),
+                ?: createAwaraExoPlayer(
+                        context = context,
+                        mediaSourceFactory =
+                            onlineDataSourceFactory?.let { DefaultMediaSourceFactory(it) },
+                        loadControl =
+                            if (enableOnlineStreaming) PlayerBufferPolicy.create(settings) else null,
                     )
-                    .setLoadControl(PlayerBufferPolicy.create(settings))
-                    .setHandleAudioBecomingNoisy(true)
-                    .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-                    .build()
                     .apply {
                         // 自动播放只控制播放意图；暂停时同样允许准备媒体和正常渲染首帧。
                         playWhenReady = mmkvPreference.getBoolean("setting.auto_play", true)
@@ -136,6 +197,17 @@ fun rememberPlayerState(
                                 Player.REPEAT_MODE_ONE
                             else Player.REPEAT_MODE_OFF
                     }
+        val fallbackFactory =
+            localProxy?.let { proxy ->
+                {
+                    MpvPlayer(
+                        context = context,
+                        expandedBufferEnabled = settings.expandedBufferEnabled,
+                        uriTranslator = { uri -> proxy.register(uri) },
+                        errorCauseResolver = { proxyUrl -> proxy.consumeLastHttpError(proxyUrl) },
+                    )
+                }
+            }
         mutableStateOf(
             PlayerState(
                 player = player,
@@ -144,6 +216,7 @@ fun rememberPlayerState(
                 connectionTracker = connectionTracker,
                 sourceRefresher = sourceRefresher,
                 coroutineScope = scope,
+                fallbackPlayerFactory = fallbackFactory,
             )
         )
     }
@@ -196,15 +269,14 @@ fun rememberPlayerState(
             state.cancelPendingRefresh()
             connectionTracker.close()
             try {
-                readAheadFactory.close()
+                readAheadFactory?.close()
             } catch (error: IOException) {
                 Log.w(TAG, "关闭播放预读请求失败", error)
             }
+            // 先关闭本地代理套接字解除底层读阻塞，再销毁可能处于运行中的 libmpv 实例
+            localProxy?.close()
             cdnController?.close()
-            state.player.run {
-                removeListener(state.playbackListener)
-                release()
-            }
+            state.release()
             Log.i(TAG, "rememberPlayerState: Dispose")
         }
     }
@@ -215,7 +287,7 @@ fun rememberPlayerState(
 @OptIn(UnstableApi::class)
 @SuppressLint("UnsafeOptInUsageError")
 class PlayerState(
-    val player: Player,
+    player: Player,
     initialQuality: String = mmkvPreference.getString("setting.player_quality", "Source")!!,
     private val saveQualityPreference: (String) -> Unit = { quality ->
         mmkvPreference.putString("setting.player_quality", quality)
@@ -228,7 +300,15 @@ class PlayerState(
     private val connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
     private val sourceRefresher: PlaybackSourceRefresher? = null,
     private val coroutineScope: CoroutineScope? = null,
+    private val fallbackPlayerFactory: (() -> Player)? = null,
 ) {
+    private val primaryPlayer: Player = player
+    private var fallbackPlayer: Player? = null
+
+    /** 当前活跃底层播放器；默认为 ExoPlayer，设备解码失败时按需切换至兜底播放器。 */
+    var player: Player by mutableStateOf(player)
+        private set
+
     /** 只含当前媒体正文的主机与计数，不包含签名、候选探测或预览请求。 */
     val cdnConnections = connectionTracker.snapshot
 
@@ -261,6 +341,8 @@ class PlayerState(
     private var mediaSwitchEpoch = 0
     private var lastRequestedPositionMs = 0L
     private var refreshJob: Job? = null
+    private var refreshTargetPlayWhenReady = false
+    private var softwareDecoderFallbackEpoch = -1
 
     val showLoading: Boolean
         get() =
@@ -270,7 +352,10 @@ class PlayerState(
                     state == State.BUFFERING ||
                     (isLoading && state != State.READY))
 
-    val playbackListener: Player.Listener =
+    val playbackListener: Player.Listener = createPlaybackListener()
+
+    /** 通过成员方法构造监听器，防止内部匿名类捕获构造函数同名 `player` 参数而非活跃可变属性 [player]。 */
+    private fun createPlaybackListener(): Player.Listener =
         object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 connectionTracker.updateAvailableHosts(emptyList())
@@ -354,6 +439,34 @@ class PlayerState(
                 Log.e(TAG, "onPlayerError: ${error.errorCodeName} (${error.errorCode})", error)
                 val failingItem = currentMediaItem ?: player.currentMediaItem
                 val failingUrl = failingItem?.localConfiguration?.uri?.toString()
+                if (
+                    isVideoDecoderFailure(error) &&
+                        failingItem != null &&
+                        player === primaryPlayer &&
+                        fallbackPlayerFactory != null &&
+                        softwareDecoderFallbackEpoch != mediaSwitchEpoch
+                ) {
+                    softwareDecoderFallbackEpoch = mediaSwitchEpoch
+                    val resumePositionMs = resolveRetryPositionMs()
+                    val targetPlayWhenReady = player.playWhenReady
+                    val targetSpeed = resolveActiveSpeed(player)
+                    val targetRepeatMode = player.repeatMode
+                    playbackError = null
+                    renderedFirstFrame = false
+                    Log.w(TAG, "onPlayerError: 硬件/系统解码失败，切换 libmpv GPU 软解重试")
+                    val targetFallback =
+                        fallbackPlayer ?: fallbackPlayerFactory.invoke().also { fallbackPlayer = it }
+                    switchActivePlayer(
+                        target = targetFallback,
+                        targetSpeed = targetSpeed,
+                        targetRepeatMode = targetRepeatMode,
+                    )
+                    player.setMediaItem(failingItem, resumePositionMs)
+                    player.playWhenReady = targetPlayWhenReady
+                    this@PlayerState.playWhenReady = targetPlayWhenReady
+                    player.prepare()
+                    return
+                }
                 val authCode = findHttpAuthFailureCode(error)
                 if (
                     authCode != null &&
@@ -377,11 +490,11 @@ class PlayerState(
         }
 
     init {
-        player.addListener(playbackListener)
+        this.player.addListener(playbackListener)
         // 初次创建时应用常驻偏好并保留音调；临时加速和媒体切换不重新写入偏好。
-        if (player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
-            player.playbackParameters =
-                player.playbackParameters.withSpeed(currentPlaybackSpeed)
+        if (this.player.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+            this.player.playbackParameters =
+                this.player.playbackParameters.withSpeed(currentPlaybackSpeed)
         }
     }
 
@@ -433,6 +546,7 @@ class PlayerState(
             mediaSwitchEpoch++
             renderedFirstFrame = false
             onBufferDiscontinuity()
+            resetToPrimaryPlayer()
             player.clearMediaItems()
             currentMediaItem = null
             currentQuality = ""
@@ -557,6 +671,7 @@ class PlayerState(
     }
 
     fun pause() {
+        refreshTargetPlayWhenReady = false
         playWhenReady = false
         player.pause()
     }
@@ -613,8 +728,21 @@ class PlayerState(
                 item = activeItem,
                 positionMs = resumePos,
                 targetPlayWhenReady = true,
+                resetToPrimaryEngine = false,
             )
         }
+    }
+
+    /** 释放当前所有已创建的主备播放器实例与挂起任务，避免退页后残留线程或解码资源。 */
+    internal fun release() {
+        cancelPendingRefresh()
+        player.removeListener(playbackListener)
+        fallbackPlayer?.let { fallback ->
+            fallback.removeListener(playbackListener)
+            fallback.release()
+        }
+        fallbackPlayer = null
+        primaryPlayer.release()
     }
 
     /** 释放或切换媒体前取消挂起的在线源刷新协程，避免过期结果覆盖新选择。 */
@@ -629,11 +757,15 @@ class PlayerState(
         item: PlayerItem,
         positionMs: Long,
         targetPlayWhenReady: Boolean,
+        resetToPrimaryEngine: Boolean = true,
     ) {
         mediaSwitchEpoch++
         lastRequestedPositionMs = positionMs
         renderedFirstFrame = false
         onBufferDiscontinuity()
+        if (resetToPrimaryEngine) {
+            resetToPrimaryPlayer()
+        }
         currentQuality = item.quality
         currentMediaItem = item.mediaItem
         player.setMediaItem(item.mediaItem, positionMs)
@@ -656,6 +788,7 @@ class PlayerState(
         val refresher = sourceRefresher ?: return
         cancelPendingRefresh()
         val targetEpoch = ++mediaSwitchEpoch
+        refreshTargetPlayWhenReady = targetPlayWhenReady
         isRefreshingSource = true
         refreshJob =
             scope.launch {
@@ -672,12 +805,14 @@ class PlayerState(
                         }
                     }
                 if (targetEpoch != mediaSwitchEpoch) return@launch
+                val resolvedPlayWhenReady = refreshTargetPlayWhenReady
                 if (!refreshedUrl.isNullOrBlank()) {
                     val nextItem = updateItemUri(targetItem, refreshedUrl)
                     applyMediaItem(
                         item = nextItem,
                         positionMs = resumePositionMs,
-                        targetPlayWhenReady = targetPlayWhenReady,
+                        targetPlayWhenReady = resolvedPlayWhenReady,
+                        resetToPrimaryEngine = false,
                     )
                 } else if (fallbackError != null) {
                     recordPlaybackError(error = fallbackError, isHttpAuthError = true)
@@ -685,11 +820,50 @@ class PlayerState(
                     applyMediaItem(
                         item = targetItem,
                         positionMs = resumePositionMs,
-                        targetPlayWhenReady = targetPlayWhenReady,
+                        targetPlayWhenReady = resolvedPlayWhenReady,
+                        resetToPrimaryEngine = false,
                     )
                 }
             }
     }
+
+    private fun resetToPrimaryPlayer() {
+        val current = player
+        if (current === primaryPlayer) return
+        switchActivePlayer(
+            target = primaryPlayer,
+            targetSpeed = resolveActiveSpeed(current),
+            targetRepeatMode = current.repeatMode,
+        )
+    }
+
+    private fun resolveActiveSpeed(target: Player): Float =
+        if (target.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+            target.playbackParameters.speed
+        } else {
+            currentPlaybackSpeed
+        }
+
+    private fun switchActivePlayer(target: Player, targetSpeed: Float, targetRepeatMode: Int) {
+        val previous = player
+        if (previous === target) return
+        previous.removeListener(playbackListener)
+        previous.stop()
+        // 同步解除对 SurfaceView 的占用意图，防止主备渲染器交替接管同一 ANativeWindow 时冲突
+        previous.clearVideoSurface()
+        previous.clearMediaItems()
+        if (target.isCommandAvailable(Player.COMMAND_SET_SPEED_AND_PITCH)) {
+            target.playbackParameters = target.playbackParameters.withSpeed(targetSpeed)
+        }
+        if (target.repeatMode != targetRepeatMode) {
+            target.repeatMode = targetRepeatMode
+        }
+        target.addListener(playbackListener)
+        this.player = target
+    }
+
+    private fun isVideoDecoderFailure(error: PlaybackException): Boolean =
+        error.errorCode in VIDEO_DECODER_FAILURE_CODES
 
     /** 记录不可恢复的播放错误，并确保顶栏菜单可见以避免黑屏无法退出或切换。 */
     private fun recordPlaybackError(error: PlaybackException, isHttpAuthError: Boolean) {
@@ -788,5 +962,13 @@ class PlayerState(
 
     private companion object {
         private val HTTP_AUTH_FAILURE_CODES = setOf(401, 403, 410)
+        private val VIDEO_DECODER_FAILURE_CODES =
+            setOf(
+                PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+                PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+                PlaybackException.ERROR_CODE_DECODING_FAILED,
+                PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+                PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            )
     }
 }

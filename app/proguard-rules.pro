@@ -35,3 +35,9 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 -dontwarn org.conscrypt.**
+
+# libmpv JNI 绑定类与回调接口必须保留方法签名及类名
+-keep class dev.jdtech.mpv.MPVLib { *; }
+-keep interface dev.jdtech.mpv.MPVLib$EventObserver { *; }
+-keep interface dev.jdtech.mpv.MPVLib$LogObserver { *; }
+-keep class dev.jdtech.mpv.MPVLib$* { *; }

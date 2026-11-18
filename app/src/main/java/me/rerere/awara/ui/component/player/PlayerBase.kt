@@ -34,7 +34,17 @@ fun PlayerBase(modifier: Modifier = Modifier, state: PlayerState) {
                 clipToOutline = true
             }
         },
-        update = { it.resizeMode = state.resizeMode },
+        update = {
+            if (it.player !== state.player) {
+                it.player = state.player
+            }
+            it.resizeMode = state.resizeMode
+        },
+        onRelease = {
+            if (it.player === state.player) {
+                it.player = null
+            }
+        },
         modifier = modifier.background(Color.Black),
     )
 }
