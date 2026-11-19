@@ -1037,7 +1037,22 @@ class VideoVM(
         val commentState: CommentState = CommentState(),
         val playlist: List<Playlist> = emptyList(),
         val playlistLoading: Boolean = false,
-    )
+    ) {
+        /**
+         * 视频详情页评论选项卡展示的计数。
+         *
+         * 根评论列表已成功加载时优先采用 `/video/{id}/comments` 返回的真实分页总数，
+         * 避免视频详情 `numComments` 与实际列表不一致时显示虚高计数；尚未加载成功或离线回退时回退视频详情字段。
+         */
+        val displayCommentCount: Int
+            get() {
+                val rootComments = commentState.stack.firstOrNull()
+                if (rootComments != null && rootComments.loadedPage != null) {
+                    return rootComments.total.coerceAtLeast(0)
+                }
+                return (details.displayVideo?.numComments ?: 0).coerceAtLeast(0)
+            }
+    }
 
     sealed class VideoEvent {
         object CommentPosted : VideoEvent()

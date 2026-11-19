@@ -86,7 +86,7 @@ fun VideoPagePhoneLayout(
                             ) {
                                 Text(stringResource(R.string.video_tab_comments))
                                 Text(
-                                    text = "${vm.state.details.displayVideo?.numComments ?: 0}",
+                                    text = "${vm.state.displayCommentCount}",
                                     style = MaterialTheme.typography.labelMedium,
                                 )
                             }
