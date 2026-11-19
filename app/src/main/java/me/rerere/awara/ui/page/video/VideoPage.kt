@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.page.video
 
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
@@ -8,15 +9,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.FitScreen
-import androidx.compose.material.icons.outlined.Fullscreen
-import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -25,13 +21,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource as composeStringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.ui.AspectRatioFrameLayout
 import kotlinx.coroutines.flow.collectLatest
 import me.rerere.awara.R
 import me.rerere.awara.data.entity.DownloadItem
@@ -42,22 +37,29 @@ import me.rerere.awara.data.entity.qualityKey
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.source.stringResource
 import me.rerere.awara.ui.LocalMessageProvider
-import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.player.Player
+import me.rerere.awara.ui.component.player.PlayerActionTextButton
+import me.rerere.awara.ui.component.player.PlayerBackIconButton
+import me.rerere.awara.ui.component.player.PlayerFullscreenIconButton
 import me.rerere.awara.ui.component.player.PlayerScaffold
 import me.rerere.awara.ui.component.player.PlayerState
 import me.rerere.awara.ui.component.player.matchVideoQuality
 import me.rerere.awara.ui.component.player.rememberPlayerState
+import me.rerere.awara.ui.component.player.resolveFullscreenOrientation
+import me.rerere.awara.ui.component.player.resolveToggledFullscreenOrientation
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.ForceSystemBarColor
 import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
 import me.rerere.awara.ui.hooks.rememberWindowSizeClass
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.awara.ui.page.video.layout.VideoPagePhoneLayout
 import me.rerere.awara.ui.page.video.layout.VideoPageTabletLayout
 import me.rerere.awara.ui.page.video.layout.isPortraitVideo
 import me.rerere.awara.ui.page.video.layout.resolveEffectiveVideoSize
 import me.rerere.awara.ui.theme.DynamicColorTheme
 import me.rerere.awara.ui.theme.rememberDynamicColorSchemeState
+import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -65,9 +67,13 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
     ForceSystemBarColor(appearanceLight = false)
 
     var requestOrientation by rememberRequestedScreenOrientation()
+    val configuration = LocalConfiguration.current
+    val sensorRotationEnabled by
+        rememberBooleanPreference(key = SettingKeys.PLAYER_SENSOR_ROTATION, default = true)
     val windowSize = rememberWindowSizeClass()
     val state = rememberPlayerState(refreshPlaybackSource = vm::refreshPlaybackSource)
     val message = LocalMessageProvider.current
+    val router = LocalRouterProvider.current
 
     // M3
     val details = vm.state.details
@@ -83,17 +89,24 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
         if (effectiveSize == PlayerState.VideoSize.UNKNOWN) return
         // 单击全屏按钮进入全屏时，立即收起顶部标题与底部进度条等全部控件
         state.controllerState.hide()
-        if (effectiveSize.width > effectiveSize.height) {
-            fullscreen = true
-            requestOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        } else {
-            fullscreen = true
-            requestOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
+        fullscreen = true
+        requestOrientation =
+            resolveFullscreenOrientation(
+                landscape = effectiveSize.width > effectiveSize.height,
+                sensorRotationEnabled = sensorRotationEnabled,
+            )
     }
     fun exitFullScreen() {
         requestOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         fullscreen = false
+    }
+    fun rotateFullScreen() {
+        val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        requestOrientation =
+            resolveToggledFullscreenOrientation(
+                isCurrentlyLandscape = isLandscape,
+                sensorRotationEnabled = sensorRotationEnabled,
+            )
     }
     BackHandler(fullscreen) { exitFullScreen() }
 
@@ -171,26 +184,11 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                     state = state,
                     fullscreen = fullscreen,
                     modifier = Modifier.fillMaxSize(),
-                    navigationIcon = { BackButton() },
-                    actions = { speedSelector ->
-                        if (fullscreen) {
-                            IconButton(
-                                onClick = {
-                                    state.resizeMode =
-                                        if (
-                                            state.resizeMode ==
-                                                AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                        )
-                                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                        else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                }
-                            ) {
-                                Icon(Icons.Outlined.FitScreen, null)
-                            }
-                        }
-
-                        speedSelector()
-
+                    navigationIcon = {
+                        PlayerBackIconButton(onClick = { router.popBackStack() })
+                    },
+                    onRotateScreen = { rotateFullScreen() },
+                    actions = {
                         val currentDetails = vm.state.details
                         val localDownload = currentDetails.localDownload
                         val playableUrls = currentDetails.urls.playableVideoFiles()
@@ -218,8 +216,11 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                         if (showQualityAction) {
                             Box {
                                 var expandedVideoQuality by remember { mutableStateOf(false) }
-                                TextButton(
-                                    modifier = Modifier.widthIn(max = 128.dp),
+                                PlayerActionTextButton(
+                                    text = displayQualityText,
+                                    modifier =
+                                        Modifier.widthIn(max = 128.dp)
+                                            .testTag("player_quality_selector"),
                                     onClick = {
                                         expandedVideoQuality = true
                                         if (
@@ -230,14 +231,7 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                             vm.requestOnlineUrls()
                                         }
                                     },
-                                ) {
-                                    Text(
-                                        text = displayQualityText,
-                                        color = Color.White,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                                )
                                 DropdownMenu(
                                     expanded = expandedVideoQuality,
                                     onDismissRequest = { expandedVideoQuality = false },
@@ -363,15 +357,10 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                         }
                     },
                     controllerTrail = {
-                        IconButton(
-                            onClick = { if (!fullscreen) enterFullScreen() else exitFullScreen() }
-                        ) {
-                            Icon(
-                                if (!fullscreen) Icons.Outlined.Fullscreen
-                                else Icons.Outlined.FullscreenExit,
-                                "Fullscreen",
-                            )
-                        }
+                        PlayerFullscreenIconButton(
+                            fullscreen = fullscreen,
+                            onClick = { if (!fullscreen) enterFullScreen() else exitFullScreen() },
+                        )
                     },
                 )
             },

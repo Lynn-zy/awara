@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -38,9 +39,6 @@ import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.FitScreen
-import androidx.compose.material.icons.outlined.Fullscreen
-import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
@@ -79,6 +77,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -92,7 +91,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.AspectRatioFrameLayout
 import coil.compose.AsyncImage
 import com.airbnb.lottie.compose.LottieAnimation
 import com.airbnb.lottie.compose.LottieCompositionSpec
@@ -117,9 +115,13 @@ import me.rerere.awara.ui.component.common.LocalSearchInput
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
 import me.rerere.awara.ui.component.player.Player
+import me.rerere.awara.ui.component.player.PlayerBackIconButton
+import me.rerere.awara.ui.component.player.PlayerFullscreenIconButton
 import me.rerere.awara.ui.component.player.PlayerScaffold
 import me.rerere.awara.ui.component.player.PlayerState
 import me.rerere.awara.ui.component.player.rememberPlayerState
+import me.rerere.awara.ui.component.player.resolveFullscreenOrientation
+import me.rerere.awara.ui.component.player.resolveToggledFullscreenOrientation
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
 import me.rerere.awara.ui.page.setting.DownloadPlayerMode
@@ -407,23 +409,31 @@ fun DownloadPage(
     }
     val state = rememberPlayerState(enableOnlineStreaming = false)
     var requestOrientation by rememberRequestedScreenOrientation()
+    val configuration = LocalConfiguration.current
+    val sensorRotationEnabled by
+        rememberBooleanPreference(key = SettingKeys.PLAYER_SENSOR_ROTATION, default = true)
     var fullscreen by remember { mutableStateOf(false) }
     var playbackLaunchSeq by remember { mutableStateOf(0) }
+    var autoOrientedLaunchSeq by remember { mutableStateOf(-1) }
     fun enterFullScreen() {
         Log.i("DownloadPage", "enterFullScreen: ${state.videoSize.width}")
         // 进入全屏时统一收起顶部与底部所有控件
         state.controllerState.hide()
-        if (state.videoSize.width > state.videoSize.height) {
-            fullscreen = true
-            requestOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        } else {
-            fullscreen = true
-            requestOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
+        fullscreen = true
+        requestOrientation =
+            resolveFullscreenOrientation(
+                landscape = state.videoSize.width > state.videoSize.height,
+                sensorRotationEnabled = sensorRotationEnabled,
+            )
     }
 
     LaunchedEffect(fullscreen, playbackLaunchSeq, state.videoSize) {
-        if (fullscreen && state.videoSize != PlayerState.VideoSize.UNKNOWN) {
+        if (
+            fullscreen &&
+                autoOrientedLaunchSeq != playbackLaunchSeq &&
+                state.videoSize != PlayerState.VideoSize.UNKNOWN
+        ) {
+            autoOrientedLaunchSeq = playbackLaunchSeq
             enterFullScreen()
         }
     }
@@ -434,6 +444,15 @@ fun DownloadPage(
         state.pause()
         // 清空上一视频上下文与尺寸，确保再次进入同视频或同分辨率视频时仍能触发屏幕方向同步。
         state.updatePlayerItems(emptyList())
+    }
+
+    fun rotateFullScreen() {
+        val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        requestOrientation =
+            resolveToggledFullscreenOrientation(
+                isCurrentlyLandscape = isLandscape,
+                sensorRotationEnabled = sensorRotationEnabled,
+            )
     }
 
     BackHandler(fullscreen) { exitFullScreen() }
@@ -557,39 +576,18 @@ fun DownloadPage(
                 fullscreen = fullscreen,
                 modifier = Modifier.fillMaxSize(),
                 navigationIcon = {
-                    if (fullscreen) {
-                        IconButton(onClick = { exitFullScreen() }) {
-                            Icon(Icons.Outlined.ArrowBack, contentDescription = null)
+                    PlayerBackIconButton(
+                        onClick = {
+                            if (fullscreen) exitFullScreen() else router.popBackStack()
                         }
-                    } else {
-                        BackButton()
-                    }
+                    )
                 },
-                actions = { speedSelector ->
-                    if (fullscreen) {
-                        IconButton(
-                            onClick = {
-                                state.resizeMode =
-                                    if (state.resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT)
-                                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                    else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            }
-                        ) {
-                            Icon(Icons.Outlined.FitScreen, null)
-                        }
-                    }
-                    speedSelector()
-                },
+                onRotateScreen = { rotateFullScreen() },
                 controllerTrail = {
-                    IconButton(
-                        onClick = { if (!fullscreen) enterFullScreen() else exitFullScreen() }
-                    ) {
-                        Icon(
-                            if (!fullscreen) Icons.Outlined.Fullscreen
-                            else Icons.Outlined.FullscreenExit,
-                            "Fullscreen",
-                        )
-                    }
+                    PlayerFullscreenIconButton(
+                        fullscreen = fullscreen,
+                        onClick = { if (!fullscreen) enterFullScreen() else exitFullScreen() },
+                    )
                 },
             )
         },

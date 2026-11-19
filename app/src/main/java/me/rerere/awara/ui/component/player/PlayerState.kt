@@ -32,7 +32,6 @@ import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.ui.AspectRatioFrameLayout
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
@@ -500,7 +499,9 @@ class PlayerState(
 
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
     var duration by mutableStateOf(0L)
-    var resizeMode by mutableStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT)
+
+    /** 画面缩放档位（适应/填充/100%）与全屏双指缩放平移状态。 */
+    val videoTransform = PlayerVideoTransformState()
 
     var playerItems by mutableStateOf<List<PlayerItem>>(emptyList())
         private set
@@ -553,6 +554,7 @@ class PlayerState(
             videoSize = VideoSize.UNKNOWN
             hasStartedPlayback = false
             lastRequestedPositionMs = 0L
+            videoTransform.reset()
             controllerState.resetForNewMedia()
             return
         }
@@ -588,9 +590,10 @@ class PlayerState(
 
         val currentPlayWhenReady = targetPlayWhenReady ?: player.playWhenReady
         if (!sameVideo) {
-            // 切换到不同视频时清空上一视频尺寸与已播标记，并恢复仅展示顶部栏（隐藏底部进度条）
+            // 切换到不同视频时清空上一视频尺寸与已播标记，并恢复默认适应缩放及仅顶部栏状态
             videoSize = VideoSize.UNKNOWN
             hasStartedPlayback = false
+            videoTransform.reset()
             controllerState.resetForNewMedia()
         }
 

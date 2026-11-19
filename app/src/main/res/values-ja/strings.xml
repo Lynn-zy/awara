@@ -5,6 +5,16 @@
     <string name="player_gesture_volume">メディア音量 %1$d%%</string>
     <string name="player_gesture_speed">一時再生速度 %1$.2fx</string>
     <string name="player_gesture_unavailable">調整できません</string>
+    <string name="player_scale_mode_fit">フィット</string>
+    <string name="player_scale_mode_fill">全画面</string>
+    <string name="player_scale_mode_original">100%</string>
+    <string name="player_scale_mode_action">画面サイズ切替</string>
+    <string name="player_rotate_screen">画面を回転</string>
+    <string name="player_double_tap_rewind">-%1$ds</string>
+    <string name="player_double_tap_forward">+%1$ds</string>
+    <string name="player_gesture_zoom">%1$.1fx</string>
+    <string name="setting_player_sensor_rotation_title">重力センサーによる画面回転</string>
+    <string name="setting_player_sensor_rotation_text">フルスクリーン横画面再生時に端末の向きに合わせて横方向を自動切替します</string>
     <string name="setting_player_seek_thumbnail">シーク中にサムネイルを表示</string>
     <string name="setting_player_seek_preview_position">サムネイルの表示位置</string>
     <string name="setting_player_seek_preview_center">中央</string>

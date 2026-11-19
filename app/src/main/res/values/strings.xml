@@ -5,6 +5,16 @@
     <string name="player_gesture_volume">Media volume %1$d%%</string>
     <string name="player_gesture_speed">Temporary speed %1$.2fx</string>
     <string name="player_gesture_unavailable">Control unavailable</string>
+    <string name="player_scale_mode_fit">Fit</string>
+    <string name="player_scale_mode_fill">Fill</string>
+    <string name="player_scale_mode_original">100%</string>
+    <string name="player_scale_mode_action">Video scale mode</string>
+    <string name="player_rotate_screen">Rotate screen</string>
+    <string name="player_double_tap_rewind">-%1$ds</string>
+    <string name="player_double_tap_forward">+%1$ds</string>
+    <string name="player_gesture_zoom">%1$.1fx</string>
+    <string name="setting_player_sensor_rotation_title">Gravity sensor rotation</string>
+    <string name="setting_player_sensor_rotation_text">Automatically flip between landscape orientations while in fullscreen</string>
     <string name="setting_player_seek_thumbnail">Seek thumbnail preview</string>
     <string name="setting_player_seek_preview_position">Thumbnail position</string>
     <string name="setting_player_seek_preview_center">Center</string>

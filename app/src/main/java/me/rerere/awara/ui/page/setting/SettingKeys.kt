@@ -9,6 +9,7 @@ object SettingKeys {
     const val DYNAMIC_COLOR = "setting.dynamic_color"
     const val AUTO_PLAY = "setting.auto_play"
     const val LOOP_PLAY = "setting.loop_play"
+    const val PLAYER_SENSOR_ROTATION = "setting.player_sensor_rotation"
     const val DOWNLOAD_PLAYER = "setting.download_player_internal"
 }
 

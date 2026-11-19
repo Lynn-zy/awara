@@ -3,6 +3,10 @@ package me.rerere.awara.ui.component.player
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,7 +16,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -20,10 +23,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,15 +46,21 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Brightness6
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.FitScreen
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Replay
+import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -78,14 +89,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
@@ -107,12 +126,15 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.MediaItem
@@ -272,6 +294,127 @@ internal fun resolveInitialPlayInteractionState(state: PlayerState): InitialPlay
     )
 }
 
+/** 播放器控制栏光学归一化按钮尺寸常量，补偿各 Material 图标在 24×24 画布内原始留白差异。 */
+internal val PLAYER_CONTROL_SLOT_SIZE = 40.dp
+internal val PLAYER_BACK_ICON_SIZE = 22.dp
+internal val PLAYER_SCALE_ICON_SIZE = 21.dp
+internal val PLAYER_ROTATE_ICON_SIZE = 17.dp
+internal val PLAYER_PLAY_ICON_SIZE = 23.dp
+internal val PLAYER_FULLSCREEN_ICON_SIZE = 26.dp
+internal val PLAYER_ACTION_TEXT_SIZE = 14.sp
+
+/** 播放器控制栏统一图标按钮（40dp 热区槽 + 指定光学尺寸图标）。 */
+@Composable
+internal fun PlayerControlIconButton(
+    icon: ImageVector,
+    contentDescription: String?,
+    iconSize: Dp,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconButton(onClick = onClick, modifier = modifier.size(PLAYER_CONTROL_SLOT_SIZE)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(iconSize),
+        )
+    }
+}
+
+/** 播放器左上角返回图标按钮（光学尺寸 22dp）。 */
+@Composable
+internal fun PlayerBackIconButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    PlayerControlIconButton(
+        icon = Icons.Outlined.ArrowBack,
+        contentDescription = "Back",
+        iconSize = PLAYER_BACK_ICON_SIZE,
+        onClick = onClick,
+        modifier = modifier,
+    )
+}
+
+/** 播放器右下角全屏切换图标按钮（光学尺寸 26dp）。 */
+@Composable
+internal fun PlayerFullscreenIconButton(
+    fullscreen: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    PlayerControlIconButton(
+        icon = if (!fullscreen) Icons.Outlined.Fullscreen else Icons.Outlined.FullscreenExit,
+        contentDescription = "Fullscreen",
+        iconSize = PLAYER_FULLSCREEN_ICON_SIZE,
+        onClick = onClick,
+        modifier = modifier,
+    )
+}
+
+/** 播放器控制栏统一文字动作按钮（高度 40dp，字号 14sp，用于清晰度与倍速等切换入口）。 */
+@Composable
+internal fun PlayerActionTextButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        modifier = modifier.defaultMinSize(minWidth = PLAYER_CONTROL_SLOT_SIZE, minHeight = PLAYER_CONTROL_SLOT_SIZE),
+    ) {
+        Text(
+            text = text,
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.38f),
+            fontSize = PLAYER_ACTION_TEXT_SIZE,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 左右双击快进/快退浮层定稿参数（方案 A · 舒展柔白大椭圆 + M4 触点柔白光环）。 */
+private const val DOUBLE_TAP_SEEK_HOLD_MS = 600L
+private const val DOUBLE_TAP_SEEK_FADE_OUT_MS = 180L
+private const val DOUBLE_TAP_ELLIPSE_WIDTH_RATIO = 0.35f
+private const val DOUBLE_TAP_ELLIPSE_VERTICAL_STRETCH = 1.75f
+private const val DOUBLE_TAP_ELLIPSE_EDGE_FEATHER = 0.16f
+private const val DOUBLE_TAP_ELLIPSE_FILL_ALPHA = 0.10f
+private const val DOUBLE_TAP_VEIL_PEAK_ALPHA = 0.05f
+private const val DOUBLE_TAP_VEIL_SPREAD = 0.25f
+private const val DOUBLE_TAP_VEIL_DURATION_MS = 300
+private const val DOUBLE_TAP_TEXT_SHADOW_ALPHA = 0.45f
+
+/** 缩放模式切换浮层提示停留时长（毫秒）。 */
+private const val SCALE_MODE_FEEDBACK_DURATION_MS = 1200L
+
+/** 双指缩放手势结束后倍率提示停留时长（毫秒）。 */
+private const val PINCH_ZOOM_FEEDBACK_HOLD_MS = 800L
+
+/** 左右双击快进/快退的浮层反馈状态，包含起手锚点、受限有效累加秒数、跳转时间坐标与触点位置。 */
+private data class DoubleTapSeekFeedback(
+    val zone: PlayerDoubleTapZone,
+    val anchorPositionMs: Long,
+    val effectiveDeltaSeconds: Int,
+    val targetPositionMs: Long,
+    val tapOffset: Offset,
+    val pulseVersion: Int,
+)
+
+/** 全屏缩放按钮三档提示与双指缩放实时倍率提示的统一浮层状态。 */
+private sealed interface PlayerScaleFeedback {
+    val version: Int
+
+    data class Mode(val mode: PlayerScaleMode, override val version: Int) : PlayerScaleFeedback
+
+    data class PinchZoom(
+        val scale: Float,
+        val active: Boolean,
+        override val version: Int,
+    ) : PlayerScaleFeedback
+}
+
 @Composable
 fun Player(
     modifier: Modifier,
@@ -279,9 +422,8 @@ fun Player(
     fullscreen: Boolean,
     navigationIcon: @Composable (() -> Unit)? = null,
     controllerTrail: @Composable (() -> Unit)? = null,
-    actions: @Composable RowScope.(speedSelector: @Composable () -> Unit) -> Unit = { selector ->
-        selector()
-    },
+    onRotateScreen: (() -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     val thumbnailEnabled by
         rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
@@ -294,7 +436,7 @@ fun Player(
             default = SeekPreviewPosition.FollowSlider.key,
         )
     Box(modifier = modifier) {
-        PlayerBase(state = state, modifier = Modifier.matchParentSize())
+        PlayerBase(state = state, fullscreen = fullscreen, modifier = Modifier.matchParentSize())
         CompositionLocalProvider(LocalContentColor provides Color.White) {
             PlayerController(
                 state = state,
@@ -303,6 +445,7 @@ fun Player(
                 navigationIcon = navigationIcon,
                 actions = actions,
                 controllerTrail = controllerTrail,
+                onRotateScreen = onRotateScreen,
                 thumbnailEnabled = thumbnailEnabled,
                 minimalProgressEnabled = minimalProgressEnabled,
                 previewPosition = SeekPreviewPosition.fromKey(previewPosition),
@@ -322,10 +465,9 @@ internal fun PlayerController(
     fullscreen: Boolean,
     previewState: SeekPreviewState = rememberSeekPreviewState(),
     navigationIcon: @Composable (() -> Unit)? = null,
-    actions: @Composable RowScope.(speedSelector: @Composable () -> Unit) -> Unit = { selector ->
-        selector()
-    },
+    actions: @Composable RowScope.() -> Unit = {},
     controllerTrail: @Composable (() -> Unit)? = null,
+    onRotateScreen: (() -> Unit)? = null,
     thumbnailEnabled: Boolean = true,
     previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
     controls: PlayerGestureControlState = rememberPlayerGestureControls(state),
@@ -457,10 +599,22 @@ internal fun PlayerController(
             previewState.clearPending()
         }
     }
+    val controller = state.controllerState
+    var speedMenuExpanded by remember(state) { mutableStateOf(false) }
+    var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
+    var doubleTapSeekFeedback by remember(state) { mutableStateOf<DoubleTapSeekFeedback?>(null) }
+    var doubleTapPulseSeq by remember(state) { mutableStateOf(0) }
+    var scaleFeedback by remember(state) { mutableStateOf<PlayerScaleFeedback?>(null) }
+    var scaleFeedbackVersion by remember(state) { mutableStateOf(0) }
+    val pinchZoomActive = (scaleFeedback as? PlayerScaleFeedback.PinchZoom)?.active == true
+
     val displayPosition =
         when {
             previewState.isActive -> previewState.targetPositionMs
-            else -> previewState.pendingSeekTarget ?: timelineProgress.positionMs
+            else ->
+                doubleTapSeekFeedback?.targetPositionMs
+                    ?: previewState.pendingSeekTarget
+                    ?: timelineProgress.positionMs
         }.coerceIn(0L, state.duration.coerceAtLeast(0L))
     // 同一比例同时驱动滑块和预览位置，横滑与进度条拖动不会出现两套定位结果。
     val progressFraction = playerProgressFraction(displayPosition, state.duration)
@@ -471,17 +625,45 @@ internal fun PlayerController(
             sourceUri = sourceUri,
         )
 
-    val controller = state.controllerState
-    var speedMenuExpanded by remember(state) { mutableStateOf(false) }
-    var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
-    // 进入全屏时立即收起顶部标题与底部进度条等全部控件
-    LaunchedEffect(fullscreen) { if (fullscreen) controller.hide() }
+    // 进入全屏时立即收起全部控件；退出全屏时自动复位全屏缩放与双指偏移状态
+    LaunchedEffect(fullscreen) {
+        if (fullscreen) {
+            controller.hide()
+        } else {
+            state.videoTransform.reset()
+            scaleFeedback = null
+        }
+    }
+    LaunchedEffect(mediaItem, mediaGeneration) {
+        doubleTapSeekFeedback = null
+        scaleFeedback = null
+    }
+    LaunchedEffect(doubleTapSeekFeedback?.pulseVersion) {
+        if (doubleTapSeekFeedback != null) {
+            delay(DOUBLE_TAP_SEEK_HOLD_MS)
+            doubleTapSeekFeedback = null
+        }
+    }
+    LaunchedEffect(scaleFeedback) {
+        val currentFeedback = scaleFeedback ?: return@LaunchedEffect
+        val holdMs =
+            when (currentFeedback) {
+                is PlayerScaleFeedback.Mode -> SCALE_MODE_FEEDBACK_DURATION_MS
+                is PlayerScaleFeedback.PinchZoom ->
+                    if (currentFeedback.active) return@LaunchedEffect else PINCH_ZOOM_FEEDBACK_HOLD_MS
+            }
+        delay(holdMs)
+        if (scaleFeedback == currentFeedback) {
+            scaleFeedback = null
+        }
+    }
     LaunchedEffect(
         controller.anyVisible,
         state.playing,
         previewState.isActive,
         controls.feedback,
         speedMenuExpanded,
+        pinchZoomActive,
         lastInteract,
     ) {
         if (
@@ -489,15 +671,42 @@ internal fun PlayerController(
                 state.playing &&
                 !previewState.isActive &&
                 controls.feedback == null &&
-                !speedMenuExpanded
+                !speedMenuExpanded &&
+                !pinchZoomActive
         ) {
             delay(3000)
             controller.hide()
         }
     }
 
-    // 手势防误触门控（竖向滑动拒绝后抑制单击切换控制栏）
+    // 手势防误触门控（竖向滑动拒绝或双指接管后抑制单击切换控制栏）
     var suppressTap by remember { mutableStateOf(false) }
+
+    fun triggerSideDoubleTapSeek(zone: PlayerDoubleTapZone, tapOffset: Offset) {
+        if (!state.player.isCurrentMediaItemSeekable) return
+        val previous = doubleTapSeekFeedback?.takeIf { it.zone == zone }
+        val result =
+            advanceDoubleTapSeek(
+                zone = zone,
+                currentPositionMs = state.player.currentPosition.coerceAtLeast(0L),
+                durationMs = state.duration,
+                previousAnchorMs = previous?.anchorPositionMs,
+                previousTargetMs = previous?.targetPositionMs,
+            ) ?: return
+        doubleTapPulseSeq++
+        doubleTapSeekFeedback =
+            DoubleTapSeekFeedback(
+                zone = result.zone,
+                anchorPositionMs = result.anchorPositionMs,
+                effectiveDeltaSeconds = result.effectiveDeltaSeconds,
+                targetPositionMs = result.targetPositionMs,
+                tapOffset = tapOffset,
+                pulseVersion = doubleTapPulseSeq,
+            )
+        scaleFeedback = null
+        lastInteract = System.currentTimeMillis()
+        state.seekTo(result.targetPositionMs)
+    }
 
     // 首次单击播放器区域起播时的 M4 轻微柔白蒙层动效状态（时长 300ms）
     val coroutineScope = rememberCoroutineScope()
@@ -556,56 +765,112 @@ internal fun PlayerController(
                 .testTag("player_seek_surface")
                 .onSizeChanged { playerSize = it }
                 .onGloballyPositioned { originInWindow = it.positionInWindow() }
-                .pointerInput(
-                    state,
-                    mediaItem,
-                    mediaGeneration,
-                    fullscreen,
-                    playerSize,
-                    inputEnabled,
-                    initialInteraction.enableDoubleTapGesture,
-                ) {
-                    if (!inputEnabled) return@pointerInput
-                    detectTapGestures(
-                        onPress = { suppressTap = false },
-                        onDoubleTap =
-                            if (initialInteraction.enableDoubleTapGesture) {
-                                {
-                                    if (!suppressTap) {
-                                        lastInteract = System.currentTimeMillis()
-                                        if (state.playing) {
-                                            state.pause()
-                                        } else {
-                                            state.play()
-                                        }
-                                    }
+                .playerPinchZoomGestures(
+                    enabled = fullscreen && inputEnabled,
+                    gestureKey =
+                        listOf(mediaItem, mediaGeneration, fullscreen, playerSize, inputEnabled),
+                    canInteract = {
+                        fullscreen &&
+                            foreground &&
+                            windowInfo.isWindowFocused &&
+                            mediaGeneration == renderedGeneration &&
+                            !initialInteractionState.value.blockLoadingInteraction
+                    },
+                    onPinchStart = {
+                        suppressTap = true
+                        speedMenuExpanded = false
+                        doubleTapSeekFeedback = null
+                        lastInteract = System.currentTimeMillis()
+                    },
+                    onPinchTransform = { zoomChange, panChange, centroid ->
+                        val nextScale =
+                            state.videoTransform.applyPinchGesture(
+                                zoomChange = zoomChange,
+                                panChange = panChange,
+                                centroid = centroid,
+                                containerSize = playerSize,
+                                videoSize = state.videoSize,
+                            )
+                        scaleFeedbackVersion++
+                        scaleFeedback =
+                            PlayerScaleFeedback.PinchZoom(
+                                scale = nextScale,
+                                active = true,
+                                version = scaleFeedbackVersion,
+                            )
+                        lastInteract = System.currentTimeMillis()
+                    },
+                    onPinchEnd = {
+                        val currentZoom = scaleFeedback as? PlayerScaleFeedback.PinchZoom
+                        if (currentZoom != null) {
+                            scaleFeedbackVersion++
+                            scaleFeedback =
+                                currentZoom.copy(active = false, version = scaleFeedbackVersion)
+                        }
+                        lastInteract = System.currentTimeMillis()
+                    },
+                )
+                .playerTapGestures(
+                    enabled = inputEnabled,
+                    enableDoubleTap = initialInteraction.enableDoubleTapGesture,
+                    gestureKey =
+                        listOf(
+                            state,
+                            mediaItem,
+                            mediaGeneration,
+                            fullscreen,
+                            playerSize,
+                            inputEnabled,
+                            initialInteraction.enableDoubleTapGesture,
+                        ),
+                    isSuppressed = { suppressTap },
+                    onPressStart = { suppressTap = false },
+                    activeRapidSeekZone = { doubleTapSeekFeedback?.zone },
+                    onRapidSeekTap = { zone, tapOffset ->
+                        triggerSideDoubleTapSeek(zone, tapOffset)
+                    },
+                    onDoubleTap = { tapOffset ->
+                        if (suppressTap) {
+                            suppressTap = false
+                            return@playerTapGestures
+                        }
+                        val zone = resolveDoubleTapZone(tapOffset.x, playerSize.width.toFloat())
+                        when (zone) {
+                            PlayerDoubleTapZone.LEFT,
+                            PlayerDoubleTapZone.RIGHT -> triggerSideDoubleTapSeek(zone, tapOffset)
+                            PlayerDoubleTapZone.CENTER -> {
+                                doubleTapSeekFeedback = null
+                                lastInteract = System.currentTimeMillis()
+                                if (state.playing) {
+                                    state.pause()
+                                } else {
+                                    state.play()
                                 }
-                            } else {
-                                // 首帧待播与初始加载期传 null，跳过 300ms 双击判定等待，手指抬起 0ms 立即触发 onTap
-                                null
-                            },
-                        onTap = { tapOffset ->
-                            if (suppressTap) {
-                                suppressTap = false
-                                return@detectTapGestures
                             }
-                            val interaction = initialInteractionState.value
-                            if (interaction.blockLoadingInteraction) {
-                                // 初始 loading 转圈期间（即使首帧已提前显示）点击播放器区域不显示底部进度条
-                                return@detectTapGestures
-                            }
-                            lastInteract = System.currentTimeMillis()
-                            if (interaction.showPlayPrompt) {
-                                // 初始缓冲已停止且首帧就绪：触发轻微柔白蒙层反馈，立即开始播放并收起全部控件
-                                triggerInitialPlayTapVeil(tapOffset)
-                                state.play()
-                                controller.hide()
-                            } else {
-                                controller.toggle()
-                            }
-                        },
-                    )
-                }
+                        }
+                    },
+                    onTap = { tapOffset ->
+                        if (suppressTap) {
+                            suppressTap = false
+                            return@playerTapGestures
+                        }
+                        val interaction = initialInteractionState.value
+                        if (interaction.blockLoadingInteraction) {
+                            // 初始 loading 转圈期间（即使首帧已提前显示）点击播放器区域不显示底部进度条
+                            return@playerTapGestures
+                        }
+                        doubleTapSeekFeedback = null
+                        lastInteract = System.currentTimeMillis()
+                        if (interaction.showPlayPrompt) {
+                            // 初始缓冲已停止且首帧就绪：触发轻微柔白蒙层反馈，立即开始播放并收起全部控件
+                            triggerInitialPlayTapVeil(tapOffset)
+                            state.play()
+                            controller.hide()
+                        } else {
+                            controller.toggle()
+                        }
+                    },
+                )
                 .playerControlGestures(
                     previewState = previewState,
                     controls = controls,
@@ -650,6 +915,7 @@ internal fun PlayerController(
                         if (active) {
                             if (previewState.isActive) controller.showSeek() else controller.hide()
                             speedMenuExpanded = false
+                            doubleTapSeekFeedback = null
                         } else if (state.player.playWhenReady) {
                             controller.hide()
                         }
@@ -660,6 +926,36 @@ internal fun PlayerController(
                 .fillMaxSize()
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
+            // 顶底控制栏轻渐变底衬，保证明亮视频场景下的图标与文字清晰可读
+            if (controller.topVisible) {
+                Box(
+                    modifier =
+                        Modifier.align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .height(84.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to Color.Black.copy(alpha = 0.42f),
+                                    1f to Color.Transparent,
+                                )
+                            )
+                )
+            }
+            if (controller.bottomVisible) {
+                Box(
+                    modifier =
+                        Modifier.align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(84.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.48f),
+                                )
+                            )
+                )
+            }
+
             Column(
                 modifier =
                     Modifier
@@ -677,6 +973,7 @@ internal fun PlayerController(
                 if (controller.topVisible) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
                         modifier =
                             Modifier.fillMaxWidth()
                                 .heightIn(min = 48.dp)
@@ -694,26 +991,40 @@ internal fun PlayerController(
                             modifier = Modifier.weight(1f).testTag("player_title"),
                         )
 
-                        actions {
-                            PlayerSpeedSelector(
-                                currentSpeed = state.currentPlaybackSpeed,
-                                expanded = speedMenuExpanded,
-                                enabled =
-                                    state.player.isCommandAvailable(
-                                        MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
-                                    ),
-                                onExpandedChange = { expanded ->
-                                    speedMenuExpanded = expanded
-                                    if (expanded && state.hasStartedPlayback) controller.show()
+                        // 全屏右上角按钮顺序（从左到右）：缩放、旋转、清晰度
+                        if (fullscreen) {
+                            PlayerControlIconButton(
+                                icon = Icons.Outlined.FitScreen,
+                                contentDescription =
+                                    stringResource(R.string.player_scale_mode_action),
+                                iconSize = PLAYER_SCALE_ICON_SIZE,
+                                onClick = {
                                     lastInteract = System.currentTimeMillis()
+                                    doubleTapSeekFeedback = null
+                                    val nextMode = state.videoTransform.cycleOrResetMode()
+                                    scaleFeedbackVersion++
+                                    scaleFeedback =
+                                        PlayerScaleFeedback.Mode(nextMode, scaleFeedbackVersion)
                                 },
-                                onSpeedSelected = { speed ->
-                                    // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
-                                    controls.finishGesture()
-                                    state.updatePlaybackSpeed(speed)
-                                },
+                                modifier = Modifier.testTag("player_scale_mode_button"),
                             )
+
+                            if (onRotateScreen != null) {
+                                PlayerControlIconButton(
+                                    icon = Icons.Outlined.ScreenRotation,
+                                    contentDescription =
+                                        stringResource(R.string.player_rotate_screen),
+                                    iconSize = PLAYER_ROTATE_ICON_SIZE,
+                                    onClick = {
+                                        lastInteract = System.currentTimeMillis()
+                                        onRotateScreen()
+                                    },
+                                    modifier = Modifier.testTag("player_rotate_screen_button"),
+                                )
+                            }
                         }
+
+                        actions()
                     }
                 } else {
                     // 保留预览与提示的布局基准，不让隐藏标题改变手势中画面位置。
@@ -763,12 +1074,15 @@ internal fun PlayerController(
                         )
                     }
                     controls.feedback?.let { PlayerGestureFeedback(it, fullscreen) }
+                    if (!previewState.isActive && controls.feedback == null) {
+                        scaleFeedback?.let { PlayerScaleFeedbackOverlay(it) }
+                    }
                 }
 
                 // 时间区域限宽并允许长时长换行，优先给同排进度条保留可拖动空间。
                 if (controller.bottomVisible) {
                     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                        val timeMaxWidth = maxWidth * 0.36f
+                        val timeMaxWidth = maxWidth * 0.28f
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -777,22 +1091,18 @@ internal fun PlayerController(
                                     .heightIn(min = 48.dp)
                                     .testTag("player_bottom_controls"),
                         ) {
-                            // 播放/暂停按钮
-                            if (state.playing) {
-                                IconButton(
-                                    onClick = { state.pause() },
-                                    modifier = Modifier.testTag("player_play_pause"),
-                                ) {
-                                    Icon(Icons.Outlined.Pause, "Pause", Modifier.size(22.dp))
-                                }
-                            } else {
-                                IconButton(
-                                    onClick = { state.play() },
-                                    modifier = Modifier.testTag("player_play_pause"),
-                                ) {
-                                    Icon(Icons.Outlined.PlayArrow, "Play", Modifier.size(22.dp))
-                                }
-                            }
+                            // 播放/暂停按钮（统一 40dp 热区槽 + 23dp 光学尺寸图标）
+                            PlayerControlIconButton(
+                                icon =
+                                    if (state.playing) Icons.Outlined.Pause
+                                    else Icons.Outlined.PlayArrow,
+                                contentDescription = if (state.playing) "Pause" else "Play",
+                                iconSize = PLAYER_PLAY_ICON_SIZE,
+                                onClick = {
+                                    if (state.playing) state.pause() else state.play()
+                                },
+                                modifier = Modifier.testTag("player_play_pause"),
+                            )
 
                             ProgressSlider(
                                 state = state,
@@ -836,12 +1146,39 @@ internal fun PlayerController(
                                         .testTag("player_playback_time"),
                             )
 
+                            PlayerSpeedSelector(
+                                currentSpeed = state.currentPlaybackSpeed,
+                                expanded = speedMenuExpanded,
+                                enabled =
+                                    state.player.isCommandAvailable(
+                                        MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
+                                    ),
+                                onExpandedChange = { expanded ->
+                                    speedMenuExpanded = expanded
+                                    if (expanded && state.hasStartedPlayback) controller.show()
+                                    lastInteract = System.currentTimeMillis()
+                                },
+                                onSpeedSelected = { speed ->
+                                    // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
+                                    controls.finishGesture()
+                                    state.updatePlaybackSpeed(speed)
+                                },
+                            )
+
                             controllerTrail?.invoke()
                         }
                     }
                 } else {
                     Spacer(Modifier.height(48.dp))
                 }
+            }
+
+            // 左右双击快进/快退：方案 A 舒展柔白大椭圆 + M4 触点宽羽化光环 + 三连箭头与时间坐标
+            doubleTapSeekFeedback?.let { feedback ->
+                PlayerDoubleTapSeekFeedback(
+                    feedback = feedback,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
 
@@ -1265,20 +1602,15 @@ internal fun PlayerSpeedSelector(
     var failed by remember(expanded) { mutableStateOf(false) }
     val description = stringResource(R.string.player_playback_speed)
     Box {
-        TextButton(
-            onClick = { onExpandedChange(true) },
+        PlayerActionTextButton(
+            text = playbackSpeedLabel(currentSpeed),
             enabled = enabled,
+            onClick = { onExpandedChange(true) },
             modifier =
-                Modifier.width(64.dp).testTag("player_speed_selector").semantics {
+                Modifier.testTag("player_speed_selector").semantics {
                     contentDescription = description
                 },
-        ) {
-            Text(
-                playbackSpeedLabel(currentSpeed),
-                color = if (enabled) Color.White else Color.White.copy(alpha = 0.38f),
-                maxLines = 1,
-            )
-        }
+        )
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
             PlayerPlaybackSpeeds.forEach { speed ->
                 DropdownMenuItem(
@@ -1300,6 +1632,327 @@ internal fun PlayerSpeedSelector(
                     onClick = {},
                 )
         }
+    }
+}
+
+/**
+ * 左右双击快进/快退视觉反馈（方案 A 舒展柔白大椭圆 + M4 触点宽羽化柔白光环）：
+ * - 椭圆水平铺入 35%、纵向拉伸 1.75x、边缘 16% 羽化、10% 柔白底雾；
+ * - 复用 M4 触点光环（峰值 5%、扩散 25%、时长 300ms），每次连击重新绽放；
+ * - 展示三连渐进箭头动效、受限后的实际跳转秒数与目标时间坐标（600ms 窗口后淡出）。
+ */
+@Composable
+private fun PlayerDoubleTapSeekFeedback(
+    feedback: DoubleTapSeekFeedback,
+    modifier: Modifier = Modifier,
+) {
+    val isRewind = feedback.zone == PlayerDoubleTapZone.LEFT
+    val overlayAlpha = remember { Animatable(0f) }
+    val veilProgress = remember { Animatable(0f) }
+    val contentPopScale = remember { Animatable(0.92f) }
+
+    LaunchedEffect(feedback.pulseVersion) {
+        if (overlayAlpha.value < 0.99f) {
+            overlayAlpha.snapTo(0.45f)
+            overlayAlpha.animateTo(1f, animationSpec = tween(durationMillis = 90))
+        } else {
+            overlayAlpha.snapTo(1f)
+        }
+        val stayMs = (DOUBLE_TAP_SEEK_HOLD_MS - DOUBLE_TAP_SEEK_FADE_OUT_MS - 90L).coerceAtLeast(0L)
+        if (stayMs > 0L) delay(stayMs)
+        overlayAlpha.animateTo(
+            targetValue = 0f,
+            animationSpec = tween(durationMillis = DOUBLE_TAP_SEEK_FADE_OUT_MS.toInt()),
+        )
+    }
+
+    LaunchedEffect(feedback.pulseVersion) {
+        veilProgress.snapTo(0f)
+        veilProgress.animateTo(
+            targetValue = 1f,
+            animationSpec =
+                tween(durationMillis = DOUBLE_TAP_VEIL_DURATION_MS, easing = LinearEasing),
+        )
+    }
+
+    LaunchedEffect(feedback.pulseVersion) {
+        contentPopScale.snapTo(0.90f)
+        contentPopScale.animateTo(1f, animationSpec = tween(durationMillis = 160))
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "doubleTapChevrons")
+    val chevronCycle by
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec =
+                infiniteRepeatable(
+                    animation = tween(durationMillis = 660, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart,
+                ),
+            label = "chevronCycle",
+        )
+
+    val label =
+        stringResource(
+            if (isRewind) R.string.player_double_tap_rewind else R.string.player_double_tap_forward,
+            feedback.effectiveDeltaSeconds,
+        )
+    val targetTimeText = formatTime(feedback.targetPositionMs)
+    val textShadow =
+        Shadow(
+            color = Color.Black.copy(alpha = DOUBLE_TAP_TEXT_SHADOW_ALPHA),
+            offset = Offset(0f, 1.5f),
+            blurRadius = 8f,
+        )
+
+    // 椭圆沿竖向拉伸 1.75 倍，必须显式裁剪在播放器区域内，避免非全屏播放时溢出遮挡详情页内容。
+    Box(
+        modifier = modifier.fillMaxSize().clipToBounds().testTag("player_double_tap_seek_feedback")
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val alphaFactor = overlayAlpha.value.coerceIn(0f, 1f)
+            if (alphaFactor <= 0.001f || size.width <= 1f || size.height <= 1f) return@Canvas
+
+            val rx = size.width * DOUBLE_TAP_ELLIPSE_WIDTH_RATIO
+            val ry = (size.height * 0.5f) * DOUBLE_TAP_ELLIPSE_VERTICAL_STRETCH
+            val cx = if (isRewind) 0f else size.width
+            val cy = size.height * 0.5f
+            if (rx <= 1f || ry <= 1f) return@Canvas
+
+            val ellipsePath =
+                Path().apply {
+                    addOval(Rect(left = cx - rx, top = cy - ry, right = cx + rx, bottom = cy + ry))
+                }
+
+            clipRect {
+                clipPath(ellipsePath) {
+                    // 1. 舒展柔白大椭圆底雾（边缘 16% 羽化，峰值浓度 10%）
+                    val fillAlpha = DOUBLE_TAP_ELLIPSE_FILL_ALPHA * alphaFactor
+                    val innerStop = (1f - DOUBLE_TAP_ELLIPSE_EDGE_FEATHER).coerceIn(0.1f, 0.98f)
+                    withTransform({
+                        translate(cx, cy)
+                        scale(rx, ry, pivot = Offset.Zero)
+                    }) {
+                        drawCircle(
+                            brush =
+                                Brush.radialGradient(
+                                    0.00f to
+                                        Color.White.copy(
+                                            alpha = (fillAlpha * 1.05f).coerceIn(0f, 1f)
+                                        ),
+                                    innerStop to
+                                        Color.White.copy(
+                                            alpha = (fillAlpha * 0.88f).coerceIn(0f, 1f)
+                                        ),
+                                    1.00f to Color.Transparent,
+                                    center = Offset.Zero,
+                                    radius = 1f,
+                                ),
+                            radius = 1f,
+                            center = Offset.Zero,
+                        )
+                    }
+
+                    // 2. 复用 M4 触点宽羽化柔白光环（浓度 5%、范围 25%、时长 300ms）
+                    val p = veilProgress.value.coerceIn(0f, 1f)
+                    if (p < 1f) {
+                        val env = initialPlayVeilEnvelope(p)
+                        val veilPeak = DOUBLE_TAP_VEIL_PEAK_ALPHA * env * alphaFactor
+                        if (veilPeak > 0.0005f) {
+                            val easeOutCubic = 1f - (1f - p).pow(3)
+                            val diag = hypot(size.width, size.height)
+                            val outerRadius =
+                                maxOf(
+                                    8f,
+                                    diag * (0.08f + DOUBLE_TAP_VEIL_SPREAD * 0.72f * easeOutCubic),
+                                )
+                            val fallbackX =
+                                if (isRewind) rx * 0.46f else size.width - rx * 0.46f
+                            val rawCenter =
+                                if (feedback.tapOffset == Offset.Unspecified) {
+                                    Offset(fallbackX, cy)
+                                } else {
+                                    feedback.tapOffset
+                                }
+                            val tapCenter =
+                                Offset(
+                                    x = rawCenter.x.coerceIn(0f, size.width),
+                                    y = rawCenter.y.coerceIn(0f, size.height),
+                                )
+                            drawRect(
+                                color =
+                                    Color.White.copy(alpha = (veilPeak * 0.25f).coerceIn(0f, 1f))
+                            )
+                            drawRect(
+                                brush =
+                                    Brush.radialGradient(
+                                        0.00f to
+                                            Color.White.copy(
+                                                alpha = (veilPeak * 0.28f).coerceIn(0f, 1f)
+                                            ),
+                                        0.58f to
+                                            Color.White.copy(
+                                                alpha = (veilPeak * 0.95f).coerceIn(0f, 1f)
+                                            ),
+                                        1.00f to Color.Transparent,
+                                        center = tapCenter,
+                                        radius = outerRadius,
+                                    )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 宽度取 0.35 * 0.92，使内部中心正好对齐原型中 rx * 0.46 的视觉焦点位置
+        Box(
+            modifier =
+                Modifier.align(
+                        if (isRewind) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight
+                    )
+                    .fillMaxHeight()
+                    .fillMaxWidth(DOUBLE_TAP_ELLIPSE_WIDTH_RATIO * 0.92f),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+                modifier =
+                    Modifier.graphicsLayer {
+                        scaleX = contentPopScale.value
+                        scaleY = contentPopScale.value
+                        alpha = overlayAlpha.value.coerceIn(0f, 1f)
+                    },
+            ) {
+                Canvas(modifier = Modifier.width(44.dp).height(20.dp)) {
+                    val dir = if (isRewind) -1f else 1f
+                    val spacing = 11.dp.toPx()
+                    val halfH = 5.5.dp.toPx()
+                    val tipX = 3.5.dp.toPx() * dir
+                    val backX = -3.5.dp.toPx() * dir
+                    val shadowOffset = Offset(0f, 1.dp.toPx())
+                    for (i in 0 until 3) {
+                        val orderIndex = if (isRewind) 2 - i else i
+                        val phase = ((chevronCycle - orderIndex * 0.18f) % 1f + 1f) % 1f
+                        val chevronAlpha =
+                            if (phase < 0.45f) {
+                                0.35f + 0.65f * sin((phase / 0.45f) * PI).toFloat()
+                            } else {
+                                0.35f
+                            }
+                        val cx = center.x + (i - 1) * spacing
+                        val cy = center.y
+                        val chevronPath =
+                            Path().apply {
+                                moveTo(cx + backX, cy - halfH)
+                                lineTo(cx + tipX, cy)
+                                lineTo(cx + backX, cy + halfH)
+                            }
+                        withTransform({ translate(shadowOffset.x, shadowOffset.y) }) {
+                            drawPath(
+                                path = chevronPath,
+                                color =
+                                    Color.Black.copy(
+                                        alpha =
+                                            (DOUBLE_TAP_TEXT_SHADOW_ALPHA * chevronAlpha * 0.65f)
+                                                .coerceIn(0f, 1f)
+                                    ),
+                                style =
+                                    Stroke(
+                                        width = 3.2.dp.toPx(),
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round,
+                                    ),
+                            )
+                        }
+                        drawPath(
+                            path = chevronPath,
+                            color = Color.White.copy(alpha = chevronAlpha.coerceIn(0f, 1f)),
+                            style =
+                                Stroke(
+                                    width = 2.4.dp.toPx(),
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round,
+                                ),
+                        )
+                    }
+                }
+
+                Text(
+                    text = label,
+                    color = Color.White,
+                    style =
+                        MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            shadow = textShadow,
+                        ),
+                    maxLines = 1,
+                )
+
+                Text(
+                    text = targetTimeText,
+                    color = Color.White.copy(alpha = 0.90f),
+                    style =
+                        MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.Medium,
+                            fontFeatureSettings = "tnum",
+                            shadow = textShadow,
+                        ),
+                    maxLines = 1,
+                    modifier = Modifier.testTag("player_double_tap_seek_time"),
+                )
+            }
+        }
+    }
+}
+
+/** 全屏缩放三档切换（适应/填充/100%）与双指实时缩放倍率浮层提示。 */
+@Composable
+private fun PlayerScaleFeedbackOverlay(
+    feedback: PlayerScaleFeedback,
+    modifier: Modifier = Modifier,
+) {
+    val foreground = Color(0xFFE3E5E8)
+    val background = Color.Black.copy(alpha = 0.6f)
+    val label =
+        when (feedback) {
+            is PlayerScaleFeedback.Mode ->
+                stringResource(
+                    when (feedback.mode) {
+                        PlayerScaleMode.FIT -> R.string.player_scale_mode_fit
+                        PlayerScaleMode.FILL -> R.string.player_scale_mode_fill
+                        PlayerScaleMode.ORIGINAL -> R.string.player_scale_mode_original
+                    }
+                )
+            is PlayerScaleFeedback.PinchZoom ->
+                stringResource(R.string.player_gesture_zoom, feedback.scale)
+        }
+    Row(
+        modifier =
+            modifier
+                .background(background, RoundedCornerShape(6.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .testTag("player_scale_feedback"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (feedback is PlayerScaleFeedback.PinchZoom) {
+            Icon(
+                imageVector = Icons.Outlined.ZoomIn,
+                contentDescription = null,
+                tint = foreground,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Text(
+            text = label,
+            color = foreground,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
     }
 }
 

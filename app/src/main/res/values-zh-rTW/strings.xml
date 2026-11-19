@@ -5,6 +5,16 @@
     <string name="player_gesture_volume">媒體音量 %1$d%%</string>
     <string name="player_gesture_speed">暫時倍速 %1$.2fx</string>
     <string name="player_gesture_unavailable">暫時無法調整</string>
+    <string name="player_scale_mode_fit">適應</string>
+    <string name="player_scale_mode_fill">填充</string>
+    <string name="player_scale_mode_original">100%</string>
+    <string name="player_scale_mode_action">畫面縮放模式</string>
+    <string name="player_rotate_screen">旋轉螢幕</string>
+    <string name="player_double_tap_rewind">-%1$ds</string>
+    <string name="player_double_tap_forward">+%1$ds</string>
+    <string name="player_gesture_zoom">%1$.1fx</string>
+    <string name="setting_player_sensor_rotation_title">啟用重力感應旋屏</string>
+    <string name="setting_player_sensor_rotation_text">全螢幕橫向播放時依裝置方向自動切換正反橫向</string>
     <string name="setting_player_seek_thumbnail">滑動縮圖預覽</string>
     <string name="setting_player_seek_preview_position">縮圖顯示位置</string>
     <string name="setting_player_seek_preview_center">中間</string>

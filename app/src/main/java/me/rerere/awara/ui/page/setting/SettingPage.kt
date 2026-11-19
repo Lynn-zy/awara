@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.LinearScale
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Replay
+import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Source
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -346,6 +347,18 @@ private fun PlayerSection() {
                 ),
             title = { Text(stringResource(R.string.setting_player_minimal_progress)) },
             icon = { Icon(Icons.Outlined.LinearScale, null) },
+        )
+
+        // 全屏横屏重力感应旋屏配置项（默认开启）
+        SettingBooleanItem(
+            state =
+                rememberBooleanPreference(
+                    key = SettingKeys.PLAYER_SENSOR_ROTATION,
+                    default = true,
+                ),
+            title = { Text(stringResource(R.string.setting_player_sensor_rotation_title)) },
+            text = { Text(stringResource(R.string.setting_player_sensor_rotation_text)) },
+            icon = { Icon(Icons.Outlined.ScreenRotation, null) },
         )
 
         // 扩大缓冲区配置项（默认关闭）
