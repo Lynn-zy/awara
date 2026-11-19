@@ -144,20 +144,26 @@ fun PlayerScaffold(
                         }
                     }
             ) {
-                // 全屏时拦截未消费的指针事件避免触控穿透到底层页面；非全屏时该矩形与播放器区域严格一致
+                // 全屏时在播放器下方同级放置指针屏障，拦截未被播放器覆盖区域的触控避免穿透到底层页面；
+                // 避免使用父节点在 Main 阶段消费指针事件，防止子控件在 Final 阶段误判为已被抢占而取消滑动手势。
                 Box(
                     modifier =
-                        Modifier.fillMaxSize().pointerInput(fullscreen) {
-                            if (!fullscreen) return@pointerInput
-                            awaitPointerEventScope {
-                                while (true) {
-                                    awaitPointerEvent().changes.forEach { it.consume() }
+                        Modifier.fillMaxSize()
+                            .then(
+                                if (fullscreen) {
+                                    Modifier.pointerInput(Unit) {
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                awaitPointerEvent().changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Modifier
                                 }
-                            }
-                        }
-                ) {
-                    currentPlayer()
-                }
+                            )
+                )
+                currentPlayer()
             }
         }
     }
