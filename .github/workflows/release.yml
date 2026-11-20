@@ -247,6 +247,51 @@ jobs:
               f.write(body + "\n")
           EOF
 
+      - name: 生成静态更新清单 update.json
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import json
+          import os
+
+          version = os.environ["EXPECTED_VERSION"].strip()
+          tag_name = os.environ["TAG_NAME"].strip()
+          repo = os.environ.get("GITHUB_REPOSITORY", "Lynn-zy/awara").strip()
+          expected_abis = ["arm64-v8a", "armeabi-v7a", "x86_64", "universal"]
+
+          with open("dist/release-notes.md", "r", encoding="utf-8") as f:
+              notes = f.read().strip()
+
+          assets = []
+          for abi in expected_abis:
+              file_name = f"Awara-{version}-{abi}-release.apk"
+              file_path = os.path.join("dist", file_name)
+              if not os.path.isfile(file_path):
+                  raise FileNotFoundError(f"缺少待写入更新清单的安装包: {file_path}")
+              assets.append(
+                  {
+                      "name": file_name,
+                      "abi": abi,
+                      "url": f"https://github.com/{repo}/releases/download/{tag_name}/{file_name}",
+                      "size": os.path.getsize(file_path),
+                  }
+              )
+
+          manifest = {
+              "version": tag_name,
+              "notes": notes,
+              "assets": assets,
+          }
+          manifest_path = os.path.join("dist", "update.json")
+          with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          print(f"已生成静态更新清单: {manifest_path}")
+          EOF
+
       - name: 自动创建 GitHub Release 并上传安装包
         uses: softprops/action-gh-release@v3
         with:
@@ -256,6 +301,7 @@ jobs:
           files: |
             dist/*.apk
             dist/*.sha256
+            dist/update.json
 
       - name: 销毁临时签名证书文件
         if: always()
