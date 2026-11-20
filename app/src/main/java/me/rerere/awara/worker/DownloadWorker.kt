@@ -378,6 +378,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                 downloadStorage.createDestination(
                                     title = taskForSaving.title,
                                     resourceId = taskForSaving.resourceId,
+                                    quality = taskForSaving.quality,
                                     directoryUri = taskForSaving.directoryUri,
                                 )
                             destinationUri = createdUri

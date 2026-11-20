@@ -25,7 +25,7 @@
 ### 下载、存储与缓存清理边界（`data/download/` & `util/AppCacheManager.kt`）
 
 - **缓存清理安全边界**：`AppCacheManager` 与 `PlayerCache`（基于读者租约延迟清理）仅清理 `cacheDir/image_cache`、`cacheDir/player_cache` 及 `cacheDir`/`externalCacheDir` 下的临时文件；绝不清理 `filesDir/download_parts`（下载分块与断点日志）、已下载成品文件、Room 数据库（`awara.db`，Schema 导出于 `app/schemas/`）及 MMKV 偏好设置。
-- **分块断点与成品命名**：分块下载（`SegmentedDownloader`）以原子刷盘的区间日志（`DownloadRangeStore`）校验恢复进度，绝不以稀疏临时文件长度判定下载完成。下载成品统一命名为 `视频标题_视频页面ID.mp4`；本地目录扫描导入（`DownloadFolderScanner`）依赖该命名后缀解析 `resourceId`（排除 `1080p60` 等分辨率后缀与系统 `(1)` 重名序号），在本地提取第 6 秒封面并后台限流（并发上限 3）补全作者与元数据。
+- **分块断点与成品命名**：分块下载（`SegmentedDownloader`）以原子刷盘的区间日志（`DownloadRangeStore`）校验恢复进度，绝不以稀疏临时文件长度判定下载完成。下载成品统一采用与官网一致的命名格式 `Iwara - 视频标题 [视频页面ID] [画质].mp4`（原画为 `[Source]`，转码档位如 `[540]`、`[360]`）；本地目录扫描导入（`DownloadFolderScanner`）仅匹配该官网命名格式解析 `resourceId` 与画质（兼容系统 `(1)` 重名序号），在本地提取第 6 秒封面并后台限流（并发上限 3）补全作者与元数据。
 
 ### 本地用户黑名单（`data/user/UserBlocklist.kt`）
 

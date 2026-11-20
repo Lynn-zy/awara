@@ -30,6 +30,7 @@ import me.rerere.awara.data.entity.DownloadType
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.entity.thumbnailUrl
 import me.rerere.awara.data.entity.toAvatarUrl
+import me.rerere.awara.data.entity.videoQualityRank
 import me.rerere.awara.data.repo.MediaRepo
 
 private const val TAG = "DownloadFolderScanner"
@@ -39,16 +40,22 @@ private const val DEFAULT_METADATA_CONCURRENCY = 3
 private val DISAMBIGUATION_SUFFIX_REGEX = Regex("\\s*\\(\\d+\\)$")
 // 常见分辨率+帧率后缀（如 1080p60、2160p60fps），避免误判为 Iwara 视频 ID
 private val RESOLUTION_FPS_TAG_REGEX = Regex("^\\d{3,4}p\\d{2,3}(fps)?$", RegexOption.IGNORE_CASE)
+// 官网标准下载名尾部的 `[视频ID] [画质]` 结构
+private val OFFICIAL_NAME_BODY_REGEX = Regex("""^(.+)\s+\[([^\[\]]+)\]\s*\[([^\[\]]+)\]$""")
+// 官网画质标签中的纯数字或带 p 分辨率格式（如 360、540、720p、1080）
+private val NUMERIC_QUALITY_TAG_REGEX = Regex("""^\d{2,5}p?$""", RegexOption.IGNORE_CASE)
 
 /**
- * 从标准下载文件名解析出的标题与视频资源 ID。
+ * 从官网标准下载文件名解析出的标题、视频资源 ID 与清晰度。
  *
- * @property title 从文件名提取的净化后视频标题
+ * @property title 从文件名提取的视频标题
  * @property resourceId Iwara 视频页面唯一标识
+ * @property quality 规范化后的清晰度键值（如 `"source"`、`"540"`、`"360"`；兜底 `[unknown]` 时为空串）
  */
 data class ParsedIwaraFileName(
     val title: String,
     val resourceId: String,
+    val quality: String,
 )
 
 /**
@@ -111,6 +118,7 @@ data class ScanFolderSummary(
  * @property itemId 数据库主键 ID
  * @property resourceId Iwara 视频唯一 ID
  * @property fallbackTitle 本地保底标题
+ * @property fileNameQuality 从文件名 `[画质]` 解析得到的明确清晰度键值（无则为空串）
  * @property localQuality 本地探测推断出的清晰度标识
  * @property localWidth 本地探测的视频像素宽度
  * @property localHeight 本地探测的视频像素高度
@@ -121,6 +129,7 @@ internal data class MetadataEnrichTarget(
     val videoUriString: String,
     val durationMs: Long,
     val fallbackTitle: String,
+    val fileNameQuality: String,
     val localQuality: String,
     val localWidth: Int,
     val localHeight: Int,
@@ -144,8 +153,21 @@ internal fun isValidIwaraResourceId(candidate: String): Boolean {
     return true
 }
 
+private fun parseOfficialQualityTag(rawQuality: String): String? {
+    val trimmed = rawQuality.trim()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.equals("source", ignoreCase = true)) return "source"
+    if (trimmed.equals("unknown", ignoreCase = true)) return ""
+    if (NUMERIC_QUALITY_TAG_REGEX.matches(trimmed)) {
+        return trimmed.removeSuffix("p").removeSuffix("P")
+    }
+    return null
+}
+
 /**
- * 解析 Awara 标准下载文件名（格式：`标题_视频ID.mp4`，兼容 `标题_视频ID (1).mp4`）。
+ * 解析与官网一致的 Iwara 下载文件名（格式：`Iwara - 视频标题 [视频ID] [画质].mp4`，兼容末尾 ` (1)` 重名序号）。
+ *
+ * 仅匹配官网新格式，不再识别旧版 `标题_视频ID.mp4` 命名。
  *
  * @param fileName 原始文件名
  * @return 解析成功返回 [ParsedIwaraFileName]，不符合规则则返回 null
@@ -155,13 +177,15 @@ fun parseIwaraDownloadFileName(fileName: String): ParsedIwaraFileName? {
     if (!trimmed.endsWith(".mp4", ignoreCase = true) || trimmed.length <= 4) return null
     val rawStem = trimmed.substring(0, trimmed.length - 4)
     val baseStem = rawStem.replace(DISAMBIGUATION_SUFFIX_REGEX, "").trim()
-    val separatorIndex = baseStem.lastIndexOf('_')
-    if (separatorIndex <= 0 || separatorIndex >= baseStem.length - 1) return null
+    if (!baseStem.startsWith(IWARA_DOWNLOAD_FILE_PREFIX, ignoreCase = true)) return null
 
-    val title = baseStem.substring(0, separatorIndex).trim()
-    val resourceId = baseStem.substring(separatorIndex + 1).trim()
+    val body = baseStem.substring(IWARA_DOWNLOAD_FILE_PREFIX.length).trim()
+    val match = OFFICIAL_NAME_BODY_REGEX.matchEntire(body) ?: return null
+    val title = match.groupValues[1].trim()
+    val resourceId = match.groupValues[2].trim()
+    val quality = parseOfficialQualityTag(match.groupValues[3]) ?: return null
     if (title.isEmpty() || !isValidIwaraResourceId(resourceId)) return null
-    return ParsedIwaraFileName(title = title, resourceId = resourceId)
+    return ParsedIwaraFileName(title = title, resourceId = resourceId, quality = quality)
 }
 
 /**
@@ -462,7 +486,7 @@ private data class PendingNewImport(
  * 视频下载文件夹扫描与后台元数据补全协调器。
  *
  * 职责：
- * 1. 同步扫描目标单层目录中符合 `标题_视频ID.mp4` 规则的有效视频，按 `resourceId` 择优去重并立即写入本地保底记录；
+ * 1. 同步扫描目标单层目录中符合 `Iwara - 标题 [视频ID] [画质].mp4` 规则的有效视频，按 `resourceId` 择优去重并立即写入本地保底记录；
  * 2. 对需要补全封面、作者与完整标题的视频启动应用级后台任务，温和并发拉取在线信息；
  * 3. 通过 [metadataProgress] 向「已下载视频」页实时广播进度，并通过回调触发通知与日志记录。
  */
@@ -492,7 +516,7 @@ class DownloadFolderScanner(
         withContext(Dispatchers.IO) {
             scanMutex.withLock {
                 val snapshot = dataSource.scanLocalDirectory(treeUriString)
-                // 仅保留文件大小 > 0 且符合标准命名的候选文件；同一视频 ID 存在多个文件时取体积最大者
+                // 仅保留文件大小 > 0 且符合官网标准命名的候选文件；同一视频 ID 优先选画质更高者，同画质取体积更大者
                 val bestCandidateByResourceId =
                     LinkedHashMap<String, Pair<ParsedIwaraFileName, ScannedFileCandidate>>()
                 for (candidate in snapshot.files) {
@@ -500,7 +524,7 @@ class DownloadFolderScanner(
                     if (candidate.sizeBytes <= 0L) continue
                     val parsed = parseIwaraDownloadFileName(candidate.displayName) ?: continue
                     val previous = bestCandidateByResourceId[parsed.resourceId]
-                    if (previous == null || candidate.sizeBytes > previous.second.sizeBytes) {
+                    if (previous == null || isBetterScannedCandidate(parsed, candidate, previous)) {
                         bestCandidateByResourceId[parsed.resourceId] = parsed to candidate
                     }
                 }
@@ -545,10 +569,12 @@ class DownloadFolderScanner(
                                 )
                                 .mediaInfo ?: continue
                         val localQuality =
-                            inferIwaraVideoQuality(
-                                width = mediaInfo.width,
-                                height = mediaInfo.height,
-                            )
+                            parsed.quality.ifBlank {
+                                inferIwaraVideoQuality(
+                                    width = mediaInfo.width,
+                                    height = mediaInfo.height,
+                                )
+                            }
 
                         if (!existingFileValid) {
                             repairs +=
@@ -569,6 +595,7 @@ class DownloadFolderScanner(
                                     videoUriString = fileCandidate.uriString,
                                     durationMs = mediaInfo.durationMs,
                                     fallbackTitle = existing.title.ifBlank { parsed.title },
+                                    fileNameQuality = parsed.quality,
                                     localQuality = existing.quality.ifBlank { localQuality },
                                     localWidth = mediaInfo.width,
                                     localHeight = mediaInfo.height,
@@ -583,10 +610,12 @@ class DownloadFolderScanner(
                             .inspectLocalVideo(fileCandidate.uriString, extractMediaInfo = true)
                             .mediaInfo ?: continue
                     val localQuality =
-                        inferIwaraVideoQuality(
-                            width = mediaInfo.width,
-                            height = mediaInfo.height,
-                        )
+                        parsed.quality.ifBlank {
+                            inferIwaraVideoQuality(
+                                width = mediaInfo.width,
+                                height = mediaInfo.height,
+                            )
+                        }
                     val recordTime =
                         if (fileCandidate.lastModifiedMillis > 0L) {
                             Instant.ofEpochMilli(fileCandidate.lastModifiedMillis)
@@ -619,6 +648,7 @@ class DownloadFolderScanner(
                                     videoUriString = fileCandidate.uriString,
                                     durationMs = mediaInfo.durationMs,
                                     fallbackTitle = parsed.title,
+                                    fileNameQuality = parsed.quality,
                                     localQuality = localQuality,
                                     localWidth = mediaInfo.width,
                                     localHeight = mediaInfo.height,
@@ -719,6 +749,17 @@ class DownloadFolderScanner(
         }
     }
 
+    private fun isBetterScannedCandidate(
+        parsed: ParsedIwaraFileName,
+        candidate: ScannedFileCandidate,
+        previous: Pair<ParsedIwaraFileName, ScannedFileCandidate>,
+    ): Boolean {
+        val candidateRank = videoQualityRank(parsed.quality)
+        val previousRank = videoQualityRank(previous.first.quality)
+        if (candidateRank != previousRank) return candidateRank > previousRank
+        return candidate.sizeBytes > previous.second.sizeBytes
+    }
+
     /**
      * 拉取单个视频的在线信息并回填数据库；若原视频已删稿（404）、无封面或断网，则生成本地第 6 秒画面作为封面。
      */
@@ -733,12 +774,14 @@ class DownloadFolderScanner(
         try {
             val video = dataSource.fetchOnlineVideo(target.resourceId)
             val resolvedQuality =
-                inferIwaraVideoQuality(
-                    width = target.localWidth,
-                    height = target.localHeight,
-                    originalWidth = video.file?.width,
-                    originalHeight = video.file?.height,
-                ).ifBlank { target.localQuality }
+                target.fileNameQuality.ifBlank {
+                    inferIwaraVideoQuality(
+                        width = target.localWidth,
+                        height = target.localHeight,
+                        originalWidth = video.file?.width,
+                        originalHeight = video.file?.height,
+                    ).ifBlank { target.localQuality }
+                }
             val onlineThumbnail =
                 if (video.embedUrl != null || video.file != null) {
                     video.thumbnailUrl()

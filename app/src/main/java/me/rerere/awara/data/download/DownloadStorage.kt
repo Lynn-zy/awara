@@ -19,26 +19,56 @@ import java.io.IOException
 import java.io.OutputStream
 import me.rerere.compose_setting.preference.mmkvPreference
 
+// 官网标准下载文件名前缀
+internal const val IWARA_DOWNLOAD_FILE_PREFIX = "Iwara - "
 // 视频标题最大字符数限制（防止部分文件系统或 UI 显示过长）
 private const val MAX_TITLE_CHARS = 60
-// 视频标题最大 UTF-8 字节数限制（Ext4/FAT32 单文件名通常上限 255 字节，为 ID 和后缀留出安全余量）
+// 视频标题最大 UTF-8 字节数限制（Ext4/FAT32 单文件名通常上限 255 字节，为前缀、ID 与画质留出安全余量）
 private const val MAX_TITLE_UTF8_BYTES = 120
 // 资源 ID 最大字符数限制
 private const val MAX_RESOURCE_ID_CHARS = 32
+// 画质标签最大字符数限制
+private const val MAX_QUALITY_CHARS = 16
 // 文件名中的非法字符集（覆盖常见操作系统保留字符与路径分隔符）
 private val INVALID_FILENAME_CHARS = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
 
 /**
- * 构建确定性的下载文件名，格式为“视频标题_视频页面ID.mp4”。
+ * 将清晰度标识规范化为官网下载文件名中的 `[画质]` 标签。
  *
- * 对视频标题与页面 ID 进行安全字符净化、路径穿越拦截、控制字符过滤与 UTF-8 字节截断， 并以 .mp4 为扩展名。不再追加随机 UUID，保证相同输入输出文件名的一致性与可预测性。
+ * 原画统一输出为 `"Source"`，数字清晰度去除可选的 `p`/`P` 后缀（如 `"360p"` -> `"360"`），
+ * 空白或非法输入回退为 `"unknown"`。
+ *
+ * @param quality 原始清晰度标识（如 `"source"`、`"360"`、`"540p"`）
+ * @return 适合拼入 `[画质]` 的安全画质标签
+ */
+fun formatDownloadQualityTag(quality: String): String {
+    val trimmed = quality.trim()
+    if (trimmed.isEmpty()) return "unknown"
+    if (trimmed.equals("source", ignoreCase = true)) return "Source"
+    val numericPart = trimmed.removeSuffix("p").removeSuffix("P")
+    if (numericPart.isNotEmpty() && numericPart.all { it in '0'..'9' }) {
+        return numericPart.take(MAX_QUALITY_CHARS)
+    }
+    return sanitizeFileNamePart(
+        raw = trimmed.replace("[", "_").replace("]", "_"),
+        maxChars = MAX_QUALITY_CHARS,
+        maxUtf8Bytes = MAX_QUALITY_CHARS,
+        fallback = "unknown",
+    )
+}
+
+/**
+ * 构建与官网一致的确定性下载文件名，格式为 `Iwara - 视频标题 [视频页面ID] [画质].mp4`。
+ *
+ * 对视频标题、页面 ID 与画质标签进行安全字符净化、路径穿越拦截、控制字符过滤与 UTF-8 字节截断，
+ * 原画画质标签固定为 `[Source]`，转码画质标签如 `[540]`、`[360]`。
  *
  * @param title 视频标题原始字符串
- * @param resourceId 视频页面唯一标识（如 nqvHGnneN5OLbq）
- * @return 净化且确定性的下载文件名，例如“标题_nqvHGnneN5OLbq.mp4”
+ * @param resourceId 视频页面唯一标识（如 `ox1pVQB5CC2Vxw`）
+ * @param quality 下载清晰度标识（如 `"source"`、`"540"`、`"360"`）
+ * @return 净化且确定性的下载文件名，例如 `Iwara - 标题 [ox1pVQB5CC2Vxw] [Source].mp4`
  */
-fun buildDownloadFileName(title: String, resourceId: String): String {
-    // 净化视频标题，限制最大字符数与 UTF-8 字节数，若为空则回退为 "video"
+fun buildDownloadFileName(title: String, resourceId: String, quality: String): String {
     val safeTitle =
         sanitizeFileNamePart(
             raw = title,
@@ -46,16 +76,15 @@ fun buildDownloadFileName(title: String, resourceId: String): String {
             maxUtf8Bytes = MAX_TITLE_UTF8_BYTES,
             fallback = "video",
         )
-    // 净化视频页面 ID，若为空则回退为 "unknown"
     val safeResourceId =
         sanitizeFileNamePart(
-            raw = resourceId,
+            raw = resourceId.replace("[", "_").replace("]", "_"),
             maxChars = MAX_RESOURCE_ID_CHARS,
             maxUtf8Bytes = MAX_RESOURCE_ID_CHARS,
             fallback = "unknown",
         )
-    // 组合为标准固定格式：“视频标题_视频页面ID.mp4”，无随机 UUID
-    return "${safeTitle}_${safeResourceId}.mp4"
+    val safeQuality = formatDownloadQualityTag(quality)
+    return "${IWARA_DOWNLOAD_FILE_PREFIX}${safeTitle} [${safeResourceId}] [${safeQuality}].mp4"
 }
 
 /**
@@ -395,7 +424,7 @@ class DownloadStorage(private val context: Context) {
     }
 
     /**
-     * 根据视频标题与资源 ID 创建目标下载文件的 URI。
+     * 根据视频标题、资源 ID 与画质创建目标下载文件的 URI。
      *
      * 若未配置自定义目录（默认公共存储）：
      * - Android 10+ (API 29+)：向 MediaStore Downloads 集合插入待完成条目；
@@ -404,18 +433,20 @@ class DownloadStorage(private val context: Context) {
      *
      * @param title 视频标题
      * @param resourceId 视频页面 ID
+     * @param quality 下载画质标识（如 `"source"`、`"540"`、`"360"`）
      * @param directoryUri 自定义目录 URI（为空时使用默认公共下载目录）
      * @return 目标文件的 Content URI
      */
     fun createDestination(
         title: String,
         resourceId: String,
+        quality: String,
         directoryUri: String = directoryUri(),
     ): Uri {
         return if (directoryUri.isBlank()) {
-            createDefaultPublicDestination(title, resourceId)
+            createDefaultPublicDestination(title, resourceId, quality)
         } else {
-            createSafDestination(title, resourceId, directoryUri)
+            createSafDestination(title, resourceId, quality, directoryUri)
         }
     }
 
@@ -461,9 +492,13 @@ class DownloadStorage(private val context: Context) {
         }
     }
 
-    private fun createDefaultPublicDestination(title: String, resourceId: String): Uri {
+    private fun createDefaultPublicDestination(
+        title: String,
+        resourceId: String,
+        quality: String,
+    ): Uri {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val fileName = buildDownloadFileName(title, resourceId)
+            val fileName = buildDownloadFileName(title, resourceId, quality)
             val values =
                 ContentValues().apply {
                     // 请求固定规范文件名作为 DISPLAY_NAME
@@ -496,8 +531,8 @@ class DownloadStorage(private val context: Context) {
             throw IOException("无法创建公共下载目录")
         }
 
-        // 确定性命名：构建“视频标题_视频页面ID.mp4”
-        val fileName = buildDownloadFileName(title, resourceId)
+        // 确定性命名：构建“Iwara - 视频标题 [视频页面ID] [画质].mp4”
+        val fileName = buildDownloadFileName(title, resourceId, quality)
         val targetFile = File(awaraDir, fileName)
 
         // Android 26-28 消除原基于随机 UUID 的 do-while 无限循环重试逻辑；
@@ -516,7 +551,12 @@ class DownloadStorage(private val context: Context) {
         }
     }
 
-    private fun createSafDestination(title: String, resourceId: String, directoryUri: String): Uri {
+    private fun createSafDestination(
+        title: String,
+        resourceId: String,
+        quality: String,
+        directoryUri: String,
+    ): Uri {
         val treeUri = Uri.parse(directoryUri)
         if (isRestrictedUri(treeUri)) {
             throw SecurityException("禁止下载到 Android/data 或 Android/obb 目录")
@@ -525,7 +565,7 @@ class DownloadStorage(private val context: Context) {
         if (!treeDir.isDirectory || !treeDir.canWrite()) {
             throw SecurityException("自定义下载目录不可写或权限已失效")
         }
-        val fileName = buildDownloadFileName(title, resourceId)
+        val fileName = buildDownloadFileName(title, resourceId, quality)
         // SAF (DocumentsContract/DocumentFile) 固定请求创建 DISPLAY_NAME 为 fileName 的文件
         // 若目录已存在同名文件，标准 DocumentsProvider 会自动消歧重命名（如追加序号），不会静默覆盖已有文件
         val targetDoc =
