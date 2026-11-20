@@ -9,7 +9,6 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
@@ -33,9 +32,14 @@ import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.DownloadTaskId
 import me.rerere.awara.data.download.RangeDownloader
+import me.rerere.awara.data.download.extractAppUpdateVersion
 import me.rerere.awara.data.download.sanitizedDownloadErrorMessage
+import me.rerere.awara.data.download.saveVerifiedApkToUpdatesDir
+import me.rerere.awara.data.download.validateDownloadedApk
 import me.rerere.awara.data.entity.DownloadItem
+import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.data.entity.DownloadTaskType
 import me.rerere.awara.data.entity.DownloadType
 import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.util.prettyFileSize
@@ -115,6 +119,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     context = appContext,
                     taskId = taskId,
                     title = task.title,
+                    taskType = task.taskType,
                 )
             }
             return Result.failure()
@@ -170,6 +175,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                 context = appContext,
                                 taskId = taskId,
                                 title = task.title,
+                                taskType = task.taskType,
                             )
                         }
                         return@withLock Result.failure()
@@ -212,6 +218,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                 context = appContext,
                                 taskId = taskId,
                                 title = task.title,
+                                taskType = task.taskType,
                             )
                             return@withLock Result.failure()
                         }
@@ -223,35 +230,39 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
 
                     val notificationCompat = NotificationManagerCompat.from(appContext)
                     val notificationId = DownloadNotifications.notificationIdForTask(taskId)
-                    val contentIntent =
-                        DownloadNotifications.createManagerPendingIntent(appContext, taskId)
                     val notificationBuilder =
-                        NotificationCompat.Builder(appContext, DownloadNotifications.CHANNEL_ID)
-                            .setContentTitle(currentTask.title)
-                            .setSmallIcon(R.drawable.baseline_cloud_download_24)
-                            .setOngoing(true)
-                            .setSilent(true)
-                            .setOnlyAlertOnce(true)
-                            .setContentIntent(contentIntent)
+                        DownloadNotifications.createProgressNotificationBuilder(
+                            context = appContext,
+                            taskId = taskId,
+                            title = currentTask.title,
+                            taskType = currentTask.taskType,
+                        )
 
                     setForeground(
                         ForegroundInfo(
                             notificationId,
-                            notificationBuilder.setProgress(100, 0, true).build(),
+                            notificationBuilder
+                                .setContentText(appContext.getString(R.string.download_task_queued))
+                                .setProgress(100, 0, true)
+                                .build(),
                         )
                     )
 
                     val partFile = downloadManager.parts.file(parsedTaskId)
+                    val isVideoTask = currentTask.taskType == DownloadTaskType.VIDEO
                     // 配置只在任务启动/恢复时读取，设置变化不会中断正在执行的传输。
-                    val multiCdnEnabled = DownloadManager.isMultiCdnEnabled()
+                    val multiCdnEnabled = isVideoTask && DownloadManager.isMultiCdnEnabled()
                     val downloader =
                         RangeDownloader(
                             okHttpClient = okHttpClient,
                             multiCdnEnabled = multiCdnEnabled,
                             cdnDirectory = if (multiCdnEnabled) cdnDirectory else null,
-                            refreshLink = {
-                                downloadManager.refreshActiveSource(taskId, id.toString())
-                            },
+                            refreshLink =
+                                if (isVideoTask) {
+                                    { downloadManager.refreshActiveSource(taskId, id.toString()) }
+                                } else {
+                                    null
+                                },
                             networkIdentity = {
                                 appContext
                                     .getSystemService(ConnectivityManager::class.java)
@@ -260,6 +271,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     .orEmpty()
                             },
                             connectionTracker = connectionTracker,
+                            referer = if (isVideoTask) "https://www.iwara.tv/" else null,
                         )
 
                     transferInProgress = true
@@ -320,154 +332,285 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                     )
 
                     transferInProgress = false
-                    val videoDurationMs =
-                        try {
-                            probeValidVideoDurationMs(partFile)
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (exception: Exception) {
-                            currentCoroutineContext().ensureActive()
-                            withContext(NonCancellable) {
-                                downloadManager.parts.delete(parsedTaskId)
-                                appDatabase
-                                    .downloadTaskDao()
-                                    .updateProgress(taskId, id.toString(), 0L, -1L)
-                                appDatabase
-                                    .downloadTaskDao()
-                                    .updateValidator(taskId, id.toString(), null)
-                            }
-                            throw IOException(
-                                appContext.getString(R.string.download_invalid_video),
-                                exception,
-                            )
-                        }
-
-                    // 传输完成，CAS 进入保存阶段
-                    val casSaving =
-                        appDatabase
-                            .downloadTaskDao()
-                            .compareAndSetStatus(
-                                taskId = taskId,
-                                workId = id.toString(),
-                                expectedStatus = DownloadTaskStatus.RUNNING,
-                                newStatus = DownloadTaskStatus.SAVING,
-                            )
-                    if (casSaving <= 0) {
-                        return@withLock Result.failure()
-                    }
-
-                    val taskForSaving =
-                        appDatabase.downloadTaskDao().getTask(taskId)
-                            ?: return@withLock Result.failure()
-
-                    val createdUri =
-                        downloadStorage.createDestination(
-                            title = taskForSaving.title,
-                            resourceId = taskForSaving.resourceId,
-                            directoryUri = taskForSaving.directoryUri,
-                        )
-                    destinationUri = createdUri
-
-                    // 在真正向目标拷贝字节前先持久化目标 URI，确保异常崩溃时可追溯清理
-                    withContext(NonCancellable) {
-                        appDatabase
-                            .downloadTaskDao()
-                            .updateDestinationUri(
-                                taskId = taskId,
-                                workId = id.toString(),
-                                destinationUri = createdUri.toString(),
-                            )
-                    }
-
-                    downloadStorage.openOutput(createdUri).use { out ->
-                        partFile.inputStream().use { input ->
-                            val buffer = ByteArray(65536)
-                            var len: Int
-                            while (input.read(buffer).also { len = it } != -1) {
-                                currentCoroutineContext().ensureActive()
-                                out.write(buffer, 0, len)
-                            }
-                            out.flush()
-                        }
-                    }
-
-                    currentCoroutineContext().ensureActive()
-                    downloadStorage.finish(createdUri)
-
-                    // 事务中二次确认状态仍为 SAVING 且 workId 一致才入库，避免取消竞态
-                    var oldUriToClean: String? = null
-                    withContext(NonCancellable) {
-                        var saved = false
-                        appDatabase.withTransaction {
-                            val inTxTask = appDatabase.downloadTaskDao().getTask(taskId)
-                            if (
-                                inTxTask != null &&
-                                    inTxTask.status == DownloadTaskStatus.SAVING &&
-                                    inTxTask.workId == id.toString()
-                            ) {
-                                // 替换同 resourceId 的旧记录，若事务失败则不影响旧记录
-                                val existingItem =
-                                    appDatabase.downloadDao().getDownloadItem(inTxTask.resourceId)
-                                if (existingItem != null) {
-                                    oldUriToClean = existingItem.uri
-                                    appDatabase.downloadDao().deleteDownloadItem(existingItem)
-                                }
-                                appDatabase
-                                    .downloadDao()
-                                    .insertDownloadItem(
-                                        DownloadItem(
-                                            title = inTxTask.title,
-                                            thumbnail = inTxTask.thumbnail,
-                                            uri = createdUri.toString(),
-                                            type = DownloadType.VIDEO,
-                                            resourceId = inTxTask.resourceId,
-                                            time = Instant.now(),
-                                            authorId = inTxTask.authorId,
-                                            authorName = inTxTask.authorName,
-                                            authorAvatar = inTxTask.authorAvatar,
-                                            publishedAtEpochSeconds =
-                                                inTxTask.publishedAtEpochSeconds,
-                                            sizeBytes = partFile.length(),
-                                            quality = inTxTask.quality,
-                                            durationMs = videoDurationMs,
-                                        )
+                    when (currentTask.taskType) {
+                        DownloadTaskType.VIDEO -> {
+                            val videoDurationMs =
+                                try {
+                                    probeValidVideoDurationMs(partFile)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (exception: Exception) {
+                                    currentCoroutineContext().ensureActive()
+                                    withContext(NonCancellable) {
+                                        downloadManager.parts.delete(parsedTaskId)
+                                        appDatabase
+                                            .downloadTaskDao()
+                                            .updateProgress(taskId, id.toString(), 0L, -1L)
+                                        appDatabase
+                                            .downloadTaskDao()
+                                            .updateValidator(taskId, id.toString(), null)
+                                    }
+                                    throw IOException(
+                                        appContext.getString(R.string.download_invalid_video),
+                                        exception,
                                     )
-                                appDatabase.downloadTaskDao().delete(taskId)
-                                saved = true
+                                }
+
+                            // 传输完成，CAS 进入保存阶段
+                            val casSaving =
+                                appDatabase
+                                    .downloadTaskDao()
+                                    .compareAndSetStatus(
+                                        taskId = taskId,
+                                        workId = id.toString(),
+                                        expectedStatus = DownloadTaskStatus.RUNNING,
+                                        newStatus = DownloadTaskStatus.SAVING,
+                                    )
+                            if (casSaving <= 0) {
+                                return@withLock Result.failure()
+                            }
+
+                            val taskForSaving =
+                                appDatabase.downloadTaskDao().getTask(taskId)
+                                    ?: return@withLock Result.failure()
+
+                            val createdUri =
+                                downloadStorage.createDestination(
+                                    title = taskForSaving.title,
+                                    resourceId = taskForSaving.resourceId,
+                                    directoryUri = taskForSaving.directoryUri,
+                                )
+                            destinationUri = createdUri
+
+                            // 在真正向目标拷贝字节前先持久化目标 URI，确保异常崩溃时可追溯清理
+                            withContext(NonCancellable) {
+                                appDatabase
+                                    .downloadTaskDao()
+                                    .updateDestinationUri(
+                                        taskId = taskId,
+                                        workId = id.toString(),
+                                        destinationUri = createdUri.toString(),
+                                    )
+                            }
+
+                            downloadStorage.openOutput(createdUri).use { out ->
+                                partFile.inputStream().use { input ->
+                                    val buffer = ByteArray(65536)
+                                    var len: Int
+                                    while (input.read(buffer).also { len = it } != -1) {
+                                        currentCoroutineContext().ensureActive()
+                                        out.write(buffer, 0, len)
+                                    }
+                                    out.flush()
+                                }
+                            }
+
+                            currentCoroutineContext().ensureActive()
+                            downloadStorage.finish(createdUri)
+
+                            // 事务中二次确认状态仍为 SAVING 且 workId 一致才入库，避免取消竞态
+                            var oldUriToClean: String? = null
+                            withContext(NonCancellable) {
+                                var saved = false
+                                appDatabase.withTransaction {
+                                    val inTxTask = appDatabase.downloadTaskDao().getTask(taskId)
+                                    if (
+                                        inTxTask != null &&
+                                            inTxTask.status == DownloadTaskStatus.SAVING &&
+                                            inTxTask.workId == id.toString()
+                                    ) {
+                                        // 替换同 resourceId 的旧记录，若事务失败则不影响旧记录
+                                        val existingItem =
+                                            appDatabase
+                                                .downloadDao()
+                                                .getDownloadItem(inTxTask.resourceId)
+                                        if (existingItem != null) {
+                                            oldUriToClean = existingItem.uri
+                                            appDatabase.downloadDao().deleteDownloadItem(existingItem)
+                                        }
+                                        appDatabase
+                                            .downloadDao()
+                                            .insertDownloadItem(
+                                                DownloadItem(
+                                                    title = inTxTask.title,
+                                                    thumbnail = inTxTask.thumbnail,
+                                                    uri = createdUri.toString(),
+                                                    type = DownloadType.VIDEO,
+                                                    resourceId = inTxTask.resourceId,
+                                                    time = Instant.now(),
+                                                    authorId = inTxTask.authorId,
+                                                    authorName = inTxTask.authorName,
+                                                    authorAvatar = inTxTask.authorAvatar,
+                                                    publishedAtEpochSeconds =
+                                                        inTxTask.publishedAtEpochSeconds,
+                                                    sizeBytes = partFile.length(),
+                                                    quality = inTxTask.quality,
+                                                    durationMs = videoDurationMs,
+                                                )
+                                            )
+                                        appDatabase.downloadTaskDao().delete(taskId)
+                                        saved = true
+                                    }
+                                }
+                                committed = saved
+                                if (committed) {
+                                    try {
+                                        downloadManager.parts.delete(parsedTaskId)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "待回收下载分块失败 taskId=$taskId", e)
+                                    }
+                                    // 事务成功提交后安全清理旧物理 URI
+                                    oldUriToClean?.let { oldUri ->
+                                        if (oldUri.isNotBlank() && oldUri != createdUri.toString()) {
+                                            cleanupPartialDestination(
+                                                Uri.parse(oldUri),
+                                                warningOnly = true,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (committed) {
+                                DownloadNotifications.showSuccessNotification(
+                                    context = appContext,
+                                    taskId = taskId,
+                                    resourceId = taskForSaving.resourceId,
+                                    title = taskForSaving.title,
+                                )
+                                Result.success()
+                            } else {
+                                cleanupPartialDestination(destinationUri)
+                                Result.failure()
                             }
                         }
-                        committed = saved
-                        if (committed) {
+
+                        DownloadTaskType.APP_UPDATE -> {
                             try {
-                                downloadManager.parts.delete(parsedTaskId)
+                                validateDownloadedApk(appContext, partFile)
                             } catch (e: CancellationException) {
                                 throw e
-                            } catch (e: Exception) {
-                                Log.w(TAG, "待回收下载分块失败 taskId=$taskId", e)
+                            } catch (exception: Exception) {
+                                currentCoroutineContext().ensureActive()
+                                withContext(NonCancellable) {
+                                    downloadManager.parts.delete(parsedTaskId)
+                                    appDatabase
+                                        .downloadTaskDao()
+                                        .updateProgress(taskId, id.toString(), 0L, -1L)
+                                    appDatabase
+                                        .downloadTaskDao()
+                                        .updateValidator(taskId, id.toString(), null)
+                                }
+                                throw exception
                             }
-                            // 事务成功提交后安全清理旧物理 URI
-                            oldUriToClean?.let { oldUri ->
-                                if (oldUri.isNotBlank() && oldUri != createdUri.toString()) {
-                                    cleanupPartialDestination(
-                                        Uri.parse(oldUri),
-                                        warningOnly = true,
+
+                            val casSaving =
+                                appDatabase
+                                    .downloadTaskDao()
+                                    .compareAndSetStatus(
+                                        taskId = taskId,
+                                        workId = id.toString(),
+                                        expectedStatus = DownloadTaskStatus.RUNNING,
+                                        newStatus = DownloadTaskStatus.SAVING,
                                     )
+                            if (casSaving <= 0) {
+                                return@withLock Result.failure()
+                            }
+
+                            val taskForSaving =
+                                appDatabase.downloadTaskDao().getTask(taskId)
+                                    ?: return@withLock Result.failure()
+
+                            val activeContext = currentCoroutineContext()
+                            val savedApkSizeBytes = partFile.length().coerceAtLeast(0L)
+                            val createdUri =
+                                saveVerifiedApkToUpdatesDir(
+                                    context = appContext,
+                                    sourcePartFile = partFile,
+                                    fileName = taskForSaving.quality,
+                                    onCheckActive = { activeContext.ensureActive() },
+                                )
+                            destinationUri = createdUri
+
+                            withContext(NonCancellable) {
+                                appDatabase
+                                    .downloadTaskDao()
+                                    .updateDestinationUri(
+                                        taskId = taskId,
+                                        workId = id.toString(),
+                                        destinationUri = createdUri.toString(),
+                                    )
+                            }
+
+                            currentCoroutineContext().ensureActive()
+
+                            // 应用更新包不写入已下载视频列表，保留为 COMPLETED 任务卡片供用户手动安装或删除
+                            var supersededCompleted = emptyList<DownloadTask>()
+                            withContext(NonCancellable) {
+                                var saved = false
+                                appDatabase.withTransaction {
+                                    val marked =
+                                        appDatabase
+                                            .downloadTaskDao()
+                                            .markCompleted(
+                                                taskId = taskId,
+                                                workId = id.toString(),
+                                                sizeBytes = savedApkSizeBytes,
+                                                destinationUri = createdUri.toString(),
+                                            )
+                                    if (marked > 0) {
+                                        supersededCompleted =
+                                            appDatabase
+                                                .downloadTaskDao()
+                                                .getOtherCompletedTasks(
+                                                    taskType = DownloadTaskType.APP_UPDATE,
+                                                    excludeTaskId = taskId,
+                                                )
+                                        for (oldTask in supersededCompleted) {
+                                            appDatabase.downloadTaskDao().delete(oldTask.taskId)
+                                        }
+                                        saved = true
+                                    }
+                                }
+                                committed = saved
+                                if (committed) {
+                                    for (oldTask in supersededCompleted) {
+                                        DownloadNotifications.cancelSuccessNotification(
+                                            appContext,
+                                            oldTask.resourceId,
+                                        )
+                                    }
+                                    try {
+                                        downloadManager.parts.delete(parsedTaskId)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "待回收更新下载分块失败 taskId=$taskId", e)
+                                    }
                                 }
                             }
-                        }
-                    }
 
-                    if (committed) {
-                        DownloadNotifications.showSuccessNotification(
-                            context = appContext,
-                            taskId = taskId,
-                            resourceId = taskForSaving.resourceId,
-                            title = taskForSaving.title,
-                        )
-                        Result.success()
-                    } else {
-                        cleanupPartialDestination(destinationUri)
-                        Result.failure()
+                            if (committed) {
+                                val version =
+                                    extractAppUpdateVersion(taskForSaving.resourceId)
+                                        .ifEmpty { taskForSaving.title }
+                                // 仅发送完成横幅通知，不自动拉起安装器；由用户点击横幅或在下载管理页主动安装
+                                DownloadNotifications.showAppUpdateReadyNotification(
+                                    context = appContext,
+                                    taskId = taskId,
+                                    resourceId = taskForSaving.resourceId,
+                                    title = taskForSaving.title,
+                                    version = version,
+                                    apkUriString = createdUri.toString(),
+                                )
+                                Result.success()
+                            } else {
+                                cleanupPartialDestination(destinationUri)
+                                Result.failure()
+                            }
+                        }
                     }
                 } catch (e: CancellationException) {
                     withContext(NonCancellable) {
@@ -487,7 +630,8 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                     }
                                     DownloadTaskStatus.QUEUED,
                                     DownloadTaskStatus.RETRYING,
-                                    DownloadTaskStatus.FAILED -> Unit
+                                    DownloadTaskStatus.FAILED,
+                                    DownloadTaskStatus.COMPLETED -> Unit
                                     DownloadTaskStatus.RUNNING,
                                     DownloadTaskStatus.SAVING -> {
                                         // 系统取消，仅在仍为当前代且处于运行/保存时转入 PAUSED
@@ -578,6 +722,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                                         context = appContext,
                                                         taskId = taskId,
                                                         title = taskAfterError.title,
+                                                        taskType = taskAfterError.taskType,
                                                     )
                                                 }
                                             }
@@ -599,6 +744,7 @@ class DownloadWorker(private val appContext: Context, params: WorkerParameters) 
                                                 context = appContext,
                                                 taskId = taskId,
                                                 title = taskAfterError.title,
+                                                taskType = taskAfterError.taskType,
                                             )
                                         }
                                     }

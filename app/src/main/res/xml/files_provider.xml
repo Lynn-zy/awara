@@ -2,4 +2,6 @@
 <paths>
     <!-- 旧系统公共目录写入仍限定在 Download/Awara，不暴露其他文件。 -->
     <external-path name="download" path="Download/Awara/" />
+    <!-- 应用内更新安装包仅暴露私有缓存下的专用目录，供系统安装器临时读取。 -->
+    <cache-path name="app_updates" path="app_updates/" />
 </paths>

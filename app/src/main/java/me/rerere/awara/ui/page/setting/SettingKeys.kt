@@ -11,6 +11,8 @@ object SettingKeys {
     const val LOOP_PLAY = "setting.loop_play"
     const val PLAYER_SENSOR_ROTATION = "setting.player_sensor_rotation"
     const val DOWNLOAD_PLAYER = "setting.download_player_internal"
+    const val AUTO_CHECK_UPDATE = "setting.auto_check_update"
+    const val IGNORED_UPDATE_VERSION = "setting.ignored_update_version"
 }
 
 /**

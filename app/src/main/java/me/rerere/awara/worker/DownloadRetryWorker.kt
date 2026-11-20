@@ -10,6 +10,7 @@ import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.download.sanitizedDownloadErrorMessage
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.data.entity.DownloadTaskType
 import me.rerere.awara.di.AppDatabase
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -47,7 +48,13 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
                 return@withContext Result.success()
             }
             if (!downloadManager.isAutomaticRetryEnabled()) {
-                fail(taskId, task.workId, task.title, task.error ?: "自动重试已关闭")
+                fail(
+                    taskId = taskId,
+                    workId = task.workId,
+                    title = task.title,
+                    taskType = task.taskType,
+                    error = task.error ?: "自动重试已关闭",
+                )
                 return@withContext Result.success()
             }
 
@@ -77,10 +84,11 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
                         return@withContext Result.retry()
                     } else {
                         fail(
-                            taskId,
-                            task.workId,
-                            latest.title,
-                            exception.sanitizedDownloadErrorMessage(),
+                            taskId = taskId,
+                            workId = task.workId,
+                            title = latest.title,
+                            taskType = latest.taskType,
+                            error = exception.sanitizedDownloadErrorMessage(),
                         )
                     }
                 }
@@ -88,10 +96,21 @@ class DownloadRetryWorker(appContext: Context, params: WorkerParameters) :
             Result.success()
         }
 
-    private suspend fun fail(taskId: String, workId: String, title: String, error: String) {
+    private suspend fun fail(
+        taskId: String,
+        workId: String,
+        title: String,
+        taskType: DownloadTaskType,
+        error: String,
+    ) {
         val updated = database.downloadTaskDao().failRetryingTask(taskId, workId, error)
         if (updated > 0) {
-            DownloadNotifications.showFailureNotification(applicationContext, taskId, title)
+            DownloadNotifications.showFailureNotification(
+                context = applicationContext,
+                taskId = taskId,
+                title = title,
+                taskType = taskType,
+            )
         }
     }
 

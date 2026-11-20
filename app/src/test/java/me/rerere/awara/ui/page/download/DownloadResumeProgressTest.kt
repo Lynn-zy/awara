@@ -50,6 +50,7 @@ class DownloadResumeProgressTest {
                 DownloadTaskStatus.CANCELLING,
                 DownloadTaskStatus.SAVING,
                 DownloadTaskStatus.RETRYING,
+                DownloadTaskStatus.COMPLETED,
             )) {
             assertNull(initial.observe(task(status)))
         }

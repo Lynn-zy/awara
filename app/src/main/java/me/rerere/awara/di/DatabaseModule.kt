@@ -21,6 +21,7 @@ import me.rerere.awara.data.download.MetadataScanFeedback
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatusConverter
+import me.rerere.awara.data.entity.DownloadTaskTypeConverter
 import me.rerere.awara.data.entity.HistoryItem
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
@@ -73,7 +74,7 @@ val databaseModule = module {
 
 @Database(
     entities = [HistoryItem::class, DownloadItem::class, DownloadTask::class],
-    version = 12,
+    version = 13,
     exportSchema = true,
     autoMigrations =
         [
@@ -88,9 +89,10 @@ val databaseModule = module {
             AutoMigration(from = 9, to = 10),
             AutoMigration(from = 10, to = 11),
             AutoMigration(from = 11, to = 12),
+            AutoMigration(from = 12, to = 13),
         ],
 )
-@TypeConverters(DownloadTaskStatusConverter::class)
+@TypeConverters(DownloadTaskStatusConverter::class, DownloadTaskTypeConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     @RenameColumn(tableName = "downloaded_items", fromColumnName = "path", toColumnName = "uri")
     class Migration2To3 : AutoMigrationSpec

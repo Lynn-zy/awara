@@ -8,13 +8,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import kotlinx.coroutines.flow.collectLatest
+import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
-import me.rerere.awara.ui.LocalDialogProvider
-import me.rerere.awara.ui.component.iwara.RichText
+import me.rerere.awara.ui.LocalMessageProvider
+import me.rerere.awara.ui.component.common.AppUpdateDialog
+import me.rerere.awara.ui.component.common.rememberAppUpdateDownloader
 import me.rerere.awara.ui.hooks.rememberWindowSizeClass
 import me.rerere.awara.ui.page.index.layout.IndexPagePhoneLayout
 import me.rerere.awara.ui.page.index.layout.IndexPageTabletLayout
@@ -40,38 +40,30 @@ fun IndexPage(
 }
 
 /**
- * 监听首页版本更新事件，展示 GitHub Release 更新说明并引导打开对应发布页下载。
+ * 监听首页版本更新状态，展示可滚动的结构化更新说明弹窗并支持应用内下载、关闭与忽略当前版本。
  */
 @Composable
 private fun UpdateCheck(vm: IndexVM) {
-    val dialog = LocalDialogProvider.current
+    val startUpdateDownload = rememberAppUpdateDownloader()
+    val updateInfo = vm.state.availableUpdate ?: return
     val context = LocalContext.current
-    LaunchedEffect(Unit) {
-        vm.events.collectLatest { event ->
-            when (event) {
-                is IndexVM.IndexEvent.ShowUpdateDialog -> {
-                    val updateInfo = event.updateInfo
-                    dialog.show(
-                        title = {
-                            Text(stringResource(R.string.update_title, updateInfo.version))
-                        },
-                        content = {
-                            RichText(
-                                text = updateInfo.changes,
-                                onLinkClick = { link -> context.openUrl(link) }
-                            )
-                        },
-                        positiveAction = {
-                            context.openUrl(updateInfo.downloadUrl)
-                        },
-                        positiveText = {
-                            Text(stringResource(R.string.update_confirm))
-                        }
-                    )
-                }
+    val message = LocalMessageProvider.current
+    AppUpdateDialog(
+        updateInfo = updateInfo,
+        currentVersion = BuildConfig.VERSION_NAME,
+        onDismiss = vm::dismissUpdateDialog,
+        onDownload = {
+            vm.dismissUpdateDialog()
+            startUpdateDownload(updateInfo)
+        },
+        onLinkClick = { link -> context.openUrl(link) },
+        onIgnoreVersion = {
+            vm.ignoreAvailableUpdate()?.let { ignoredVersion ->
+                val ignoredText = context.getString(R.string.update_ignored_message, ignoredVersion)
+                message.info { Text(ignoredText) }
             }
-        }
-    }
+        },
+    )
 }
 
 data class IndexNavigation(

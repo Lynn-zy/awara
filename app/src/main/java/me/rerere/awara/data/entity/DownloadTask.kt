@@ -28,7 +28,32 @@ data class DownloadTask(
     val workId: String = "",
     val destinationUri: String = "",
     val error: String? = null,
+    @ColumnInfo(defaultValue = "'VIDEO'") val taskType: DownloadTaskType = DownloadTaskType.VIDEO,
 )
+
+/**
+ * 下载任务类型强类型枚举，用于区分普通视频下载与应用内更新 APK 下载。
+ */
+enum class DownloadTaskType(val value: String) {
+    VIDEO("VIDEO"),
+    APP_UPDATE("APP_UPDATE");
+
+    companion object {
+        private val BY_VALUE = entries.associateBy { it.value }
+
+        /** 根据数据库列字符串解析任务类型，未知值抛出异常。 */
+        fun fromValue(value: String): DownloadTaskType =
+            BY_VALUE[value]
+                ?: throw IllegalArgumentException("Unknown DownloadTaskType: $value")
+    }
+}
+
+/** Room 任务类型转换器，负责在 [DownloadTaskType] 与 SQLite TEXT 列间双向映射。 */
+class DownloadTaskTypeConverter {
+    @TypeConverter fun fromType(type: DownloadTaskType): String = type.value
+
+    @TypeConverter fun toType(value: String): DownloadTaskType = DownloadTaskType.fromValue(value)
+}
 
 /**
  * 下载任务强类型状态枚举。
@@ -42,7 +67,8 @@ enum class DownloadTaskStatus(val value: String) {
     SAVING("SAVING"),
     RETRYING("RETRYING"),
     FAILED("FAILED"),
-    CANCELLING("CANCELLING");
+    CANCELLING("CANCELLING"),
+    COMPLETED("COMPLETED");
 
     companion object {
         private val BY_VALUE = entries.associateBy { it.value }

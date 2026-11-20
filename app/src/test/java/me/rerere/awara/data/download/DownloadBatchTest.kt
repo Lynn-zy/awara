@@ -53,6 +53,7 @@ class DownloadBatchTest {
                 createTask("5", DownloadTaskStatus.FAILED),
                 createTask("6", DownloadTaskStatus.CANCELLING),
                 createTask("7", DownloadTaskStatus.RETRYING),
+                createTask("8", DownloadTaskStatus.COMPLETED),
             )
 
         val pausable = DownloadManager.filterPausableTasks(tasks)
@@ -69,11 +70,29 @@ class DownloadBatchTest {
                 createTask("3", DownloadTaskStatus.PAUSED),
                 createTask("4", DownloadTaskStatus.FAILED),
                 createTask("5", DownloadTaskStatus.RETRYING),
+                createTask("6", DownloadTaskStatus.COMPLETED),
             )
 
         assertEquals(
             listOf("3"),
             DownloadManager.filterManualResumableTasks(tasks).map { it.taskId },
+        )
+    }
+
+    @Test
+    fun filterCancellableTasksExcludesCompletedTasks() {
+        val tasks =
+            listOf(
+                createTask("1", DownloadTaskStatus.QUEUED),
+                createTask("2", DownloadTaskStatus.RUNNING),
+                createTask("3", DownloadTaskStatus.PAUSED),
+                createTask("4", DownloadTaskStatus.FAILED),
+                createTask("5", DownloadTaskStatus.COMPLETED),
+            )
+
+        assertEquals(
+            listOf("1", "2", "3", "4"),
+            DownloadManager.filterCancellableTasks(tasks).map { it.taskId },
         )
     }
 
@@ -88,6 +107,7 @@ class DownloadBatchTest {
                 createTask("5", DownloadTaskStatus.FAILED),
                 createTask("6", DownloadTaskStatus.SAVING),
                 createTask("7", DownloadTaskStatus.CANCELLING),
+                createTask("8", DownloadTaskStatus.COMPLETED),
             )
 
         assertEquals(
@@ -101,6 +121,7 @@ class DownloadBatchTest {
         assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.FAILED))
         assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.SAVING))
         assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.CANCELLING))
+        assertFalse(DownloadManager.isStartupUnfinishedStatus(DownloadTaskStatus.COMPLETED))
     }
 
     @Test

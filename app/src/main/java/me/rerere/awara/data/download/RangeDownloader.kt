@@ -57,6 +57,7 @@ internal constructor(
     private val networkIdentity: () -> String = { "" },
     private val connectionTracker: CdnConnectionTracker? = null,
     private val sourcePoolOverride: DownloadSourcePool? = null,
+    private val referer: String? = "https://www.iwara.tv/",
 ) {
     /** 专用分块 OkHttpClient：限定 HTTP/1.1 并禁用重定向，与主客户端共享连接池。 */
     private val dedicatedClient: OkHttpClient by lazy {
@@ -566,9 +567,9 @@ internal constructor(
                 Request.Builder()
                     .url(url)
                     .header("Accept-Encoding", "identity")
-                    .header("Referer", "https://www.iwara.tv/")
                     .header("Accept", "*/*")
                     .header("Range", "bytes=0-0")
+                    .apply { referer?.takeIf { it.isNotBlank() }?.let { header("Referer", it) } }
 
             probeValidator?.let { reqBuilder.header("If-Range", it) }
 
@@ -643,10 +644,10 @@ internal constructor(
                 Request.Builder()
                     .url(url)
                     .header("Accept-Encoding", "identity")
-                    .header("Referer", "https://www.iwara.tv/")
                     .header("Accept", "*/*")
                     .header("Range", "bytes=$chunkStart-$chunkEnd")
                     .header("If-Range", strongETag)
+                    .apply { referer?.takeIf { it.isNotBlank() }?.let { header("Referer", it) } }
                     .build()
 
             val call = client.newCall(req)
@@ -819,8 +820,8 @@ internal constructor(
                     Request.Builder()
                         .url(url)
                         .header("Accept-Encoding", "identity")
-                        .header("Referer", "https://www.iwara.tv/")
                         .header("Accept", "*/*")
+                        .apply { referer?.takeIf { it.isNotBlank() }?.let { header("Referer", it) } }
 
                 val rangeValidator =
                     validator?.trim()?.takeIf { CdnPolicy.isStrongValidator(it) }

@@ -3,6 +3,7 @@ package me.rerere.awara.di
 import android.util.Log
 import me.rerere.awara.BuildConfig
 import me.rerere.awara.data.source.IwaraAPI
+import me.rerere.awara.data.source.ManifestUpdateClient
 import me.rerere.awara.data.source.UpdateAPI
 import me.rerere.awara.data.source.canReceiveIwaraAccessToken
 import me.rerere.awara.util.SerializationConverterFactory
@@ -108,13 +109,6 @@ val networkModule = module {
             .create(IwaraAPI::class.java)
     }
 
-    // 使用 GitHub 官方 REST API 检查 Lynn-zy/awara 仓库的最新正式版 Release
-    single {
-        Retrofit.Builder()
-            .client(get())
-            .baseUrl("https://api.github.com/")
-            .addConverterFactory(SerializationConverterFactory.create())
-            .build()
-            .create(UpdateAPI::class.java)
-    }
+    // 通过 GitHub Releases 永久直链拉取静态更新清单 update.json，彻底规避 api.github.com 匿名限流与 HTML 解析脆弱性
+    single<UpdateAPI> { ManifestUpdateClient(okHttpClient = get()) }
 }

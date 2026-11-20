@@ -14,13 +14,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.OpenInNew
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -75,10 +78,12 @@ internal fun formatAppVersionDisplay(versionName: String, versionCode: Int): Str
 /**
  * 软件版本信息卡片弹窗。
  *
- * 展示软件图标、名称、当前版本号，以及原作者（已删库划掉）与当前维护的源代码仓库入口。
+ * 展示软件图标、名称、当前版本号，源代码仓库入口，以及手动检查更新按钮。
  *
  * @param versionName 应用语义化版本名称
  * @param versionCode 应用整数构建版本号
+ * @param checkingUpdate 是否正在检查新版本
+ * @param onCheckUpdate 点击“检查更新”按钮时的回调
  * @param onOpenCurrentRepo 点击当前维护仓库条目时的外部跳转回调
  * @param onDismiss 关闭弹窗回调
  */
@@ -86,6 +91,8 @@ internal fun formatAppVersionDisplay(versionName: String, versionCode: Int): Str
 internal fun VersionInfoDialog(
     versionName: String,
     versionCode: Int,
+    checkingUpdate: Boolean = false,
+    onCheckUpdate: () -> Unit,
     onOpenCurrentRepo: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -93,6 +100,8 @@ internal fun VersionInfoDialog(
         VersionInfoCard(
             versionName = versionName,
             versionCode = versionCode,
+            checkingUpdate = checkingUpdate,
+            onCheckUpdate = onCheckUpdate,
             onOpenCurrentRepo = onOpenCurrentRepo,
             onDismiss = onDismiss,
         )
@@ -103,18 +112,14 @@ internal fun VersionInfoDialog(
  * 软件版本信息卡片主体组件。
  *
  * 独立拆分为无窗口包裹的纯卡片布局，遵循单一职责原则，既供 [VersionInfoDialog] 承载渲染，
- * 也支持在窄屏与大字号仪器测试中直接校验边界与排版。
- *
- * @param versionName 应用语义化版本名称
- * @param versionCode 应用整数构建版本号
- * @param onOpenCurrentRepo 点击当前维护仓库条目时的外部跳转回调
- * @param onDismiss 点击底部关闭按钮时的回调
- * @param modifier 外部修饰符
+ * 也支持在窄屏与大字号布局下直接校验边界与排版。
  */
 @Composable
 internal fun VersionInfoCard(
     versionName: String,
     versionCode: Int,
+    checkingUpdate: Boolean = false,
+    onCheckUpdate: () -> Unit,
     onOpenCurrentRepo: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -155,14 +160,39 @@ internal fun VersionInfoCard(
             // 仓库列表分组容器：上半部为已删库划掉的原作者仓库，下半部为可点击跳转的当前维护仓库
             RepositoryGroupSection(onOpenCurrentRepo = onOpenCurrentRepo)
 
-            // 底部操作区：右对齐关闭按钮
-            Spacer(modifier = Modifier.height(12.dp))
+            // 底部操作区：关闭与检查更新并排，检查中展示内联加载指示防止重复触发
+            Spacer(modifier = Modifier.height(16.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onDismiss) {
                     Text(text = stringResource(R.string.close))
+                }
+                FilledTonalButton(
+                    onClick = onCheckUpdate,
+                    enabled = !checkingUpdate,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    if (checkingUpdate) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(15.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.setting_about_checking_update),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.setting_about_check_update_title),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }

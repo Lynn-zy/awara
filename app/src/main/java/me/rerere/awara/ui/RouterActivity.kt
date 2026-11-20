@@ -1,6 +1,7 @@
 package me.rerere.awara.ui
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -33,7 +34,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import me.rerere.awara.BuildConfig
+import me.rerere.awara.data.download.CompletedAppUpdate
 import me.rerere.awara.data.download.DownloadNotifications
+import me.rerere.awara.data.download.isTrustedAppUpdateUri
+import me.rerere.awara.ui.component.common.AppUpdateInstallHost
 import me.rerere.awara.ui.component.common.DialogProvider
 import me.rerere.awara.ui.component.common.MessageProvider
 import me.rerere.awara.ui.page.download.DownloadHubPage
@@ -70,6 +74,7 @@ private const val TAG = "RouterActivity"
 class RouterActivity : ComponentActivity() {
     private var pendingDownloadRoute by mutableStateOf<String?>(null)
     private var requestedDownloadResourceId by mutableStateOf<String?>(null)
+    private var pendingInstallUpdate by mutableStateOf<CompletedAppUpdate?>(null)
     private var pendingRoute by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,6 +84,17 @@ class RouterActivity : ComponentActivity() {
         if (savedInstanceState != null) {
             pendingDownloadRoute = savedInstanceState.getString("pending_download_route")
             requestedDownloadResourceId = savedInstanceState.getString("download_focus_resource")
+            val savedApkUri = savedInstanceState.getString("pending_install_apk_uri")
+            val savedVersion = savedInstanceState.getString("pending_install_version").orEmpty()
+            val parsedSavedUri = savedApkUri?.takeIf { it.isNotBlank() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            if (savedApkUri != null && isTrustedAppUpdateUri(this, parsedSavedUri)) {
+                pendingInstallUpdate =
+                    CompletedAppUpdate(
+                        version = savedVersion,
+                        fileName = "",
+                        apkUriString = savedApkUri,
+                    )
+            }
             pendingRoute = savedInstanceState.getString("pending_route")
         }
         if (savedInstanceState == null) {
@@ -120,6 +136,23 @@ class RouterActivity : ComponentActivity() {
 
     private fun readDownloadIntent(intent: Intent?) {
         val route = intent?.getStringExtra(DownloadNotifications.EXTRA_ROUTE)
+        if (route == DownloadNotifications.ROUTE_INSTALL_UPDATE) {
+            val apkUriString =
+                intent.getStringExtra(DownloadNotifications.EXTRA_APK_URI)?.takeIf {
+                    it.isNotBlank()
+                } ?: return
+            val parsedUri = runCatching { Uri.parse(apkUriString) }.getOrNull()
+            if (!isTrustedAppUpdateUri(this, parsedUri)) return
+            val version =
+                intent.getStringExtra(DownloadNotifications.EXTRA_UPDATE_VERSION).orEmpty()
+            pendingInstallUpdate =
+                CompletedAppUpdate(
+                    version = version,
+                    fileName = "",
+                    apkUriString = apkUriString,
+                )
+            return
+        }
         if (
             route != DownloadNotifications.ROUTE_MANAGER &&
                 route != DownloadNotifications.ROUTE_VIDEOS
@@ -149,6 +182,8 @@ class RouterActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("pending_download_route", pendingDownloadRoute)
         outState.putString("download_focus_resource", requestedDownloadResourceId)
+        outState.putString("pending_install_apk_uri", pendingInstallUpdate?.apkUriString)
+        outState.putString("pending_install_version", pendingInstallUpdate?.version)
         outState.putString("pending_route", pendingRoute)
         super.onSaveInstanceState(outState)
     }
@@ -159,6 +194,15 @@ class RouterActivity : ComponentActivity() {
             DialogProvider {
                 content()
                 UnfinishedDownloadsDialog()
+                AppUpdateInstallHost(
+                    externalRequest = pendingInstallUpdate,
+                    onExternalRequestConsumed = {
+                        pendingInstallUpdate = null
+                        intent?.removeExtra(DownloadNotifications.EXTRA_ROUTE)
+                        intent?.removeExtra(DownloadNotifications.EXTRA_APK_URI)
+                        intent?.removeExtra(DownloadNotifications.EXTRA_UPDATE_VERSION)
+                    },
+                )
             }
         }
     }

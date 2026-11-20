@@ -8,6 +8,7 @@ import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.data.entity.DownloadTaskType
 
 @Dao
 interface DownloadTaskDao {
@@ -195,4 +196,24 @@ interface DownloadTaskDao {
         destinationUri: String,
         error: String?,
     ): Int
+
+    // CAS 将保存中的任务标记为已完成（保留应用更新 APK 任务卡片供用户手动安装或删除）
+    @Query(
+        "UPDATE download_tasks SET status = 'COMPLETED', downloadedBytes = :sizeBytes, totalBytes = :sizeBytes, destinationUri = :destinationUri, error = null WHERE taskId = :taskId AND workId = :workId AND status = 'SAVING'"
+    )
+    suspend fun markCompleted(
+        taskId: String,
+        workId: String,
+        sizeBytes: Long,
+        destinationUri: String,
+    ): Int
+
+    // 查询同类型下除当前任务外的已完成任务（新版本更新包落盘覆盖旧文件时清理旧记录）
+    @Query(
+        "SELECT * FROM download_tasks WHERE taskType = :taskType AND status = 'COMPLETED' AND taskId != :excludeTaskId"
+    )
+    suspend fun getOtherCompletedTasks(
+        taskType: DownloadTaskType,
+        excludeTaskId: String,
+    ): List<DownloadTask>
 }

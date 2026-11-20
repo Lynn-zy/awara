@@ -8,8 +8,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
@@ -17,12 +15,13 @@ import me.rerere.awara.data.dto.NotificationCounts
 import me.rerere.awara.data.entity.Media
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
+import me.rerere.awara.data.source.AppUpdateCheckResult
 import me.rerere.awara.data.source.AppUpdateInfo
+import me.rerere.awara.data.source.AppUpdatePreferences
 import me.rerere.awara.data.source.UpdateAPI
 import me.rerere.awara.data.source.onError
 import me.rerere.awara.data.source.onException
 import me.rerere.awara.data.source.onSuccess
-import me.rerere.awara.data.source.resolveAvailableUpdate
 import me.rerere.awara.data.source.runAPICatching
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.iwara.PagedFeedState
@@ -39,6 +38,7 @@ class IndexVM(
     private val userRepo: UserRepo,
     private val mediaRepo: MediaRepo,
     private val updateChecker: UpdateAPI,
+    private val updatePreferences: AppUpdatePreferences,
 ) : ViewModel() {
     var state by mutableStateOf(IndexState())
         private set
@@ -48,9 +48,6 @@ class IndexVM(
 
     var imageSort: String by mutableStateOf(MediaSortOptions.first().name)
     val imageFilters: MutableList<FilterValue> = mutableStateListOf()
-
-    private val eventChannel = Channel<IndexEvent>(Channel.BUFFERED)
-    val events = eventChannel.receiveAsFlow()
 
     private val subscriptionLoader =
         PagedListLoader(
@@ -113,24 +110,44 @@ class IndexVM(
         checkUpdate()
     }
 
-    /** 启动时异步查询 GitHub Releases 最新正式版本，仅当远端语义化版本高于当前版本时发送弹窗事件。 */
-    private fun checkUpdate() {
+    /**
+     * 启动时按自动更新偏好异步查询 GitHub Releases 最新正式版本。
+     *
+     * 自动检查关闭时不发起网络请求；已忽略该版本（或更高版本）时不弹窗提醒。
+     */
+    internal fun checkUpdate(currentVersion: String = BuildConfig.VERSION_NAME) {
+        if (!updatePreferences.isAutoCheckEnabled()) return
         viewModelScope.launch {
-            kotlin
-                .runCatching {
-                    val latestRelease = updateChecker.getLatestRelease()
-                    val updateInfo =
-                        resolveAvailableUpdate(
-                            currentVersion = BuildConfig.VERSION_NAME,
-                            release = latestRelease,
-                        )
-                    if (updateInfo != null) {
-                        eventChannel.send(IndexEvent.ShowUpdateDialog(updateInfo))
+            when (val result = updateChecker.checkLatestUpdate(currentVersion)) {
+                is AppUpdateCheckResult.Available -> {
+                    val updateInfo = result.updateInfo
+                    if (updatePreferences.shouldAutoPrompt(updateInfo)) {
+                        state = state.copy(availableUpdate = updateInfo)
                         Log.i(TAG, "checkUpdate: new version found ${updateInfo.version}")
                     }
                 }
-                .onFailure { Log.w(TAG, "checkUpdate: ", it) }
+
+                AppUpdateCheckResult.UpToDate -> Unit
+                is AppUpdateCheckResult.Failed -> Log.w(TAG, "checkUpdate: ", result.cause)
+            }
         }
+    }
+
+    /** 临时关闭当前更新弹窗，不写入版本忽略状态。 */
+    fun dismissUpdateDialog() {
+        if (state.availableUpdate != null) {
+            state = state.copy(availableUpdate = null)
+        }
+    }
+
+    /**
+     * 忽略当前展示的新版本并关闭弹窗，返回被忽略的版本号供界面提示。
+     */
+    fun ignoreAvailableUpdate(): String? {
+        val version = state.availableUpdate?.version ?: return null
+        updatePreferences.ignoreVersion(version)
+        state = state.copy(availableUpdate = null)
+        return version
     }
 
     /** 加载当前页订阅流。 */
@@ -229,14 +246,11 @@ class IndexVM(
         val followerCount: Int = 0,
         val friendsCount: Int = 0,
         val notificationCounts: NotificationCounts = NotificationCounts(),
+        val availableUpdate: AppUpdateInfo? = null,
     )
 
     enum class SubscriptionType(val id: Int) {
         VIDEO(R.string.video),
         IMAGE(R.string.image),
-    }
-
-    sealed class IndexEvent {
-        data class ShowUpdateDialog(val updateInfo: AppUpdateInfo) : IndexEvent()
     }
 }

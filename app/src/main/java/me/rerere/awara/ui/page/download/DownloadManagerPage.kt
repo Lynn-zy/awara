@@ -6,9 +6,12 @@ import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,8 +67,10 @@ import com.airbnb.lottie.compose.rememberLottieComposition
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
+import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.data.entity.DownloadTaskType
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
@@ -82,6 +88,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     var taskToCancel by remember { mutableStateOf<DownloadTask?>(null) }
+    var taskToDelete by remember { mutableStateOf<DownloadTask?>(null) }
     var showCancelAllDialog by remember { mutableStateOf(false) }
 
     val notificationLauncher =
@@ -115,9 +122,10 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
             return
         }
 
-        // Android 8.0-9.0 未配置 SAF 目录时写入公共下载目录需运行时存储权限
+        // Android 8.0-9.0 仅视频任务写入公共下载目录时需运行时存储权限；应用更新写入私有缓存目录无需此权限
         if (
-            Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            task.taskType == DownloadTaskType.VIDEO &&
+                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                 task.directoryUri.isBlank() &&
                 ContextCompat.checkSelfPermission(
                     context,
@@ -186,8 +194,42 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
         )
     }
 
+    taskToDelete?.let { task ->
+        AlertDialog(
+            onDismissRequest = { taskToDelete = null },
+            title = { Text(stringResource(R.string.download_task_delete_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.download_task_delete_message,
+                        task.title.ifBlank { task.resourceId },
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val id = task.taskId
+                        taskToDelete = null
+                        vm.cancel(id)
+                    }
+                ) {
+                    Text(
+                        text = stringResource(R.string.confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { taskToDelete = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     if (showCancelAllDialog) {
-        val count = vm.state.tasks.size
+        val count = DownloadManager.filterCancellableTasks(vm.state.tasks).size
         AlertDialog(
             onDismissRequest = { showCancelAllDialog = false },
             title = { Text(stringResource(R.string.download_task_cancel_all_title)) },
@@ -228,7 +270,10 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                 remember(vm.state.tasks) {
                     vm.state.tasks.count { it.status == DownloadTaskStatus.PAUSED }
                 }
-            val cancellableCount = vm.state.tasks.size
+            val cancellableCount =
+                remember(vm.state.tasks) {
+                    DownloadManager.filterCancellableTasks(vm.state.tasks).size
+                }
 
             TopAppBar(
                 title = { Text(stringResource(R.string.download_manager)) },
@@ -336,6 +381,8 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                         onPause = { vm.pause(task.taskId) },
                         onResume = { checkAndResume(task) },
                         onCancel = { taskToCancel = task },
+                        onDelete = { taskToDelete = task },
+                        onInstall = { vm.installAppUpdate(task) },
                         onRetryCleanup = { vm.cancel(task.taskId) },
                         cdnSnapshot =
                             if (cdnDebugEnabled) connections[task.taskId] ?: CdnConnectionSnapshot()
@@ -355,6 +402,8 @@ internal fun DownloadTaskCard(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit,
+    onDelete: () -> Unit = {},
+    onInstall: () -> Unit = {},
     onRetryCleanup: () -> Unit,
     cdnSnapshot: CdnConnectionSnapshot? = null,
 ) {
@@ -408,16 +457,13 @@ internal fun DownloadTaskCard(
                 DownloadTaskStatus.CANCELLING ->
                     stringResource(R.string.download_task_cancelling) to
                         MaterialTheme.colorScheme.error
+                DownloadTaskStatus.COMPLETED ->
+                    stringResource(R.string.download_task_completed) to
+                        MaterialTheme.colorScheme.primary
             }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                if (task.resourceId.isNotBlank()) {
-                    router.navigate("video/${Uri.encode(task.resourceId)}")
-                }
-            },
-        ) {
+        val isVideoTask = task.taskType == DownloadTaskType.VIDEO
+        val cardContent: @Composable ColumnScope.() -> Unit = {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -427,16 +473,36 @@ internal fun DownloadTaskCard(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 左侧 16:9 缩略图
-                    AsyncImage(
-                        model = task.thumbnail,
-                        contentDescription = null,
-                        modifier =
-                            Modifier.width(thumbWidth)
-                                .aspectRatio(16f / 9f)
-                                .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.Crop,
-                    )
+                    if (isVideoTask) {
+                        // 左侧 16:9 视频缩略图
+                        AsyncImage(
+                            model = task.thumbnail,
+                            contentDescription = null,
+                            modifier =
+                                Modifier.width(thumbWidth)
+                                    .aspectRatio(16f / 9f)
+                                    .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        // 应用更新任务图标底座
+                        Box(
+                            modifier =
+                                Modifier
+                                    .width(thumbWidth)
+                                    .aspectRatio(16f / 9f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.SystemUpdate,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
 
                     Column(
                         modifier = Modifier.weight(1f),
@@ -536,6 +602,13 @@ internal fun DownloadTaskCard(
                             trackColor = progressTrackColor,
                         )
                     }
+                    DownloadTaskStatus.COMPLETED -> {
+                        LinearProgressIndicator(
+                            progress = 1f,
+                            modifier = Modifier.fillMaxWidth(),
+                            trackColor = progressTrackColor,
+                        )
+                    }
                 }
 
                 Row(
@@ -546,7 +619,8 @@ internal fun DownloadTaskCard(
                     when {
                         (isResuming || task.status == DownloadTaskStatus.QUEUED) &&
                             task.status != DownloadTaskStatus.SAVING &&
-                            task.status != DownloadTaskStatus.CANCELLING -> {
+                            task.status != DownloadTaskStatus.CANCELLING &&
+                            task.status != DownloadTaskStatus.COMPLETED -> {
                             TextButton(
                                 onClick = {},
                                 enabled = false,
@@ -618,9 +692,35 @@ internal fun DownloadTaskCard(
                                 }
                             }
                         }
+                        task.status == DownloadTaskStatus.COMPLETED -> {
+                            TextButton(
+                                onClick = onDelete,
+                                enabled = !isOperating,
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.download_task_delete),
+                                    color =
+                                        if (!isOperating) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                )
+                            }
+                            if (task.taskType == DownloadTaskType.APP_UPDATE) {
+                                TextButton(
+                                    onClick = onInstall,
+                                    enabled = !isOperating,
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(stringResource(R.string.download_task_install))
+                                }
+                            }
+                        }
                     }
 
-                    if (task.status != DownloadTaskStatus.CANCELLING) {
+                    if (
+                        task.status != DownloadTaskStatus.CANCELLING &&
+                            task.status != DownloadTaskStatus.COMPLETED
+                    ) {
                         TextButton(
                             onClick = onCancel,
                             enabled = !isOperating,
@@ -636,6 +736,19 @@ internal fun DownloadTaskCard(
                     }
                 }
             }
+        }
+
+        if (isVideoTask && task.resourceId.isNotBlank()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { router.navigate("video/${Uri.encode(task.resourceId)}") },
+                content = cardContent,
+            )
+        } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                content = cardContent,
+            )
         }
     }
 }

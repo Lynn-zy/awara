@@ -12,9 +12,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import me.rerere.awara.data.download.CompletedAppUpdate
 import me.rerere.awara.data.download.DownloadManager
+import me.rerere.awara.data.download.extractAppUpdateVersion
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.data.entity.DownloadTaskType
 import me.rerere.awara.ui.component.common.UiState
 import org.koin.core.component.KoinComponent
 
@@ -140,6 +143,27 @@ class DownloadManagerVM(private val downloadManager: DownloadManager) : ViewMode
         performAction(taskId) { downloadManager.cancel(taskId) }
     }
 
+    /** 触发已完成应用更新包的安装流程，交由主界面宿主处理权限引导与系统安装器拉起。 */
+    fun installAppUpdate(task: DownloadTask) {
+        if (
+            state.isBatchOperating ||
+                task.taskId in state.operatingIds ||
+                task.taskType != DownloadTaskType.APP_UPDATE ||
+                task.status != DownloadTaskStatus.COMPLETED ||
+                task.destinationUri.isBlank()
+        ) {
+            return
+        }
+        val version = extractAppUpdateVersion(task.resourceId).ifEmpty { task.title }
+        downloadManager.requestAppUpdateInstall(
+            CompletedAppUpdate(
+                version = version,
+                fileName = task.quality,
+                apkUriString = task.destinationUri,
+            )
+        )
+    }
+
     fun pauseAll() {
         if (state.isBatchOperating || state.operatingIds.isNotEmpty()) return
         resumeBatchJob?.cancel()
@@ -212,7 +236,7 @@ class DownloadManagerVM(private val downloadManager: DownloadManager) : ViewMode
 
     fun cancelAll() {
         if (state.isBatchOperating || state.operatingIds.isNotEmpty()) return
-        val cancellable = state.tasks
+        val cancellable = DownloadManager.filterCancellableTasks(state.tasks)
         if (cancellable.isEmpty()) return
         resumeBatchJob?.cancel()
         pendingResumes.keys.toList().forEach(::stopResume)

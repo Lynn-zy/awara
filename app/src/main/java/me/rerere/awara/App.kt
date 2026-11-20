@@ -1,13 +1,12 @@
 package me.rerere.awara
 
 import android.app.Application
-import androidx.core.app.NotificationChannelCompat
-import androidx.core.app.NotificationManagerCompat
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.SvgDecoder
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import me.rerere.awara.data.download.DownloadNotifications
 import me.rerere.awara.data.playback.PlayerCache
 import me.rerere.awara.data.playback.PlayerCacheLifecycleCallbacks
 import me.rerere.awara.di.databaseModule
@@ -49,15 +48,7 @@ class App : Application(), ImageLoaderFactory, KoinComponent {
     }
 
     private fun registerNotificationChannel() {
-        val notificationManagerCompat = NotificationManagerCompat.from(this)
-        notificationManagerCompat.createNotificationChannel(
-            NotificationChannelCompat.Builder(
-                    "download",
-                    NotificationManagerCompat.IMPORTANCE_DEFAULT,
-                )
-                .setName("Download")
-                .build()
-        )
+        DownloadNotifications.registerChannels(this)
     }
 
     override fun newImageLoader(): ImageLoader {

@@ -1,5 +1,6 @@
 package me.rerere.awara.ui.page.setting
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Source
+import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -80,8 +82,14 @@ import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.playback.PlaybackSettings
+import me.rerere.awara.data.source.AppUpdateCheckResult
+import me.rerere.awara.data.source.AppUpdateInfo
+import me.rerere.awara.data.source.AppUpdatePreferences
+import me.rerere.awara.data.source.UpdateAPI
 import me.rerere.awara.ui.LocalMessageProvider
+import me.rerere.awara.ui.component.common.AppUpdateDialog
 import me.rerere.awara.ui.component.common.BackButton
+import me.rerere.awara.ui.component.common.rememberAppUpdateDownloader
 import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
 import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
 import me.rerere.awara.ui.component.player.PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS
@@ -97,12 +105,18 @@ import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.compose.koinInject
 
 /**
- * 设置页面，集中提供外观、播放器、评论区图片、下载、存储及版本信息配置项。
+ * 设置页面，集中提供外观、播放器、评论区图片、下载、存储及版本与更新配置项。
  *
  * @param downloadStorage 下载目录存储管理器（默认由 Koin 注入，便于界面测试传入隔离实例）
+ * @param updateAPI 应用版本更新检查接口
+ * @param updatePreferences 自动更新开关与忽略版本偏好读写器
  */
 @Composable
-fun SettingPage(downloadStorage: DownloadStorage = koinInject()) {
+fun SettingPage(
+    downloadStorage: DownloadStorage = koinInject(),
+    updateAPI: UpdateAPI = koinInject(),
+    updatePreferences: AppUpdatePreferences = koinInject(),
+) {
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
@@ -112,8 +126,11 @@ fun SettingPage(downloadStorage: DownloadStorage = koinInject()) {
     var showClearCacheConfirmDialog by remember { mutableStateOf(false) }
     var clearingCache by remember { mutableStateOf(false) }
     var cacheRefreshVersion by remember { mutableStateOf(0) }
-    // 控制底部“关于 -> 版本信息”卡片弹窗的显隐状态
+    // 控制底部“关于 -> 版本信息”卡片弹窗与手动检查更新状态
     var showVersionInfoDialog by remember { mutableStateOf(false) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var manualUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    val startUpdateDownload = rememberAppUpdateDownloader()
     val cacheBytes by
         produceState(initialValue = 0L, key1 = context, key2 = cacheRefreshVersion) {
             value = withContext(Dispatchers.IO) { AppCacheManager.calculateCacheBytes(context) }
@@ -171,8 +188,61 @@ fun SettingPage(downloadStorage: DownloadStorage = koinInject()) {
         VersionInfoDialog(
             versionName = BuildConfig.VERSION_NAME,
             versionCode = BuildConfig.VERSION_CODE,
+            checkingUpdate = checkingUpdate,
+            onCheckUpdate = {
+                if (checkingUpdate) return@VersionInfoDialog
+                scope.launch {
+                    checkingUpdate = true
+                    try {
+                        when (val result = updateAPI.checkLatestUpdate(BuildConfig.VERSION_NAME)) {
+                            is AppUpdateCheckResult.Available -> {
+                                showVersionInfoDialog = false
+                                manualUpdateInfo = result.updateInfo
+                            }
+
+                            AppUpdateCheckResult.UpToDate -> {
+                                val latestText = context.getString(R.string.update_already_latest)
+                                message.info { Text(latestText) }
+                            }
+
+                            is AppUpdateCheckResult.Failed -> {
+                                Log.w("SettingPage", "checkLatestUpdate failed", result.cause)
+                                val failedText = context.getString(R.string.update_check_failed)
+                                message.error { Text(failedText) }
+                            }
+                        }
+                    } finally {
+                        checkingUpdate = false
+                    }
+                }
+            },
             onOpenCurrentRepo = { context.openUrl(CURRENT_REPO_URL) },
             onDismiss = { showVersionInfoDialog = false },
+        )
+    }
+    manualUpdateInfo?.let { updateInfo ->
+        val alreadyIgnored = updatePreferences.isVersionIgnored(updateInfo.version)
+        AppUpdateDialog(
+            updateInfo = updateInfo,
+            currentVersion = BuildConfig.VERSION_NAME,
+            onDismiss = { manualUpdateInfo = null },
+            onDownload = {
+                manualUpdateInfo = null
+                startUpdateDownload(updateInfo)
+            },
+            onLinkClick = { link -> context.openUrl(link) },
+            onIgnoreVersion =
+                if (alreadyIgnored) {
+                    null
+                } else {
+                    {
+                        updatePreferences.ignoreVersion(updateInfo.version)
+                        manualUpdateInfo = null
+                        val ignoredText =
+                            context.getString(R.string.update_ignored_message, updateInfo.version)
+                        message.info { Text(ignoredText) }
+                    }
+                },
         )
     }
     Scaffold(
@@ -527,7 +597,7 @@ private fun ClearCacheConfirmDialog(
     )
 }
 
-/** 设置页底部“关于”分组组件，展示版本信息入口项。 */
+/** 设置页底部“关于”分组组件，提供版本信息弹窗入口（内含检查更新）与自动检查更新开关。 */
 @Composable
 private fun SettingAboutSection(
     versionName: String,
@@ -535,6 +605,8 @@ private fun SettingAboutSection(
     onVersionInfoClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val autoCheckUpdate =
+        rememberBooleanPreference(key = SettingKeys.AUTO_CHECK_UPDATE, default = true)
     SettingItemCategory(
         modifier = modifier,
         title = { Text(stringResource(R.string.setting_about)) },
@@ -544,6 +616,13 @@ private fun SettingAboutSection(
             text = { Text(formatAppVersionDisplay(versionName = versionName, versionCode = versionCode)) },
             icon = { Icon(Icons.Outlined.Info, null) },
             onClick = onVersionInfoClick,
+        )
+
+        SettingBooleanItem(
+            state = autoCheckUpdate,
+            title = { Text(stringResource(R.string.setting_about_auto_check_update_title)) },
+            text = { Text(stringResource(R.string.setting_about_auto_check_update_text)) },
+            icon = { Icon(Icons.Outlined.Update, null) },
         )
     }
 }

@@ -38,6 +38,7 @@ import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.entity.DownloadTask
 import me.rerere.awara.data.entity.DownloadTaskStatus
+import me.rerere.awara.data.entity.DownloadTaskType
 import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.entity.Video
 import me.rerere.awara.data.repo.MediaRepo
@@ -371,6 +372,49 @@ class DownloadManagerVMTest {
 
         downloadManager.connectionRegistry.unregisterWorker("task_conn", "worker_1")
         waitUntil { !vm.connectionSnapshots.value.containsKey("task_conn") }
+    }
+
+    @Test
+    fun completedAppUpdateCardSupportsInstallRequestAndManualDeleteOnly() = runBlocking {
+        val apkId = UUID.randomUUID().toString()
+        val apkUri = provider.createFile("$apkId.apk", ByteArray(512) { 0x11 })
+        val completedTask =
+            DownloadTask(
+                taskId = apkId,
+                resourceId = "app_update:v1.3.5",
+                title = "Awara v1.3.5",
+                url = "https://github.com/Lynn-zy/awara/releases/download/v1.3.5/Awara-1.3.5.apk",
+                thumbnail = "",
+                directoryUri = "",
+                quality = "Awara-1.3.5.apk",
+                authorName = "App update · arm64-v8a",
+                status = DownloadTaskStatus.COMPLETED,
+                downloadedBytes = 512L,
+                totalBytes = 512L,
+                workId = UUID.randomUUID().toString(),
+                destinationUri = apkUri.toString(),
+                taskType = DownloadTaskType.APP_UPDATE,
+            )
+        database.downloadTaskDao().insert(completedTask)
+
+        val vm = createViewModel()
+        waitUntil { vm.state.uiState == UiState.Success && vm.state.tasks.size == 1 }
+
+        // 点击卡片“安装”按钮发布主动安装请求
+        vm.installAppUpdate(vm.state.tasks.first())
+        val request = downloadManager.pendingAppUpdateInstall.value
+        assertEquals("v1.3.5", request?.version)
+        assertEquals(apkUri.toString(), request?.apkUriString)
+
+        // “全部取消”不应误删已完成更新卡片
+        vm.cancelAll()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, vm.state.tasks.size)
+
+        // 点击卡片“删除”按钮后移除卡片并删除物理文件
+        vm.cancel(apkId)
+        waitUntil { vm.state.uiState == UiState.Empty }
+        assertFalse(storage.exists(apkUri))
     }
 
     /** 通过 ViewModelProvider 创建 [DownloadManagerVM]，便于在 `@After` 统一清理 `viewModelScope`。 */
