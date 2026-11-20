@@ -33,17 +33,17 @@ import org.intellij.markdown.ast.visitors.Visitor
 
 private val BARE_URL_REGEX = Regex("""(?i)\b(?:https?://|mailto:)[^\s<>"'`，。；！？、（）【】]+""")
 
-// 剔除URL尾部标点并将安全链接高亮，非安全或普通字符按原样输出
-@OptIn(ExperimentalTextApi::class)
-internal fun appendSafeTextAndUrls(
-    builder: AnnotatedString.Builder,
-    rawText: AnnotatedString,
-    theme: RichTextTheme,
-) {
-    val baseOffset = builder.length
-    builder.append(rawText)
-    val matches = BARE_URL_REGEX.findAll(rawText)
-    for (match in matches) {
+/** 从普通文本中扫描出通过安全协议校验且已剥离尾部标点的裸 URL 区间。 */
+internal data class SafeUrlMatch(val start: Int, val end: Int, val url: String)
+
+/**
+ * 扫描文本中的裸 URL（`http://` / `https://` / `mailto:`），剔除成对括号外的尾部标点，
+ * 并仅保留通过 [isSafeUrl] 协议校验的安全匹配项。
+ */
+internal fun findSafeUrlsInPlainText(text: CharSequence): List<SafeUrlMatch> {
+    if (text.isEmpty()) return emptyList()
+    val results = mutableListOf<SafeUrlMatch>()
+    for (match in BARE_URL_REGEX.findAll(text)) {
         val start = match.range.first
         var matchedUrl = match.value
         while (
@@ -61,13 +61,26 @@ internal fun appendSafeTextAndUrls(
             matchedUrl = matchedUrl.dropLast(1)
         }
         val end = start + matchedUrl.length
-        if (
-            matchedUrl.isNotEmpty() &&
-                isSafeUrl(matchedUrl) &&
-                rawText.getStringAnnotations("link", start, end).isEmpty()
-        ) {
-            builder.addStyle(theme.link, baseOffset + start, baseOffset + end)
-            builder.addStringAnnotation("link", matchedUrl, baseOffset + start, baseOffset + end)
+        if (matchedUrl.isNotEmpty() && isSafeUrl(matchedUrl)) {
+            results.add(SafeUrlMatch(start = start, end = end, url = matchedUrl))
+        }
+    }
+    return results
+}
+
+// 剔除URL尾部标点并将安全链接高亮，非安全或普通字符按原样输出
+@OptIn(ExperimentalTextApi::class)
+internal fun appendSafeTextAndUrls(
+    builder: AnnotatedString.Builder,
+    rawText: AnnotatedString,
+    theme: RichTextTheme,
+) {
+    val baseOffset = builder.length
+    builder.append(rawText)
+    for (match in findSafeUrlsInPlainText(rawText)) {
+        if (rawText.getStringAnnotations("link", match.start, match.end).isEmpty()) {
+            builder.addStyle(theme.link, baseOffset + match.start, baseOffset + match.end)
+            builder.addStringAnnotation("link", match.url, baseOffset + match.start, baseOffset + match.end)
         }
     }
 }
