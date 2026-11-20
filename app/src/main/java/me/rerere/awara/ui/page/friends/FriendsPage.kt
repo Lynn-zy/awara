@@ -24,14 +24,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendRequestDto
 import me.rerere.awara.data.entity.User
@@ -41,6 +39,7 @@ import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
 import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.Spin
+import me.rerere.awara.ui.component.common.rememberPagerTabController
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
@@ -86,18 +85,18 @@ fun FriendsPage(vm: FriendsVM = koinViewModel()) {
         Column(modifier = Modifier.padding(innerPadding.excludeBottom()).fillMaxSize()) {
             // 本人查看显示好友和申请2页，非本人仅显示好友1页；采用 lambda 动态读取页数
             val pagerState = rememberPagerState { if (vm.self) 2 else 1 }
-            val scope = rememberCoroutineScope()
+            val tabController = rememberPagerTabController(pagerState)
             if (vm.self) {
-                BetterTabBar(selectedTabIndex = pagerState.currentPage) {
+                BetterTabBar(selectedTabIndex = tabController.selectedPage) {
                     Tab(
-                        selected = pagerState.currentPage == 0,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                        selected = tabController.selectedPage == 0,
+                        onClick = { tabController.selectPage(0) },
                         text = { Text(stringResource(R.string.friends)) },
                     )
 
                     Tab(
-                        selected = pagerState.currentPage == 1,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                        selected = tabController.selectedPage == 1,
+                        onClick = { tabController.selectPage(1) },
                         text = { Text(stringResource(R.string.friend_requests)) },
                     )
                 }

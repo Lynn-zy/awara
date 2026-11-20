@@ -44,7 +44,6 @@ import androidx.compose.runtime.collectAsState as collectFlowAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,7 +64,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendStatus
 import me.rerere.awara.data.dto.ProfileDto
@@ -80,6 +78,7 @@ import me.rerere.awara.ui.component.common.Button
 import me.rerere.awara.ui.component.common.ButtonType
 import me.rerere.awara.ui.component.common.ErrorStatus
 import me.rerere.awara.ui.component.common.Spin
+import me.rerere.awara.ui.component.common.rememberPagerTabController
 import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.iwara.Avatar
@@ -99,7 +98,6 @@ fun UserPage(vm: UserVM = koinViewModel()) {
     val profileState = vm.state.profile
     val blockedUsers by vm.blockedUsers.collectFlowAsState()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val message = LocalMessageProvider.current
     val navController = LocalRouterProvider.current
     val userStoreState = LocalUserStore.current.collectAsState()
@@ -368,20 +366,21 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         // 用户主页包含视频、图片、留言3个分页，页数由 PagerState 统一提供
                         val pagerState = rememberPagerState { 3 }
-                        BetterTabBar(selectedTabIndex = pagerState.currentPage) {
+                        val tabController = rememberPagerTabController(pagerState)
+                        BetterTabBar(selectedTabIndex = tabController.selectedPage) {
                             Tab(
-                                selected = pagerState.currentPage == 0,
-                                onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                                selected = tabController.selectedPage == 0,
+                                onClick = { tabController.selectPage(0) },
                                 text = { Text(stringResource(R.string.video)) },
                             )
                             Tab(
-                                selected = pagerState.currentPage == 1,
-                                onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                                selected = tabController.selectedPage == 1,
+                                onClick = { tabController.selectPage(1) },
                                 text = { Text(stringResource(R.string.image)) },
                             )
                             Tab(
-                                selected = pagerState.currentPage == 2,
-                                onClick = { scope.launch { pagerState.animateScrollToPage(2) } },
+                                selected = tabController.selectedPage == 2,
+                                onClick = { tabController.selectPage(2) },
                                 text = { Text(stringResource(R.string.comments)) },
                             )
                         }

@@ -11,14 +11,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BackButton
 import me.rerere.awara.ui.component.common.BetterTabBar
+import me.rerere.awara.ui.component.common.rememberPagerTabController
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.ext.excludeBottom
 import me.rerere.awara.ui.component.ext.onlyBottom
@@ -41,16 +40,16 @@ fun FavoritesPage(vm: FavoritesVM = koinViewModel()) {
     ) { innerPadding ->
         Column(modifier = Modifier.padding(innerPadding.excludeBottom()).fillMaxSize()) {
             val pagerState = rememberPagerState { 2 }
-            val scope = rememberCoroutineScope()
-            BetterTabBar(selectedTabIndex = pagerState.currentPage) {
+            val tabController = rememberPagerTabController(pagerState)
+            BetterTabBar(selectedTabIndex = tabController.selectedPage) {
                 Tab(
-                    selected = pagerState.currentPage == 0,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    selected = tabController.selectedPage == 0,
+                    onClick = { tabController.selectPage(0) },
                     text = { Text(stringResource(R.string.video)) },
                 )
                 Tab(
-                    selected = pagerState.currentPage == 1,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                    selected = tabController.selectedPage == 1,
+                    onClick = { tabController.selectPage(1) },
                     text = { Text(stringResource(R.string.image)) },
                 )
             }

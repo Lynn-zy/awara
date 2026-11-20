@@ -15,16 +15,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BetterTabBar
+import me.rerere.awara.ui.component.common.rememberPagerTabController
 import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.ui.page.video.pager.VideoCommentPage
 import me.rerere.awara.ui.page.video.pager.VideoOverviewPage
@@ -42,7 +41,7 @@ fun VideoPagePhoneLayout(
 ) {
     // 手机端视频详情包含简介与评论2个分页，页数由 PagerState 统一提供
     val pagerState = rememberPagerState { 2 }
-    val scope = rememberCoroutineScope()
+    val tabController = rememberPagerTabController(pagerState)
     VideoAdaptivePlayerLayoutBox(
         isPortraitVideo = isPortraitVideo,
         includeTabBar = true,
@@ -67,18 +66,18 @@ fun VideoPagePhoneLayout(
                 }
 
                 BetterTabBar(
-                    selectedTabIndex = pagerState.currentPage,
+                    selectedTabIndex = tabController.selectedPage,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Tab(
-                        selected = pagerState.currentPage == 0,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                        selected = tabController.selectedPage == 0,
+                        onClick = { tabController.selectPage(0) },
                         text = { Text(stringResource(R.string.video_tab_overview)) },
                     )
 
                     Tab(
-                        selected = pagerState.currentPage == 1,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                        selected = tabController.selectedPage == 1,
+                        onClick = { tabController.selectPage(1) },
                         text = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,

@@ -23,15 +23,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.ui.component.common.BetterTabBar
+import me.rerere.awara.ui.component.common.rememberPagerTabController
 import me.rerere.awara.ui.component.iwara.param.filter.DateFilter
 import me.rerere.awara.ui.component.iwara.param.filter.RatingFilter
 import me.rerere.awara.ui.component.iwara.param.filter.TagFilter
@@ -51,7 +50,7 @@ fun FilterAndSort(
     var showFilter by remember { mutableStateOf(false) }
     // 筛选弹窗包含标签、日期、分级共3个分页，页数由 PagerState 统一提供
     val pagerState = rememberPagerState { 3 }
-    val scope = rememberCoroutineScope()
+    val tabController = rememberPagerTabController(pagerState)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // 外层使用 Box 统一约束，防止 ModalBottomSheet 泄漏到外部 Row 参与 item 测量导致间距抖动
@@ -86,20 +85,20 @@ fun FilterAndSort(
                     modifier = Modifier.padding(bottom = 32.dp, start = 16.dp, end = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    BetterTabBar(selectedTabIndex = pagerState.currentPage) {
+                    BetterTabBar(selectedTabIndex = tabController.selectedPage) {
                         Tab(
-                            selected = pagerState.currentPage == 0,
-                            onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                            selected = tabController.selectedPage == 0,
+                            onClick = { tabController.selectPage(0) },
                             text = { Text(stringResource(R.string.tag)) },
                         )
                         Tab(
-                            selected = pagerState.currentPage == 1,
-                            onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                            selected = tabController.selectedPage == 1,
+                            onClick = { tabController.selectPage(1) },
                             text = { Text(stringResource(R.string.date)) },
                         )
                         Tab(
-                            selected = pagerState.currentPage == 2,
-                            onClick = { scope.launch { pagerState.animateScrollToPage(2) } },
+                            selected = tabController.selectedPage == 2,
+                            onClick = { tabController.selectPage(2) },
                             text = { Text(stringResource(R.string.rating)) },
                         )
                     }
