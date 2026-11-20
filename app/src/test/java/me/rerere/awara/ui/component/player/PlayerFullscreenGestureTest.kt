@@ -35,9 +35,7 @@ import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player as MediaPlayer
@@ -802,147 +800,37 @@ class PlayerFullscreenGestureTest {
 
     @Test
     fun fullscreenControlsOrderAndOpticalButtonSlotSizesMatchSpec() {
-        val (player, _) = createSeekableMockPlayer()
-        val playerState =
-            PlayerState(
-                player = player,
-                initialQuality = "1080p",
-                saveQualityPreference = {},
-                savePlaybackSpeedPreference = {},
-            )
-        val item =
-            PlayerState.PlayerItem(
-                quality = "1080p",
-                mediaItem = MediaItem.Builder().setMediaId("v4").setUri("https://example.com/v4.mp4").build(),
-            )
-        playerState.updatePlayerItems(listOf(item), targetPlayWhenReady = true)
-        playerState.markPlaybackStarted()
-        playerState.state = PlayerState.State.READY
-        playerState.playing = true
-        playerState.duration = 70_000L
-
-        val fullDimensions = resolvePlayerControlDimensions(fullscreen = true)
-        assertEquals(48.dp, fullDimensions.slotSize)
-        assertEquals(22.dp, fullDimensions.backIconSize)
-        assertEquals(28.dp, fullDimensions.scaleIconSize)
-        assertEquals(22.dp, fullDimensions.rotateIconSize)
-        assertEquals(26.dp, fullDimensions.playIconSize)
-        assertEquals(32.dp, fullDimensions.fullscreenIconSize)
-        assertEquals(17.5.sp, fullDimensions.actionTextSize)
-        assertEquals(5.dp, fullDimensions.trackHeight)
-        assertEquals(15.dp, fullDimensions.thumbSize)
-        assertEquals(2.5.dp, fullDimensions.minimalTrackHeight)
-        assertEquals(15.sp, fullDimensions.timeTextSize)
-        assertEquals(FontWeight.Medium, fullDimensions.timeTextWeight)
+        // 保留 09afdfe 中的双击浮层椭圆宽度比例，同时确认控制栏尺寸已恢复至 v1.3.4 统一 40dp 规格
         assertEquals(0.30f, DOUBLE_TAP_ELLIPSE_WIDTH_RATIO, 0.001f)
-
-        val controls = PlayerGestureControlState(FakeGestureTarget())
-        var expectedSlotPx = 0f
-        var expectedTrackPx = 0f
-
-        runGestureHarness(
-            widthPx = 1920,
-            heightPx = 1080,
-            content = {
-                expectedSlotPx = with(LocalDensity.current) { fullDimensions.slotSize.toPx() }
-                expectedTrackPx = with(LocalDensity.current) { fullDimensions.trackHeight.toPx() }
-                PlayerController(
-                    modifier = Modifier.fillMaxSize(),
-                    state = playerState,
-                    fullscreen = true,
-                    controls = controls,
-                    thumbnailEnabled = false,
-                    navigationIcon = { PlayerBackIconButton(onClick = {}) },
-                    onRotateScreen = {},
-                    actions = {
-                        PlayerActionTextButton(
-                            text = "1080p",
-                            onClick = {},
-                            modifier = Modifier.testTag("player_quality_selector"),
-                        )
-                    },
-                    controllerTrail = {
-                        PlayerFullscreenIconButton(
-                            fullscreen = true,
-                            onClick = {},
-                            modifier = Modifier.testTag("player_fullscreen_button"),
-                        )
-                    },
-                )
-            },
-        ) { pumpUi, _, _, rootSemantics ->
-            playerState.controllerState.show()
-            pumpUi()
-            val root = rootSemantics()
-            val scaleNode = findSemanticsNodeByTag(root, "player_scale_mode_button")!!
-            val rotateNode = findSemanticsNodeByTag(root, "player_rotate_screen_button")!!
-            val qualityNode = findSemanticsNodeByTag(root, "player_quality_selector")!!
-            val sliderNode = findSemanticsNodeByTag(root, "player_seek_slider")!!
-            val trackNode = findSemanticsNodeByTag(root, "player_buffered_track")!!
-            val speedNode = findSemanticsNodeByTag(root, "player_speed_selector")!!
-            val fullscreenNode = findSemanticsNodeByTag(root, "player_fullscreen_button")!!
-            val playNode = findSemanticsNodeByTag(root, "player_play_pause")!!
-
-            // 右上角顺序从左到右：缩放 -> 旋转 -> 清晰度
-            assertTrue(
-                "缩放按钮应在旋转按钮左侧",
-                scaleNode.boundsInRoot.right <= rotateNode.boundsInRoot.left + 1f,
-            )
-            assertTrue(
-                "旋转按钮应在清晰度按钮左侧",
-                rotateNode.boundsInRoot.right <= qualityNode.boundsInRoot.left + 1f,
-            )
-
-            // 右下角倍速按钮在进度条和全屏按钮之间
-            assertTrue(
-                "倍速按钮应在进度条右侧",
-                sliderNode.boundsInRoot.right <= speedNode.boundsInRoot.left + 1f,
-            )
-            assertTrue(
-                "倍速按钮应在全屏按钮左侧",
-                speedNode.boundsInRoot.right <= fullscreenNode.boundsInRoot.left + 1f,
-            )
-
-            // 全屏模式下按钮槽统一为 48dp、进度条轨道粗细为 5dp
-            assertEquals(expectedSlotPx, scaleNode.boundsInRoot.width, 1f)
-            assertEquals(expectedSlotPx, rotateNode.boundsInRoot.width, 1f)
-            assertEquals(expectedSlotPx, playNode.boundsInRoot.width, 1f)
-            assertEquals(expectedSlotPx, fullscreenNode.boundsInRoot.width, 1f)
-            assertEquals(expectedSlotPx, qualityNode.boundsInRoot.height, 1f)
-            assertEquals(expectedSlotPx, speedNode.boundsInRoot.height, 1f)
-            assertEquals(expectedTrackPx, trackNode.boundsInRoot.height, 1f)
-        }
+        assertControlBarUnifiedLayout(fullscreen = true, widthPx = 1920, heightPx = 1080)
     }
 
     @Test
-    fun compactControlBarUsesScaled32dpSlotsAndCompactSliderDimensions() {
-        val compactDimensions = resolvePlayerControlDimensions(fullscreen = false)
-        assertEquals(32.dp, compactDimensions.slotSize)
-        assertEquals(19.dp, compactDimensions.backIconSize)
-        assertEquals(21.dp, compactDimensions.playIconSize)
-        assertEquals(26.dp, compactDimensions.fullscreenIconSize)
-        assertEquals(14.sp, compactDimensions.actionTextSize)
-        assertEquals(3.5.dp, compactDimensions.trackHeight)
-        assertEquals(12.dp, compactDimensions.thumbSize)
-        assertEquals(2.dp, compactDimensions.minimalTrackHeight)
-        assertEquals(12.sp, compactDimensions.timeTextSize)
-        assertEquals(FontWeight.Medium, compactDimensions.timeTextWeight)
+    fun compactControlBarMatchesUnified40dpSlotsAnd2dpTrack() {
+        assertControlBarUnifiedLayout(fullscreen = false, widthPx = 1080, heightPx = 608)
+    }
 
+    private fun assertControlBarUnifiedLayout(
+        fullscreen: Boolean,
+        widthPx: Int,
+        heightPx: Int,
+    ) {
         val (player, _) = createSeekableMockPlayer()
+        val quality = if (fullscreen) "1080p" else "720p"
         val playerState =
             PlayerState(
                 player = player,
-                initialQuality = "720p",
+                initialQuality = quality,
                 saveQualityPreference = {},
                 savePlaybackSpeedPreference = {},
             )
         val item =
             PlayerState.PlayerItem(
-                quality = "720p",
+                quality = quality,
                 mediaItem =
                     MediaItem.Builder()
-                        .setMediaId("compact")
-                        .setUri("https://example.com/compact.mp4")
+                        .setMediaId(if (fullscreen) "v4" else "compact")
+                        .setUri("https://example.com/$quality.mp4")
                         .build(),
             )
         playerState.updatePlayerItems(listOf(item), targetPlayWhenReady = true)
@@ -954,17 +842,19 @@ class PlayerFullscreenGestureTest {
         val controls = PlayerGestureControlState(FakeGestureTarget())
         var expectedSlotPx = 0f
         var expectedTrackPx = 0f
+        var expectedThumbPx = 0f
 
         runGestureHarness(
-            widthPx = 1080,
-            heightPx = 608,
+            widthPx = widthPx,
+            heightPx = heightPx,
             content = {
-                expectedSlotPx = with(LocalDensity.current) { compactDimensions.slotSize.toPx() }
-                expectedTrackPx = with(LocalDensity.current) { compactDimensions.trackHeight.toPx() }
+                expectedSlotPx = with(LocalDensity.current) { PLAYER_CONTROL_SLOT_SIZE.toPx() }
+                expectedTrackPx = with(LocalDensity.current) { 2.dp.toPx() }
+                expectedThumbPx = with(LocalDensity.current) { PlayerSeekThumbDiameter.toPx() }
                 PlayerController(
                     modifier = Modifier.fillMaxSize(),
                     state = playerState,
-                    fullscreen = false,
+                    fullscreen = fullscreen,
                     controls = controls,
                     thumbnailEnabled = false,
                     navigationIcon = {
@@ -973,16 +863,17 @@ class PlayerFullscreenGestureTest {
                             modifier = Modifier.testTag("player_back_button"),
                         )
                     },
+                    onRotateScreen = if (fullscreen) ({}) else null,
                     actions = {
                         PlayerActionTextButton(
-                            text = "720p",
+                            text = quality,
                             onClick = {},
                             modifier = Modifier.testTag("player_quality_selector"),
                         )
                     },
                     controllerTrail = {
                         PlayerFullscreenIconButton(
-                            fullscreen = false,
+                            fullscreen = fullscreen,
                             onClick = {},
                             modifier = Modifier.testTag("player_fullscreen_button"),
                         )
@@ -995,17 +886,49 @@ class PlayerFullscreenGestureTest {
             val root = rootSemantics()
             val backNode = findSemanticsNodeByTag(root, "player_back_button")!!
             val qualityNode = findSemanticsNodeByTag(root, "player_quality_selector")!!
-            val playNode = findSemanticsNodeByTag(root, "player_play_pause")!!
+            val sliderNode = findSemanticsNodeByTag(root, "player_seek_slider")!!
+            val trackNode = findSemanticsNodeByTag(root, "player_buffered_track")!!
+            val thumbNode = findSemanticsNodeByTag(root, "player_seek_thumb")!!
             val speedNode = findSemanticsNodeByTag(root, "player_speed_selector")!!
             val fullscreenNode = findSemanticsNodeByTag(root, "player_fullscreen_button")!!
-            val trackNode = findSemanticsNodeByTag(root, "player_buffered_track")!!
+            val playNode = findSemanticsNodeByTag(root, "player_play_pause")!!
 
+            if (fullscreen) {
+                val scaleNode = findSemanticsNodeByTag(root, "player_scale_mode_button")!!
+                val rotateNode = findSemanticsNodeByTag(root, "player_rotate_screen_button")!!
+
+                // 右上角顺序从左到右：缩放 -> 旋转 -> 清晰度
+                assertTrue(
+                    "缩放按钮应在旋转按钮左侧",
+                    scaleNode.boundsInRoot.right <= rotateNode.boundsInRoot.left + 1f,
+                )
+                assertTrue(
+                    "旋转按钮应在清晰度按钮左侧",
+                    rotateNode.boundsInRoot.right <= qualityNode.boundsInRoot.left + 1f,
+                )
+                assertEquals(expectedSlotPx, scaleNode.boundsInRoot.width, 1f)
+                assertEquals(expectedSlotPx, rotateNode.boundsInRoot.width, 1f)
+            }
+
+            // 右下角倍速按钮在进度条和全屏按钮之间
+            assertTrue(
+                "倍速按钮应在进度条右侧",
+                sliderNode.boundsInRoot.right <= speedNode.boundsInRoot.left + 1f,
+            )
+            assertTrue(
+                "倍速按钮应在全屏按钮左侧",
+                speedNode.boundsInRoot.right <= fullscreenNode.boundsInRoot.left + 1f,
+            )
+
+            // 图标按钮热区槽统一为 40dp，进度条轨道为 2dp，滑块圆球为 12dp
             assertEquals(expectedSlotPx, backNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, playNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, fullscreenNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, qualityNode.boundsInRoot.height, 1f)
             assertEquals(expectedSlotPx, speedNode.boundsInRoot.height, 1f)
             assertEquals(expectedTrackPx, trackNode.boundsInRoot.height, 1f)
+            assertEquals(expectedThumbPx, thumbNode.boundsInRoot.width, 1f)
+            assertEquals(expectedThumbPx, thumbNode.boundsInRoot.height, 1f)
         }
     }
 }

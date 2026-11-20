@@ -45,6 +45,9 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import me.rerere.awara.R
 
+/** 圆球保持紧凑，独立于 Material3 为滑块保留的最小布局尺寸。 */
+internal val PlayerSeekThumbDiameter = 12.dp
+
 /** 与当前 Material3 的最小滑块布局一致，供槽内居中和预览轨道内缩共同使用。 */
 internal val PlayerSeekThumbLayoutSize = 20.dp
 
