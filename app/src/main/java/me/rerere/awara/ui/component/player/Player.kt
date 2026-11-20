@@ -69,6 +69,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -86,6 +87,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,6 +135,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -294,16 +297,67 @@ internal fun resolveInitialPlayInteractionState(state: PlayerState): InitialPlay
     )
 }
 
-/** 播放器控制栏光学归一化按钮尺寸常量，补偿各 Material 图标在 24×24 画布内原始留白差异。 */
-internal val PLAYER_CONTROL_SLOT_SIZE = 40.dp
-internal val PLAYER_BACK_ICON_SIZE = 22.dp
-internal val PLAYER_SCALE_ICON_SIZE = 21.dp
-internal val PLAYER_ROTATE_ICON_SIZE = 17.dp
-internal val PLAYER_PLAY_ICON_SIZE = 23.dp
-internal val PLAYER_FULLSCREEN_ICON_SIZE = 26.dp
-internal val PLAYER_ACTION_TEXT_SIZE = 14.sp
+/**
+ * 播放器控制栏在全屏横屏与半屏竖屏两种形态下的光学尺寸与进度条规格。
+ *
+ * 通过 [LocalPlayerControlDimensions] 下发给控制栏及外部传入槽位组件，保持按钮与轨道比例协调。
+ */
+internal data class PlayerControlDimensions(
+    val slotSize: Dp,
+    val backIconSize: Dp,
+    val scaleIconSize: Dp,
+    val rotateIconSize: Dp,
+    val playIconSize: Dp,
+    val fullscreenIconSize: Dp,
+    val actionTextSize: TextUnit,
+    val trackHeight: Dp,
+    val thumbSize: Dp,
+    val minimalTrackHeight: Dp,
+    val timeTextSize: TextUnit,
+    val timeTextWeight: FontWeight,
+)
 
-/** 播放器控制栏统一图标按钮（40dp 热区槽 + 指定光学尺寸图标）。 */
+private val FullscreenPlayerControlDimensions =
+    PlayerControlDimensions(
+        slotSize = 48.dp,
+        backIconSize = 22.dp,
+        scaleIconSize = 28.dp,
+        rotateIconSize = 22.dp,
+        playIconSize = 26.dp,
+        fullscreenIconSize = 32.dp,
+        actionTextSize = 17.5.sp,
+        trackHeight = 5.dp,
+        thumbSize = 15.dp,
+        minimalTrackHeight = 2.5.dp,
+        timeTextSize = 15.sp,
+        timeTextWeight = FontWeight.Medium,
+    )
+
+private val CompactPlayerControlDimensions =
+    PlayerControlDimensions(
+        slotSize = 32.dp,
+        backIconSize = 19.dp,
+        scaleIconSize = 22.dp,
+        rotateIconSize = 18.dp,
+        playIconSize = 21.dp,
+        fullscreenIconSize = 26.dp,
+        actionTextSize = 14.sp,
+        trackHeight = 3.5.dp,
+        thumbSize = 12.dp,
+        minimalTrackHeight = 2.dp,
+        timeTextSize = 12.sp,
+        timeTextWeight = FontWeight.Medium,
+    )
+
+/** 根据是否处于全屏状态返回对应的控制栏光学尺寸与进度条规格。 */
+internal fun resolvePlayerControlDimensions(fullscreen: Boolean): PlayerControlDimensions =
+    if (fullscreen) FullscreenPlayerControlDimensions else CompactPlayerControlDimensions
+
+internal val LocalPlayerControlDimensions =
+    staticCompositionLocalOf { CompactPlayerControlDimensions }
+
+/** 播放器控制栏统一图标按钮（跟随当前全屏/半屏热区槽与指定光学尺寸图标）。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PlayerControlIconButton(
     icon: ImageVector,
@@ -312,28 +366,31 @@ internal fun PlayerControlIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    IconButton(onClick = onClick, modifier = modifier.size(PLAYER_CONTROL_SLOT_SIZE)) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            modifier = Modifier.size(iconSize),
-        )
+    val slotSize = LocalPlayerControlDimensions.current.slotSize
+    CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+        IconButton(onClick = onClick, modifier = modifier.size(slotSize)) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(iconSize),
+            )
+        }
     }
 }
 
-/** 播放器左上角返回图标按钮（光学尺寸 22dp）。 */
+/** 播放器左上角返回图标按钮（全屏 22dp / 半屏 19dp）。 */
 @Composable
 internal fun PlayerBackIconButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     PlayerControlIconButton(
         icon = Icons.Outlined.ArrowBack,
         contentDescription = "Back",
-        iconSize = PLAYER_BACK_ICON_SIZE,
+        iconSize = LocalPlayerControlDimensions.current.backIconSize,
         onClick = onClick,
         modifier = modifier,
     )
 }
 
-/** 播放器右下角全屏切换图标按钮（光学尺寸 26dp）。 */
+/** 播放器右下角全屏切换图标按钮（全屏 32dp / 半屏 26dp）。 */
 @Composable
 internal fun PlayerFullscreenIconButton(
     fullscreen: Boolean,
@@ -343,13 +400,14 @@ internal fun PlayerFullscreenIconButton(
     PlayerControlIconButton(
         icon = if (!fullscreen) Icons.Outlined.Fullscreen else Icons.Outlined.FullscreenExit,
         contentDescription = "Fullscreen",
-        iconSize = PLAYER_FULLSCREEN_ICON_SIZE,
+        iconSize = LocalPlayerControlDimensions.current.fullscreenIconSize,
         onClick = onClick,
         modifier = modifier,
     )
 }
 
-/** 播放器控制栏统一文字动作按钮（高度 40dp，字号 14sp，用于清晰度与倍速等切换入口）。 */
+/** 播放器控制栏统一文字动作按钮（全屏 48dp / 17.5sp；半屏 32dp / 14sp，用于清晰度与倍速入口）。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PlayerActionTextButton(
     text: String,
@@ -357,31 +415,34 @@ internal fun PlayerActionTextButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        modifier = modifier.defaultMinSize(minWidth = PLAYER_CONTROL_SLOT_SIZE, minHeight = PLAYER_CONTROL_SLOT_SIZE),
-    ) {
-        Text(
-            text = text,
-            color = if (enabled) Color.White else Color.White.copy(alpha = 0.38f),
-            fontSize = PLAYER_ACTION_TEXT_SIZE,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    val dimensions = LocalPlayerControlDimensions.current
+    CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+        TextButton(
+            onClick = onClick,
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            modifier = modifier.widthIn(min = dimensions.slotSize).height(dimensions.slotSize),
+        ) {
+            Text(
+                text = text,
+                color = if (enabled) Color.White else Color.White.copy(alpha = 0.38f),
+                fontSize = dimensions.actionTextSize,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
 /** 左右双击快进/快退浮层定稿参数（方案 A · 舒展柔白大椭圆 + M4 触点柔白光环）。 */
 private const val DOUBLE_TAP_SEEK_HOLD_MS = 600L
 private const val DOUBLE_TAP_SEEK_FADE_OUT_MS = 180L
-private const val DOUBLE_TAP_ELLIPSE_WIDTH_RATIO = 0.35f
+internal const val DOUBLE_TAP_ELLIPSE_WIDTH_RATIO = 0.30f
 private const val DOUBLE_TAP_ELLIPSE_VERTICAL_STRETCH = 1.75f
-private const val DOUBLE_TAP_ELLIPSE_EDGE_FEATHER = 0.16f
+private const val DOUBLE_TAP_ELLIPSE_EDGE_FEATHER = 0.45f
 private const val DOUBLE_TAP_ELLIPSE_FILL_ALPHA = 0.10f
-private const val DOUBLE_TAP_VEIL_PEAK_ALPHA = 0.05f
+private const val DOUBLE_TAP_VEIL_PEAK_ALPHA = 0.20f
 private const val DOUBLE_TAP_VEIL_SPREAD = 0.25f
 private const val DOUBLE_TAP_VEIL_DURATION_MS = 300
 private const val DOUBLE_TAP_TEXT_SHADOW_ALPHA = 0.45f
@@ -759,6 +820,8 @@ internal fun PlayerController(
     val safeTop = maxOf(edgeMargin, systemBars.getTop(density).toFloat())
     val safeBottom = maxOf(edgeMargin, systemGestures.getBottom(density).toFloat())
 
+    val dimensions = resolvePlayerControlDimensions(fullscreen)
+    CompositionLocalProvider(LocalPlayerControlDimensions provides dimensions) {
     Box(
         modifier =
             modifier
@@ -976,7 +1039,7 @@ internal fun PlayerController(
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         modifier =
                             Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp)
+                                .heightIn(min = dimensions.slotSize)
                                 .testTag("player_top_controls"),
                     ) {
                         navigationIcon?.invoke()
@@ -997,7 +1060,7 @@ internal fun PlayerController(
                                 icon = Icons.Outlined.FitScreen,
                                 contentDescription =
                                     stringResource(R.string.player_scale_mode_action),
-                                iconSize = PLAYER_SCALE_ICON_SIZE,
+                                iconSize = dimensions.scaleIconSize,
                                 onClick = {
                                     lastInteract = System.currentTimeMillis()
                                     doubleTapSeekFeedback = null
@@ -1014,7 +1077,7 @@ internal fun PlayerController(
                                     icon = Icons.Outlined.ScreenRotation,
                                     contentDescription =
                                         stringResource(R.string.player_rotate_screen),
-                                    iconSize = PLAYER_ROTATE_ICON_SIZE,
+                                    iconSize = dimensions.rotateIconSize,
                                     onClick = {
                                         lastInteract = System.currentTimeMillis()
                                         onRotateScreen()
@@ -1028,7 +1091,7 @@ internal fun PlayerController(
                     }
                 } else {
                     // 保留预览与提示的布局基准，不让隐藏标题改变手势中画面位置。
-                    Box(Modifier.height(48.dp).fillMaxWidth()) {
+                    Box(Modifier.height(dimensions.slotSize).fillMaxWidth()) {
                         connections?.let {
                             CdnConnectionDebugText(
                                 it,
@@ -1088,16 +1151,16 @@ internal fun PlayerController(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier =
                                 Modifier.fillMaxWidth()
-                                    .heightIn(min = 48.dp)
+                                    .heightIn(min = dimensions.slotSize)
                                     .testTag("player_bottom_controls"),
                         ) {
-                            // 播放/暂停按钮（统一 40dp 热区槽 + 23dp 光学尺寸图标）
+                            // 播放/暂停按钮（全屏 48dp/26dp，半屏 32dp/21dp）
                             PlayerControlIconButton(
                                 icon =
                                     if (state.playing) Icons.Outlined.Pause
                                     else Icons.Outlined.PlayArrow,
                                 contentDescription = if (state.playing) "Pause" else "Play",
-                                iconSize = PLAYER_PLAY_ICON_SIZE,
+                                iconSize = dimensions.playIconSize,
                                 onClick = {
                                     if (state.playing) state.pause() else state.play()
                                 },
@@ -1109,6 +1172,7 @@ internal fun PlayerController(
                                 previewState = previewState,
                                 fraction = progressFraction,
                                 bufferedFraction = bufferedFraction,
+                                dimensions = dimensions,
                                 enabled =
                                     inputEnabled &&
                                         state.duration > 0L &&
@@ -1140,7 +1204,13 @@ internal fun PlayerController(
                                     "${formatTime(displayPosition)}/${formatTime(state.duration)}",
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.labelSmall,
+                                style =
+                                    MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = dimensions.timeTextSize,
+                                        lineHeight = dimensions.timeTextSize * 1.25f,
+                                        fontWeight = dimensions.timeTextWeight,
+                                        fontFeatureSettings = "tnum",
+                                    ),
                                 modifier =
                                     Modifier.widthIn(max = timeMaxWidth)
                                         .testTag("player_playback_time"),
@@ -1169,7 +1239,7 @@ internal fun PlayerController(
                         }
                     }
                 } else {
-                    Spacer(Modifier.height(48.dp))
+                    Spacer(Modifier.height(dimensions.slotSize))
                 }
             }
 
@@ -1194,7 +1264,7 @@ internal fun PlayerController(
                 modifier =
                     Modifier.align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(2.dp)
+                        .height(dimensions.minimalTrackHeight)
                         .testTag("player_minimal_progress")
                         .semantics {
                             progressBarRangeInfo = ProgressBarRangeInfo(progressFraction, 0f..1f)
@@ -1295,6 +1365,7 @@ internal fun PlayerController(
                 }
             }
         }
+    }
     }
 }
 
@@ -1806,7 +1877,7 @@ private fun PlayerDoubleTapSeekFeedback(
             }
         }
 
-        // 宽度取 0.35 * 0.92，使内部中心正好对齐原型中 rx * 0.46 的视觉焦点位置
+        // 宽度取 widthRatio * 0.92，使内部中心正好对齐原型中 rx * 0.46 的视觉焦点位置
         Box(
             modifier =
                 Modifier.align(
@@ -2065,6 +2136,7 @@ private fun ProgressSlider(
     previewState: SeekPreviewState,
     fraction: Float,
     bufferedFraction: Float,
+    dimensions: PlayerControlDimensions,
     enabled: Boolean,
     interactionKey: Any,
     onTouch: () -> Unit,
@@ -2092,91 +2164,99 @@ private fun ProgressSlider(
         }
     }
 
-    Box(modifier = modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
-        Slider(
-            value = fraction,
-            onValueChange = { ratio ->
-                if (!enabled || (touchInProgress && isDragCancelled)) return@Slider
-                if (!touchInProgress) isDragCancelled = false
-                if (!previewState.isActive) {
-                    previewState.startSlider(state.player.currentPosition, state.duration)
-                }
-                previewState.updateSlider(ratio)
-                onTouch()
-            },
-            onValueChangeFinished = {
-                if (enabled && !isDragCancelled && (!touchInProgress || touchReleased)) {
-                    val target = previewState.commit()
-                    if (target != null) {
-                        state.seekTo(target)
+    Box(
+        modifier = modifier.heightIn(min = dimensions.slotSize),
+        contentAlignment = Alignment.Center,
+    ) {
+        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+            Slider(
+                value = fraction,
+                onValueChange = { ratio ->
+                    if (!enabled || (touchInProgress && isDragCancelled)) return@Slider
+                    if (!touchInProgress) isDragCancelled = false
+                    if (!previewState.isActive) {
+                        previewState.startSlider(state.player.currentPosition, state.duration)
                     }
+                    previewState.updateSlider(ratio)
                     onTouch()
-                    onFinished()
-                }
-            },
-            enabled = enabled,
-            interactionSource = interactionSource,
-            thumb = {
-                // Material3 为滑块保留至少 20dp，需在槽内居中较小的可见圆球。
-                Box(
-                    modifier = Modifier.size(PlayerSeekThumbLayoutSize),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    SliderDefaults.Thumb(
-                        interactionSource = interactionSource,
-                        enabled = enabled,
-                        thumbSize = DpSize(PlayerSeekThumbDiameter, PlayerSeekThumbDiameter),
-                        modifier =
-                            Modifier.size(PlayerSeekThumbDiameter).testTag("player_seek_thumb"),
-                    )
-                }
-            },
-            track = { positions ->
-                PlayerProgressTrack(
-                    playedFraction = positions.activeRange.endInclusive,
-                    bufferedFraction = bufferedFraction,
-                    modifier = Modifier.fillMaxWidth().height(2.dp).testTag("player_buffered_track"),
-                )
-            },
-            modifier =
-                Modifier.fillMaxWidth().testTag("player_seek_slider").pointerInput(
-                    interactionKey,
-                    enabled,
-                ) {
-                    if (!enabled) return@pointerInput
-                    awaitEachGesture {
-                        val down = awaitFirstDown(false, PointerEventPass.Initial)
-                        touchInProgress = true
-                        touchReleased = false
-                        isDragCancelled = false
-                        try {
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                val pointer = event.changes.firstOrNull { it.id == down.id }
-                                if (pointer == null || event.changes.size > 1) {
-                                    isDragCancelled = true
-                                    previewState.cancel()
-                                    // 保持取消门控至所有触点抬起，禁止剩余手指重新启动 Slider。
-                                    if (event.changes.any { it.pressed }) continue
-                                    break
-                                }
-                                if (!pointer.pressed) {
-                                    touchReleased = !isDragCancelled
-                                    awaitPointerEvent(PointerEventPass.Final)
-                                    break
-                                }
-                            }
-                        } finally {
-                            if (!touchReleased) {
-                                isDragCancelled = true
-                                previewState.cancel()
-                            }
-                            touchInProgress = false
-                            onFinished()
+                },
+                onValueChangeFinished = {
+                    if (enabled && !isDragCancelled && (!touchInProgress || touchReleased)) {
+                        val target = previewState.commit()
+                        if (target != null) {
+                            state.seekTo(target)
                         }
+                        onTouch()
+                        onFinished()
                     }
                 },
-        )
+                enabled = enabled,
+                interactionSource = interactionSource,
+                thumb = {
+                    // Material3 为滑块保留至少 20dp，需在槽内居中当前形态对应的圆球直径。
+                    Box(
+                        modifier = Modifier.size(PlayerSeekThumbLayoutSize),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        SliderDefaults.Thumb(
+                            interactionSource = interactionSource,
+                            enabled = enabled,
+                            thumbSize = DpSize(dimensions.thumbSize, dimensions.thumbSize),
+                            modifier =
+                                Modifier.size(dimensions.thumbSize).testTag("player_seek_thumb"),
+                        )
+                    }
+                },
+                track = { positions ->
+                    PlayerProgressTrack(
+                        playedFraction = positions.activeRange.endInclusive,
+                        bufferedFraction = bufferedFraction,
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .height(dimensions.trackHeight)
+                                .testTag("player_buffered_track"),
+                    )
+                },
+                modifier =
+                    Modifier.fillMaxWidth().testTag("player_seek_slider").pointerInput(
+                        interactionKey,
+                        enabled,
+                    ) {
+                        if (!enabled) return@pointerInput
+                        awaitEachGesture {
+                            val down = awaitFirstDown(false, PointerEventPass.Initial)
+                            touchInProgress = true
+                            touchReleased = false
+                            isDragCancelled = false
+                            try {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    val pointer = event.changes.firstOrNull { it.id == down.id }
+                                    if (pointer == null || event.changes.size > 1) {
+                                        isDragCancelled = true
+                                        previewState.cancel()
+                                        // 保持取消门控至所有触点抬起，禁止剩余手指重新启动 Slider。
+                                        if (event.changes.any { it.pressed }) continue
+                                        break
+                                    }
+                                    if (!pointer.pressed) {
+                                        touchReleased = !isDragCancelled
+                                        awaitPointerEvent(PointerEventPass.Final)
+                                        break
+                                    }
+                                }
+                            } finally {
+                                if (!touchReleased) {
+                                    isDragCancelled = true
+                                    previewState.cancel()
+                                }
+                                touchInProgress = false
+                                onFinished()
+                            }
+                        }
+                    },
+            )
+        }
     }
 }
 

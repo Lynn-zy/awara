@@ -35,7 +35,9 @@ import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player as MediaPlayer
@@ -819,14 +821,31 @@ class PlayerFullscreenGestureTest {
         playerState.playing = true
         playerState.duration = 70_000L
 
+        val fullDimensions = resolvePlayerControlDimensions(fullscreen = true)
+        assertEquals(48.dp, fullDimensions.slotSize)
+        assertEquals(22.dp, fullDimensions.backIconSize)
+        assertEquals(28.dp, fullDimensions.scaleIconSize)
+        assertEquals(22.dp, fullDimensions.rotateIconSize)
+        assertEquals(26.dp, fullDimensions.playIconSize)
+        assertEquals(32.dp, fullDimensions.fullscreenIconSize)
+        assertEquals(17.5.sp, fullDimensions.actionTextSize)
+        assertEquals(5.dp, fullDimensions.trackHeight)
+        assertEquals(15.dp, fullDimensions.thumbSize)
+        assertEquals(2.5.dp, fullDimensions.minimalTrackHeight)
+        assertEquals(15.sp, fullDimensions.timeTextSize)
+        assertEquals(FontWeight.Medium, fullDimensions.timeTextWeight)
+        assertEquals(0.30f, DOUBLE_TAP_ELLIPSE_WIDTH_RATIO, 0.001f)
+
         val controls = PlayerGestureControlState(FakeGestureTarget())
         var expectedSlotPx = 0f
+        var expectedTrackPx = 0f
 
         runGestureHarness(
             widthPx = 1920,
             heightPx = 1080,
             content = {
-                expectedSlotPx = with(LocalDensity.current) { PLAYER_CONTROL_SLOT_SIZE.toPx() }
+                expectedSlotPx = with(LocalDensity.current) { fullDimensions.slotSize.toPx() }
+                expectedTrackPx = with(LocalDensity.current) { fullDimensions.trackHeight.toPx() }
                 PlayerController(
                     modifier = Modifier.fillMaxSize(),
                     state = playerState,
@@ -859,6 +878,7 @@ class PlayerFullscreenGestureTest {
             val rotateNode = findSemanticsNodeByTag(root, "player_rotate_screen_button")!!
             val qualityNode = findSemanticsNodeByTag(root, "player_quality_selector")!!
             val sliderNode = findSemanticsNodeByTag(root, "player_seek_slider")!!
+            val trackNode = findSemanticsNodeByTag(root, "player_buffered_track")!!
             val speedNode = findSemanticsNodeByTag(root, "player_speed_selector")!!
             val fullscreenNode = findSemanticsNodeByTag(root, "player_fullscreen_button")!!
             val playNode = findSemanticsNodeByTag(root, "player_play_pause")!!
@@ -883,13 +903,109 @@ class PlayerFullscreenGestureTest {
                 speedNode.boundsInRoot.right <= fullscreenNode.boundsInRoot.left + 1f,
             )
 
-            // 所有图标按钮热区槽统一为 40dp
+            // 全屏模式下按钮槽统一为 48dp、进度条轨道粗细为 5dp
             assertEquals(expectedSlotPx, scaleNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, rotateNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, playNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, fullscreenNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, qualityNode.boundsInRoot.height, 1f)
             assertEquals(expectedSlotPx, speedNode.boundsInRoot.height, 1f)
+            assertEquals(expectedTrackPx, trackNode.boundsInRoot.height, 1f)
+        }
+    }
+
+    @Test
+    fun compactControlBarUsesScaled32dpSlotsAndCompactSliderDimensions() {
+        val compactDimensions = resolvePlayerControlDimensions(fullscreen = false)
+        assertEquals(32.dp, compactDimensions.slotSize)
+        assertEquals(19.dp, compactDimensions.backIconSize)
+        assertEquals(21.dp, compactDimensions.playIconSize)
+        assertEquals(26.dp, compactDimensions.fullscreenIconSize)
+        assertEquals(14.sp, compactDimensions.actionTextSize)
+        assertEquals(3.5.dp, compactDimensions.trackHeight)
+        assertEquals(12.dp, compactDimensions.thumbSize)
+        assertEquals(2.dp, compactDimensions.minimalTrackHeight)
+        assertEquals(12.sp, compactDimensions.timeTextSize)
+        assertEquals(FontWeight.Medium, compactDimensions.timeTextWeight)
+
+        val (player, _) = createSeekableMockPlayer()
+        val playerState =
+            PlayerState(
+                player = player,
+                initialQuality = "720p",
+                saveQualityPreference = {},
+                savePlaybackSpeedPreference = {},
+            )
+        val item =
+            PlayerState.PlayerItem(
+                quality = "720p",
+                mediaItem =
+                    MediaItem.Builder()
+                        .setMediaId("compact")
+                        .setUri("https://example.com/compact.mp4")
+                        .build(),
+            )
+        playerState.updatePlayerItems(listOf(item), targetPlayWhenReady = true)
+        playerState.markPlaybackStarted()
+        playerState.state = PlayerState.State.READY
+        playerState.playing = true
+        playerState.duration = 70_000L
+
+        val controls = PlayerGestureControlState(FakeGestureTarget())
+        var expectedSlotPx = 0f
+        var expectedTrackPx = 0f
+
+        runGestureHarness(
+            widthPx = 1080,
+            heightPx = 608,
+            content = {
+                expectedSlotPx = with(LocalDensity.current) { compactDimensions.slotSize.toPx() }
+                expectedTrackPx = with(LocalDensity.current) { compactDimensions.trackHeight.toPx() }
+                PlayerController(
+                    modifier = Modifier.fillMaxSize(),
+                    state = playerState,
+                    fullscreen = false,
+                    controls = controls,
+                    thumbnailEnabled = false,
+                    navigationIcon = {
+                        PlayerBackIconButton(
+                            onClick = {},
+                            modifier = Modifier.testTag("player_back_button"),
+                        )
+                    },
+                    actions = {
+                        PlayerActionTextButton(
+                            text = "720p",
+                            onClick = {},
+                            modifier = Modifier.testTag("player_quality_selector"),
+                        )
+                    },
+                    controllerTrail = {
+                        PlayerFullscreenIconButton(
+                            fullscreen = false,
+                            onClick = {},
+                            modifier = Modifier.testTag("player_fullscreen_button"),
+                        )
+                    },
+                )
+            },
+        ) { pumpUi, _, _, rootSemantics ->
+            playerState.controllerState.show()
+            pumpUi()
+            val root = rootSemantics()
+            val backNode = findSemanticsNodeByTag(root, "player_back_button")!!
+            val qualityNode = findSemanticsNodeByTag(root, "player_quality_selector")!!
+            val playNode = findSemanticsNodeByTag(root, "player_play_pause")!!
+            val speedNode = findSemanticsNodeByTag(root, "player_speed_selector")!!
+            val fullscreenNode = findSemanticsNodeByTag(root, "player_fullscreen_button")!!
+            val trackNode = findSemanticsNodeByTag(root, "player_buffered_track")!!
+
+            assertEquals(expectedSlotPx, backNode.boundsInRoot.width, 1f)
+            assertEquals(expectedSlotPx, playNode.boundsInRoot.width, 1f)
+            assertEquals(expectedSlotPx, fullscreenNode.boundsInRoot.width, 1f)
+            assertEquals(expectedSlotPx, qualityNode.boundsInRoot.height, 1f)
+            assertEquals(expectedSlotPx, speedNode.boundsInRoot.height, 1f)
+            assertEquals(expectedTrackPx, trackNode.boundsInRoot.height, 1f)
         }
     }
 }
