@@ -40,8 +40,8 @@ android {
         applicationId = "me.rerere.awara"
         minSdk = 26
         targetSdk = 33
-        versionCode = 35
-        versionName = "1.3.5"
+        versionCode = 36
+        versionName = "1.3.6"
 
         vectorDrawables { useSupportLibrary = true }
     }
