@@ -466,6 +466,14 @@ class DownloadStorage(private val context: Context) {
         }
     }
 
+    /**
+     * 删除目标 URI 对应的下载文件；若底层文件已不存在或已被外部重命名则幂等返回。
+     *
+     * @param uri 待删除文件的 Content URI
+     * @throws IOException 当文件确认仍存在但删除失败时抛出
+     * @throws SecurityException 当无权限删除目标文件时抛出
+     * @throws IllegalArgumentException 当非 SAF 文件缺失原因导致存储提供方拒绝该 URI 时抛出
+     */
     fun delete(uri: Uri) {
         if (uri.toString().isBlank()) return
         try {
@@ -480,16 +488,50 @@ class DownloadStorage(private val context: Context) {
             }
         } catch (_: FileNotFoundException) {
             // 文件已不存在时无需重复删除
+        } catch (e: IllegalArgumentException) {
+            // SAF FileSystemProvider.isChildDocument 在文件已删除或重命名时会将 FileNotFoundException 包装为 IllegalArgumentException
+            if (!isMissingSafDocumentException(uri, e)) {
+                throw e
+            }
         }
     }
 
+    /**
+     * 校验指定 URI 对应的底层文件是否仍存在且可打开读取。
+     *
+     * 将文件缺失抛出的 [FileNotFoundException]，以及 SAF `FileSystemProvider.isChildDocument`
+     * 在底层文件被删除或外部重命名时包装的 [IllegalArgumentException] 统一收敛为 `false`；
+     * 授权撤销（[SecurityException]）或其他非法参数异常保持向上抛出，避免掩盖真实错误。
+     *
+     * @param uri 待校验的 Content URI
+     * @return 文件存在且成功打开只读描述符时返回 true，否则返回 false
+     * @throws SecurityException 当缺少该 URI 的读取权限时抛出
+     * @throws IllegalArgumentException 当非 SAF 文件缺失原因导致 URI 无法解析时抛出
+     */
     fun exists(uri: Uri): Boolean {
         if (uri.toString().isBlank()) return false
         return try {
             context.contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false
         } catch (_: FileNotFoundException) {
             false
+        } catch (e: IllegalArgumentException) {
+            if (isMissingSafDocumentException(uri, e)) {
+                false
+            } else {
+                throw e
+            }
         }
+    }
+
+    private fun isMissingSafDocumentException(
+        uri: Uri,
+        exception: IllegalArgumentException,
+    ): Boolean {
+        if (!DocumentsContract.isDocumentUri(context, uri)) return false
+        if (exception.cause is FileNotFoundException) return true
+        val message = exception.message.orEmpty()
+        return message.contains("FileNotFoundException", ignoreCase = true) ||
+            message.contains("Missing file for", ignoreCase = true)
     }
 
     private fun createDefaultPublicDestination(
