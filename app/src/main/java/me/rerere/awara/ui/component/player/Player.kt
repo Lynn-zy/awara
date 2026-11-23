@@ -294,6 +294,31 @@ internal fun resolveInitialPlayInteractionState(state: PlayerState): InitialPlay
     )
 }
 
+/**
+ * 判断播放器在收到生命周期事件时是否应自动暂停。
+ *
+ * 常规单窗口模式下于 [Lifecycle.Event.ON_PAUSE] 立即暂停（切后台、进多任务、锁屏及页内跳转无须等待窗口完全隐藏）；
+ * 分屏/小窗多窗口模式下延后至 [Lifecycle.Event.ON_STOP] 暂停，避免操作另一分屏窗口时误暂停播放；
+ * 配置变更重建期间始终不触发自动暂停。
+ *
+ * @param event 当前生命周期事件
+ * @param isChangingConfigurations 宿主 Activity 是否正处于配置变更重建中
+ * @param isInMultiWindowMode 宿主 Activity 是否处于分屏或小窗多窗口模式
+ * @return 需要立即暂停播放时返回 true，否则返回 false
+ */
+internal fun shouldAutoPauseOnLifecycleEvent(
+    event: Lifecycle.Event,
+    isChangingConfigurations: Boolean,
+    isInMultiWindowMode: Boolean,
+): Boolean {
+    if (isChangingConfigurations) return false
+    return when (event) {
+        Lifecycle.Event.ON_PAUSE -> !isInMultiWindowMode
+        Lifecycle.Event.ON_STOP -> true
+        else -> false
+    }
+}
+
 /** 播放器控制栏光学归一化按钮尺寸常量，补偿各 Material 图标在 24×24 画布内原始留白差异。 */
 internal val PLAYER_CONTROL_SLOT_SIZE = 40.dp
 internal val PLAYER_BACK_ICON_SIZE = 22.dp
@@ -521,7 +546,13 @@ internal fun PlayerController(
                 previewState.cancel()
                 previewState.clearPending()
             }
-            if (event == Lifecycle.Event.ON_STOP && activity?.isChangingConfigurations != true) {
+            if (
+                shouldAutoPauseOnLifecycleEvent(
+                    event = event,
+                    isChangingConfigurations = activity?.isChangingConfigurations == true,
+                    isInMultiWindowMode = activity?.isInMultiWindowMode == true,
+                )
+            ) {
                 state.pause()
             }
         }
