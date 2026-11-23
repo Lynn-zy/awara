@@ -153,14 +153,16 @@ fun DownloadDirectoryDialog(
         }
     }
 
-    // 默认路径未经过 SAF 授权时，引导用户在系统选择器中一键授权 Download/Awara 读取权限（不改变默认下载配置）
+    // 默认路径未经过 SAF 读写授权时，引导用户在系统选择器中一键授权 Download/Awara 读写权限（不改变默认下载配置）
     val defaultFolderAuthLauncher =
         rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocumentTree()) {
             grantedUri: Uri? ->
             if (grantedUri == null) return@rememberLauncherForActivityResult
             scope.launch {
                 try {
-                    withContext(Dispatchers.IO) { downloadStorage.persistReadPermission(grantedUri) }
+                    withContext(Dispatchers.IO) {
+                        downloadStorage.persistTreeReadWritePermission(grantedUri)
+                    }
                     runLocalScanAndClose(grantedUri.toString())
                 } catch (e: CancellationException) {
                     throw e

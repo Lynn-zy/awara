@@ -8,6 +8,8 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -187,6 +189,48 @@ fun DownloadPage(
     var showSortMenu by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var itemsPendingAuthorLink by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
+    var pendingWritePermissionForPicker by
+        remember { mutableStateOf<DownloadVM.PendingDeleteWritePermission?>(null) }
+
+    // 删除旧版只读扫描导入的 SAF 视频时，补授对应目录读写权限并自动重试剩余删除项
+    val deleteWritePermissionLauncher =
+        rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocumentTree()) {
+            grantedUri: Uri? ->
+            val activePending = pendingWritePermissionForPicker
+            pendingWritePermissionForPicker = null
+            if (grantedUri == null || activePending == null) {
+                return@rememberLauncherForActivityResult
+            }
+            if (!downloadStorage.matchesSafTreeWriteTarget(grantedUri, activePending.target)) {
+                message.warning {
+                    Text(
+                        context.getString(
+                            R.string.download_delete_permission_wrong_folder,
+                            activePending.target.displayLabel,
+                        )
+                    )
+                }
+                return@rememberLauncherForActivityResult
+            }
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        downloadStorage.persistTreeReadWritePermission(grantedUri)
+                    }
+                    vm.delete(activePending.items) { successIds, _ ->
+                        selectedIds = selectedIds - successIds
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    val reason =
+                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                    message.error {
+                        Text(context.getString(R.string.download_delete_failed, reason))
+                    }
+                }
+            }
+        }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var searchCategory by rememberSaveable { mutableStateOf(SearchCategory.TITLE) }
@@ -300,6 +344,51 @@ fun DownloadPage(
         val reason = vm.state.deleteError ?: return@LaunchedEffect
         message.error { Text(stringResource(R.string.download_delete_failed, reason)) }
         vm.clearDeleteError()
+    }
+
+    vm.state.pendingDeleteWritePermission?.let { pendingPermission ->
+        AlertDialog(
+            onDismissRequest = { vm.clearPendingDeleteWritePermission() },
+            title = { Text(text = stringResource(R.string.download_delete_permission_title)) },
+            text = {
+                Text(
+                    text =
+                        stringResource(
+                            R.string.download_delete_permission_message,
+                            pendingPermission.target.displayLabel,
+                        )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingWritePermissionForPicker = pendingPermission
+                        vm.clearPendingDeleteWritePermission()
+                        runCatching {
+                                deleteWritePermissionLauncher.launch(
+                                    pendingPermission.target.initialPickerUri
+                                )
+                            }
+                            .onFailure { e ->
+                                pendingWritePermissionForPicker = null
+                                val reason =
+                                    e.localizedMessage?.takeIf { it.isNotBlank() }
+                                        ?: e.javaClass.simpleName
+                                message.error {
+                                    Text(context.getString(R.string.download_delete_failed, reason))
+                                }
+                            }
+                    }
+                ) {
+                    Text(text = stringResource(R.string.download_delete_permission_grant))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.clearPendingDeleteWritePermission() }) {
+                    Text(text = stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 
     if (showBatchDeleteConfirm) {

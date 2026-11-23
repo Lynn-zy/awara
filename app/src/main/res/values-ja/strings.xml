@@ -175,7 +175,11 @@
     <string name="download_group_authors">投稿者別</string>
     <string name="download_author_group">%1$s · %2$d 件</string>
     <string name="download_unknown_author">投稿者不明</string>
-    <string name="download_delete_failed">削除できませんでした：%1$s</string>
+    <string name="download_delete_failed">動画を削除できませんでした：%1$s</string>
+    <string name="download_delete_permission_title">フォルダの書き込み権限が必要です</string>
+    <string name="download_delete_permission_message">「%1$s」への書き込み権限がないため、ローカル動画ファイルを削除できません。削除を続行するには、このフォルダへの書き込み権限を許可してください。</string>
+    <string name="download_delete_permission_grant">権限を許可</string>
+    <string name="download_delete_permission_wrong_folder">書き込み権限を付与するため「%1$s」フォルダを選択してください</string>
     <string name="download_play_failed">再生できませんでした：%1$s</string>
     <string name="download_empty">ダウンロード済みの動画はありません</string>
     <string name="download_manager">ダウンロード管理</string>
@@ -209,7 +213,7 @@
     <string name="download_author_folder_stats">%1$d 件の動画 · %2$s · %3$s</string>
     <string name="download_author_folder_open">フォルダを開く</string>
     <string name="download_more_actions">その他の操作</string>
-    <string name="download_delete_confirm_title">ダウンロードファイルを削除</string>
+    <string name="download_delete_confirm_title">動画を削除</string>
     <string name="download_delete_confirm_message">「%1$s」を削除しますか？端末上のファイルも削除されます。</string>
     <string name="download_folder_empty">このカテゴリには動画がありません</string>
     <string name="download_back">戻る</string>
@@ -354,7 +358,7 @@
     <string name="notifications">通知</string>
     <string name="notifications_mark_all_read">すべて既読にする</string>
     <string name="download_show_directory">ダウンロード先を開く</string>
-    <string name="download_delete">ダウンロードファイルを削除</string>
+    <string name="download_delete">動画を削除</string>
     <string name="download_restore">カードを復元</string>
     <string name="comment_load_failed">コメントの読み込みに失敗しました：%1$s</string>
     <string name="notification_new_reply">%1$s さんがあなたのコメントに返信しました</string>

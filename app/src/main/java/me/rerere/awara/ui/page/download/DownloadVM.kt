@@ -22,6 +22,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.download.LocalVideoThumbnailGenerator
+import me.rerere.awara.data.download.SafTreeWriteTarget
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.canLinkAuthor
 import me.rerere.awara.data.repo.UserRepo
@@ -229,21 +230,41 @@ class DownloadVM(
         val targetItems = items.filter { it.id !in state.deletingIds }
         if (targetItems.isEmpty()) return
         val targetIds = targetItems.map { it.id }.toSet()
-        // 调度前同步保护正在删除的 ID，避免重复点击
-        state = state.copy(deletingIds = state.deletingIds + targetIds)
+        // 调度前同步保护正在删除的 ID 并清空旧的待补授权请求，避免重复点击与旧状态残留
+        state =
+            state.copy(
+                deletingIds = state.deletingIds + targetIds,
+                pendingDeleteWritePermission = null,
+            )
 
         viewModelScope.launch {
             val successIds = mutableSetOf<Int>()
             val failedIds = mutableSetOf<Int>()
+            val permissionRetryItems = mutableListOf<DownloadItem>()
+            var missingPermissionTarget: SafTreeWriteTarget? = null
             var lastError: String? = null
 
             try {
                 for (item in targetItems) {
+                    val rawUri = item.uri.trim()
+                    val parsedUri = rawUri.takeIf { it.isNotEmpty() }?.let(Uri::parse)
+                    // 同批次中属于已确认缺写权限目录的其余条目直接归入待补授权重试列表，避免重复失败 IPC
+                    if (
+                        missingPermissionTarget != null &&
+                            parsedUri != null &&
+                            downloadStorage.matchesSafTreeWriteTarget(
+                                parsedUri,
+                                missingPermissionTarget,
+                            )
+                    ) {
+                        failedIds.add(item.id)
+                        permissionRetryItems.add(item)
+                        continue
+                    }
                     try {
                         withContext(Dispatchers.IO) {
-                            val rawUri = item.uri.trim()
-                            if (rawUri.isNotEmpty()) {
-                                downloadStorage.delete(Uri.parse(rawUri))
+                            if (parsedUri != null) {
+                                downloadStorage.delete(parsedUri)
                             }
                             // 文件删除成功后，即便外部取消也必须保证清理 Room 记录及本地缩略图文件
                             withContext(NonCancellable) {
@@ -258,6 +279,22 @@ class DownloadVM(
                     } catch (e: CancellationException) {
                         // 协程取消信号不可吞咽
                         throw e
+                    } catch (e: SecurityException) {
+                        failedIds.add(item.id)
+                        val missingTarget =
+                            parsedUri?.let { uri ->
+                                withContext(Dispatchers.IO) {
+                                    downloadStorage.findMissingSafWriteTarget(uri)
+                                }
+                            }
+                        if (missingTarget != null && missingPermissionTarget == null) {
+                            missingPermissionTarget = missingTarget
+                            permissionRetryItems.add(item)
+                        } else {
+                            lastError =
+                                e.localizedMessage?.takeIf { it.isNotBlank() }
+                                    ?: e.javaClass.simpleName
+                        }
                     } catch (e: Exception) {
                         // 逐项独立失败记录，保留文件与记录以便重试
                         failedIds.add(item.id)
@@ -266,10 +303,19 @@ class DownloadVM(
                     }
                 }
             } finally {
+                val pendingPermission =
+                    missingPermissionTarget?.let { target ->
+                        PendingDeleteWritePermission(
+                            target = target,
+                            items = permissionRetryItems.toList(),
+                        )
+                    }
                 state =
                     state.copy(
                         deletingIds = state.deletingIds - targetIds,
                         deleteError = lastError ?: state.deleteError,
+                        pendingDeleteWritePermission =
+                            pendingPermission ?: state.pendingDeleteWritePermission,
                     )
                 onComplete?.invoke(successIds, failedIds)
             }
@@ -280,11 +326,28 @@ class DownloadVM(
         state = state.copy(deleteError = null)
     }
 
+    /** 清除因 SAF 目录缺少写入权限而挂起的删除补授权请求。 */
+    fun clearPendingDeleteWritePermission() {
+        state = state.copy(pendingDeleteWritePermission = null)
+    }
+
+    /**
+     * 删除本地 SAF 视频时缺少目录写入权限的待补授权请求。
+     *
+     * @property target 需要通过系统选择器补授读写权限的 SAF 目录信息
+     * @property items 授权成功后将自动重试删除的下载记录列表
+     */
+    data class PendingDeleteWritePermission(
+        val target: SafTreeWriteTarget,
+        val items: List<DownloadItem>,
+    )
+
     data class DownloadState(
         val uiState: UiState = UiState.Loading,
         val items: List<DownloadItem> = emptyList(),
         val deletingIds: Set<Int> = emptySet(),
         val deleteError: String? = null,
+        val pendingDeleteWritePermission: PendingDeleteWritePermission? = null,
         val linkingAuthor: Boolean = false,
     )
 }

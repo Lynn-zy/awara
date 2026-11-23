@@ -175,7 +175,11 @@
     <string name="download_group_authors">依作者分類</string>
     <string name="download_author_group">%1$s · %2$d 部影片</string>
     <string name="download_unknown_author">未知作者</string>
-    <string name="download_delete_failed">刪除下載失敗：%1$s</string>
+    <string name="download_delete_failed">刪除影片失敗：%1$s</string>
+    <string name="download_delete_permission_title">需要資料夾寫入權限</string>
+    <string name="download_delete_permission_message">目前缺少「%1$s」的寫入權限，無法刪除本機影片檔案。請授權此資料夾的寫入權限以繼續刪除。</string>
+    <string name="download_delete_permission_grant">前往授權</string>
+    <string name="download_delete_permission_wrong_folder">請選擇「%1$s」資料夾以授予寫入權限</string>
     <string name="download_play_failed">播放下載失敗：%1$s</string>
     <string name="download_empty">暫無已下載的影片</string>
     <string name="download_manager">下載管理</string>
@@ -209,7 +213,7 @@
     <string name="download_author_folder_stats">%1$d 部影片 · %2$s · %3$s</string>
     <string name="download_author_folder_open">開啟資料夾</string>
     <string name="download_more_actions">更多操作</string>
-    <string name="download_delete_confirm_title">刪除已下載檔案</string>
+    <string name="download_delete_confirm_title">刪除影片</string>
     <string name="download_delete_confirm_message">確定要刪除「%1$s」嗎？本機檔案也將被移除。</string>
     <string name="download_folder_empty">該分類下暫無影片</string>
     <string name="download_back">返回</string>
@@ -354,7 +358,7 @@
     <string name="notifications">通知</string>
     <string name="notifications_mark_all_read">全部標記為已讀</string>
     <string name="download_show_directory">檢視下載目錄</string>
-    <string name="download_delete">刪除下載檔案</string>
+    <string name="download_delete">刪除影片</string>
     <string name="download_restore">復原卡片</string>
     <string name="comment_load_failed">留言載入失敗：%1$s</string>
     <string name="notification_new_reply">%1$s 回覆了你的評論</string>

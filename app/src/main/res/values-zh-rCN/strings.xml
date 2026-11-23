@@ -218,7 +218,11 @@
     <string name="download_group_authors">按作者分类</string>
     <string name="download_author_group">%1$s · %2$d 个视频</string>
     <string name="download_unknown_author">未知作者</string>
-    <string name="download_delete_failed">删除下载失败：%1$s</string>
+    <string name="download_delete_failed">删除视频失败：%1$s</string>
+    <string name="download_delete_permission_title">需要文件夹写入权限</string>
+    <string name="download_delete_permission_message">当前缺少“%1$s”的写入权限，无法删除本地视频文件。请授权该文件夹的写入权限以继续删除。</string>
+    <string name="download_delete_permission_grant">去授权</string>
+    <string name="download_delete_permission_wrong_folder">请选择“%1$s”文件夹以授予写入权限</string>
     <string name="download_play_failed">播放下载失败：%1$s</string>
     <string name="download_empty">暂无已下载的视频</string>
     <string name="download_manager">下载管理</string>
@@ -252,7 +256,7 @@
     <string name="download_author_folder_stats">%1$d 个视频 · %2$s · %3$s</string>
     <string name="download_author_folder_open">打开文件夹</string>
     <string name="download_more_actions">更多操作</string>
-    <string name="download_delete_confirm_title">删除已下载文件</string>
+    <string name="download_delete_confirm_title">删除视频</string>
     <string name="download_delete_confirm_message">确定要删除“%1$s”吗？本地文件也将被移除。</string>
     <string name="download_folder_empty">该分类下暂无视频</string>
     <string name="download_back">返回</string>
@@ -359,7 +363,7 @@
     <string name="notifications">通知</string>
     <string name="notifications_mark_all_read">全部标记为已读</string>
     <string name="download_show_directory">查看下载目录</string>
-    <string name="download_delete">删除下载文件</string>
+    <string name="download_delete">删除视频</string>
     <string name="download_restore">恢复卡片</string>
     <string name="comment_load_failed">留言加载失败：%1$s</string>
     <string name="notification_new_reply">%1$s 回复了你的评论</string>
