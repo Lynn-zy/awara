@@ -58,6 +58,8 @@ import me.rerere.awara.ui.page.notification.NotificationsPage
 import me.rerere.awara.ui.page.playlist.PlaylistDetailPage
 import me.rerere.awara.ui.page.playlist.PlaylistsPage
 import me.rerere.awara.ui.page.search.SearchPage
+import me.rerere.awara.ui.page.setting.SettingCategory
+import me.rerere.awara.ui.page.setting.SettingDetailPage
 import me.rerere.awara.ui.page.setting.SettingPage
 import me.rerere.awara.ui.page.user.UserPage
 import me.rerere.awara.ui.page.video.VideoPage
@@ -277,6 +279,18 @@ class RouterActivity : ComponentActivity() {
                 composable("favorites") { FavoritesPage() }
 
                 composable("setting") { SettingPage() }
+
+                composable(
+                    route = "setting/{category}",
+                    arguments = listOf(navArgument("category") { type = NavType.StringType }),
+                ) { entry ->
+                    SettingDetailPage(
+                        category =
+                            SettingCategory.fromRouteSegment(
+                                entry.arguments?.getString("category")
+                            )
+                    )
+                }
 
                 composable("user_blocklist") { me.rerere.awara.ui.page.user.UserBlocklistPage() }
 

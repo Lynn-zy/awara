@@ -1,6 +1,5 @@
 package me.rerere.awara.ui.page.setting
 
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,25 +20,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AltRoute
-import androidx.compose.material.icons.outlined.AutoMode
 import androidx.compose.material.icons.outlined.ColorLens
-import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.HomeWork
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Layers
-import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.LinearScale
 import androidx.compose.material.icons.outlined.PlayCircle
-import androidx.compose.material.icons.outlined.Replay
-import androidx.compose.material.icons.outlined.ScreenRotation
-import androidx.compose.material.icons.outlined.Source
-import androidx.compose.material.icons.outlined.Update
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -50,7 +37,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -58,193 +44,47 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import me.rerere.awara.BuildConfig
 import me.rerere.awara.R
-import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
-import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.download.DownloadStorage
-import me.rerere.awara.data.playback.PlaybackSettings
-import me.rerere.awara.data.source.AppUpdateCheckResult
-import me.rerere.awara.data.source.AppUpdateInfo
 import me.rerere.awara.data.source.AppUpdatePreferences
 import me.rerere.awara.data.source.UpdateAPI
-import me.rerere.awara.ui.LocalMessageProvider
-import me.rerere.awara.ui.component.common.AppUpdateDialog
+import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.common.BackButton
-import me.rerere.awara.ui.component.common.rememberAppUpdateDownloader
-import me.rerere.awara.ui.component.iwara.DownloadDirectoryDialog
-import me.rerere.awara.ui.component.iwara.comment.PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD
-import me.rerere.awara.ui.component.player.PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS
-import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_PREVIEW_POSITION
-import me.rerere.awara.ui.component.player.PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED
-import me.rerere.awara.ui.component.player.SeekPreviewPosition
-import me.rerere.awara.util.AppCacheManager
-import me.rerere.awara.util.openUrl
-import me.rerere.awara.util.prettyFileSize
-import me.rerere.compose_setting.preference.rememberBooleanPreference
-import me.rerere.compose_setting.preference.rememberIntPreference
-import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.compose.koinInject
 
 /**
- * 设置页面，集中提供外观、播放器、评论区图片、下载、存储及版本与更新配置项。
+ * 设置页面，提供外观与浏览、播放器设置、下载与存储三个二级分组入口，
+ * 并在底部直接展开版本信息与自动检查更新条目。
  *
- * @param downloadStorage 下载目录存储管理器（默认由 Koin 注入，便于界面测试传入隔离实例）
+ * @param onNavigateCategory 点击分组入口时的导航回调，默认通过全局路由跳转至对应二级设置页
  * @param updateAPI 应用版本更新检查接口
  * @param updatePreferences 自动更新开关与忽略版本偏好读写器
  */
 @Composable
 fun SettingPage(
-    downloadStorage: DownloadStorage = koinInject(),
+    onNavigateCategory: ((SettingCategory) -> Unit)? = null,
     updateAPI: UpdateAPI = koinInject(),
     updatePreferences: AppUpdatePreferences = koinInject(),
 ) {
-    val context = LocalContext.current
-    val message = LocalMessageProvider.current
-    val scope = rememberCoroutineScope()
-    // 采用 pinned 行为保持单行顶栏固定，避免二级页内容区高度跳变
+    val router = LocalRouterProvider.current
+    val navigateTo: (SettingCategory) -> Unit =
+        onNavigateCategory ?: { category -> router.navigate(category.route) }
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
-    var showDownloadDirectoryDialog by remember { mutableStateOf(false) }
-    var showClearCacheConfirmDialog by remember { mutableStateOf(false) }
-    var clearingCache by remember { mutableStateOf(false) }
-    var cacheRefreshVersion by remember { mutableStateOf(0) }
-    // 控制底部“关于 -> 版本信息”卡片弹窗与手动检查更新状态
-    var showVersionInfoDialog by remember { mutableStateOf(false) }
-    var checkingUpdate by remember { mutableStateOf(false) }
-    var manualUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
-    val startUpdateDownload = rememberAppUpdateDownloader()
-    val cacheBytes by
-        produceState(initialValue = 0L, key1 = context, key2 = cacheRefreshVersion) {
-            value = withContext(Dispatchers.IO) { AppCacheManager.calculateCacheBytes(context) }
-        }
-    var directoryUri by
-        rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = "")
-    val directoryLabel by
-        produceState(
-            initialValue =
-                if (directoryUri.isBlank()) DownloadStorage.DEFAULT_DIRECTORY_LABEL
-                else directoryUri,
-            key1 = directoryUri,
-            key2 = downloadStorage,
-        ) {
-            value = withContext(Dispatchers.IO) { downloadStorage.directoryLabel(directoryUri) }
-        }
-    if (showDownloadDirectoryDialog) {
-        DownloadDirectoryDialog(
-            onDismiss = {
-                directoryUri = downloadStorage.directoryUri()
-                showDownloadDirectoryDialog = false
-            },
-            downloadStorage = downloadStorage,
-            onDirectoryChanged = { directoryUri = it },
-        )
-    }
-    if (showClearCacheConfirmDialog) {
-        ClearCacheConfirmDialog(
-            cacheBytes = cacheBytes,
-            clearing = clearingCache,
-            onDismiss = { showClearCacheConfirmDialog = false },
-            onConfirm = {
-                if (clearingCache) return@ClearCacheConfirmDialog
-                scope.launch {
-                    clearingCache = true
-                    try {
-                        val released =
-                            withContext(Dispatchers.IO) { AppCacheManager.clearAllCaches(context) }
-                        cacheRefreshVersion++
-                        showClearCacheConfirmDialog = false
-                        val successText =
-                            context.getString(
-                                R.string.setting_clear_cache_success,
-                                prettyFileSize(released),
-                            )
-                        message.success { Text(successText) }
-                    } finally {
-                        clearingCache = false
-                    }
-                }
-            },
-        )
-    }
-    if (showVersionInfoDialog) {
-        VersionInfoDialog(
-            versionName = BuildConfig.VERSION_NAME,
-            versionCode = BuildConfig.VERSION_CODE,
-            checkingUpdate = checkingUpdate,
-            onCheckUpdate = {
-                if (checkingUpdate) return@VersionInfoDialog
-                scope.launch {
-                    checkingUpdate = true
-                    try {
-                        when (val result = updateAPI.checkLatestUpdate(BuildConfig.VERSION_NAME)) {
-                            is AppUpdateCheckResult.Available -> {
-                                showVersionInfoDialog = false
-                                manualUpdateInfo = result.updateInfo
-                            }
 
-                            AppUpdateCheckResult.UpToDate -> {
-                                val latestText = context.getString(R.string.update_already_latest)
-                                message.info { Text(latestText) }
-                            }
-
-                            is AppUpdateCheckResult.Failed -> {
-                                Log.w("SettingPage", "checkLatestUpdate failed", result.cause)
-                                val failedText = context.getString(R.string.update_check_failed)
-                                message.error { Text(failedText) }
-                            }
-                        }
-                    } finally {
-                        checkingUpdate = false
-                    }
-                }
-            },
-            onOpenCurrentRepo = { context.openUrl(CURRENT_REPO_URL) },
-            onDismiss = { showVersionInfoDialog = false },
-        )
-    }
-    manualUpdateInfo?.let { updateInfo ->
-        val alreadyIgnored = updatePreferences.isVersionIgnored(updateInfo.version)
-        AppUpdateDialog(
-            updateInfo = updateInfo,
-            currentVersion = BuildConfig.VERSION_NAME,
-            onDismiss = { manualUpdateInfo = null },
-            onDownload = {
-                manualUpdateInfo = null
-                startUpdateDownload(updateInfo)
-            },
-            onLinkClick = { link -> context.openUrl(link) },
-            onIgnoreVersion =
-                if (alreadyIgnored) {
-                    null
-                } else {
-                    {
-                        updatePreferences.ignoreVersion(updateInfo.version)
-                        manualUpdateInfo = null
-                        val ignoredText =
-                            context.getString(R.string.update_ignored_message, updateInfo.version)
-                        message.info { Text(ignoredText) }
-                    }
-                },
-        )
-    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -264,371 +104,128 @@ fun SettingPage(
             contentPadding = innerPadding,
             modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
         ) {
-            item { AppearanceSection() }
-            item { PlayerSection() }
-            item { CommentImageSection() }
             item {
-                DownloadSection(
-                    directoryLabel = directoryLabel,
-                    onSelectDirectory = { showDownloadDirectoryDialog = true },
+                SettingCategoryEntryItem(
+                    icon = Icons.Outlined.ColorLens,
+                    title = stringResource(R.string.setting_category_appearance_browse),
+                    subtitle = stringResource(R.string.setting_category_appearance_browse_desc),
+                    onClick = { navigateTo(SettingCategory.APPEARANCE) },
+                    modifier = Modifier.testTag("setting_entry_appearance"),
                 )
             }
             item {
-                SettingStorageSection(
-                    cacheBytes = cacheBytes,
-                    onClearCacheClick = {
-                        if (cacheBytes <= 0L) {
-                            val emptyText = context.getString(R.string.setting_clear_cache_empty)
-                            message.info { Text(emptyText) }
-                        } else {
-                            showClearCacheConfirmDialog = true
-                        }
-                    },
+                SettingCategoryEntryItem(
+                    icon = Icons.Outlined.PlayCircle,
+                    title = stringResource(R.string.setting_player),
+                    subtitle = stringResource(R.string.setting_category_player_desc),
+                    onClick = { navigateTo(SettingCategory.PLAYER) },
+                    modifier = Modifier.testTag("setting_entry_player"),
                 )
             }
             item {
-                SettingAboutSection(
-                    versionName = BuildConfig.VERSION_NAME,
-                    versionCode = BuildConfig.VERSION_CODE,
-                    onVersionInfoClick = { showVersionInfoDialog = true },
+                SettingCategoryEntryItem(
+                    icon = Icons.Outlined.Download,
+                    title = stringResource(R.string.setting_category_download_storage),
+                    subtitle = stringResource(R.string.setting_category_download_storage_desc),
+                    onClick = { navigateTo(SettingCategory.DOWNLOAD_STORAGE) },
+                    modifier = Modifier.testTag("setting_entry_download"),
+                )
+            }
+            item {
+                Divider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            item {
+                SettingVersionAndUpdateItems(
+                    updateAPI = updateAPI,
+                    updatePreferences = updatePreferences,
                 )
             }
         }
     }
 }
 
-/** 外观主题与工作模式配置分组。 */
+/**
+ * 设置二级详情页面，根据 [category] 渲染对应分组的具体配置项与交互弹窗。
+ *
+ * @param category 当前展示的设置分组
+ * @param downloadStorage 下载目录存储管理器
+ */
 @Composable
-private fun AppearanceSection() {
-    SettingItemCategory(title = { Text(stringResource(R.string.setting_look)) }) {
-        val darkModePref =
-            rememberIntPreference(
-                key = SettingKeys.DARK_MODE,
-                default = DarkModeOption.FOLLOW_SYSTEM.value,
-            )
-        val workMode = rememberBooleanPreference(key = SettingKeys.WORK_MODE, default = false)
-        val dynamicColor =
-            rememberBooleanPreference(key = SettingKeys.DYNAMIC_COLOR, default = true)
+fun SettingDetailPage(
+    category: SettingCategory,
+    downloadStorage: DownloadStorage = koinInject(),
+) {
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val titleRes =
+        when (category) {
+            SettingCategory.APPEARANCE -> R.string.setting_category_appearance_browse
+            SettingCategory.PLAYER -> R.string.setting_player
+            SettingCategory.DOWNLOAD_STORAGE -> R.string.setting_category_download_storage
+        }
 
-        SettingPickerItem(
-            selected = DarkModeOption.fromValue(darkModePref.value),
-            onSelect = { darkModePref.value = it.value },
-            items = DarkModeOption.entries,
-            itemLabel = { mode ->
-                Text(
-                    text =
-                        stringResource(
-                            when (mode) {
-                                DarkModeOption.FOLLOW_SYSTEM -> R.string.setting_look_darkmode_follow
-                                DarkModeOption.LIGHT -> R.string.setting_look_darkmode_light_mode
-                                DarkModeOption.DARK -> R.string.setting_look_darkmode_dark_mode
-                            }
-                        ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
-            title = { Text(stringResource(R.string.setting_look_darkmode_title)) },
-            icon = { Icon(Icons.Outlined.LightMode, "Light/Dark Mode") },
-            text = { Text(stringResource(R.string.setting_look_darkmode_text)) },
-        )
-
-        SettingBooleanItem(
-            state = dynamicColor,
-            title = { Text(stringResource(R.string.setting_look_dynamic_color_title)) },
-            text = { Text(stringResource(R.string.setting_look_dynamic_color_text)) },
-            icon = { Icon(Icons.Outlined.ColorLens, null) },
-        )
-
-        SettingBooleanItem(
-            state = workMode,
-            title = { Text(stringResource(R.string.setting_look_work_mode_title)) },
-            text = { Text(stringResource(R.string.setting_look_work_mode_text)) },
-            icon = { Icon(Icons.Outlined.HomeWork, null) },
-        )
-    }
-}
-
-/** 播放器行为、缓冲、预览与实验性链路配置分组。 */
-@Composable
-private fun PlayerSection() {
-    val autoPlay = rememberBooleanPreference(key = SettingKeys.AUTO_PLAY, default = true)
-    val loopPlay = rememberBooleanPreference(key = SettingKeys.LOOP_PLAY, default = false)
-    val downloadPlayerPref =
-        rememberStringPreference(
-            key = SettingKeys.DOWNLOAD_PLAYER,
-            default = DownloadPlayerMode.INTERNAL.key,
-        )
-    SettingItemCategory(title = { Text(stringResource(R.string.setting_player)) }) {
-        SettingBooleanItem(
-            state = autoPlay,
-            title = { Text(stringResource(R.string.setting_player_auto_play_title)) },
-            text = { Text(stringResource(R.string.setting_player_auto_play_text)) },
-            icon = { Icon(Icons.Outlined.AutoMode, null) },
-        )
-
-        SettingBooleanItem(
-            state = loopPlay,
-            title = { Text(stringResource(R.string.setting_player_loop_title)) },
-            text = { Text(stringResource(R.string.setting_player_loop_text)) },
-            icon = { Icon(Icons.Outlined.Replay, null) },
-        )
-
-        val seekThumbnailEnabled =
-            rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
-        val seekPreviewPosition =
-            rememberStringPreference(
-                key = PREFERENCE_KEY_SEEK_PREVIEW_POSITION,
-                default = SeekPreviewPosition.FollowSlider.key,
-            )
-        SettingBooleanItem(
-            state = seekThumbnailEnabled,
-            title = { Text(stringResource(R.string.setting_player_seek_thumbnail)) },
-            icon = { Icon(Icons.Outlined.Image, null) },
-        )
-        if (seekThumbnailEnabled.value) {
-            SettingPickerItem(
-                selected = SeekPreviewPosition.fromKey(seekPreviewPosition.value),
-                onSelect = { seekPreviewPosition.value = it.key },
-                items = SeekPreviewPosition.entries,
-                itemLabel = { position ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
                     Text(
-                        stringResource(
-                            when (position) {
-                                SeekPreviewPosition.Center ->
-                                    R.string.setting_player_seek_preview_center
-                                SeekPreviewPosition.FollowSlider ->
-                                    R.string.setting_player_seek_preview_follow_slider
-                            }
-                        )
+                        text = stringResource(titleRes),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 },
-                title = { Text(stringResource(R.string.setting_player_seek_preview_position)) },
-                icon = { Icon(Icons.Outlined.Image, null) },
+                navigationIcon = { BackButton() },
+                scrollBehavior = scrollBehavior,
             )
         }
+    ) { innerPadding ->
+        val scrollModifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
+        when (category) {
+            SettingCategory.APPEARANCE ->
+                AppearanceAndBrowseContent(modifier = scrollModifier, contentPadding = innerPadding)
 
-        // 收起控件时显示贴底全宽细进度条配置项（默认开启）
-        SettingBooleanItem(
-            state =
-                rememberBooleanPreference(
-                    key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS,
-                    default = true,
-                ),
-            title = { Text(stringResource(R.string.setting_player_minimal_progress)) },
-            icon = { Icon(Icons.Outlined.LinearScale, null) },
-        )
+            SettingCategory.PLAYER ->
+                PlayerSettingsContent(modifier = scrollModifier, contentPadding = innerPadding)
 
-        // 全屏横屏重力感应旋屏配置项（默认开启）
-        SettingBooleanItem(
-            state =
-                rememberBooleanPreference(
-                    key = SettingKeys.PLAYER_SENSOR_ROTATION,
-                    default = true,
-                ),
-            title = { Text(stringResource(R.string.setting_player_sensor_rotation_title)) },
-            text = { Text(stringResource(R.string.setting_player_sensor_rotation_text)) },
-            icon = { Icon(Icons.Outlined.ScreenRotation, null) },
-        )
-
-        // 扩大缓冲区配置项（默认关闭）
-        SettingBooleanItem(
-            state =
-                rememberBooleanPreference(key = PlaybackSettings.KEY_EXPANDED_BUFFER, default = false),
-            title = { Text(stringResource(R.string.setting_player_expanded_buffer_title)) },
-            text = { Text(stringResource(R.string.setting_player_expanded_buffer_text)) },
-            icon = { Icon(Icons.Outlined.Layers, null) },
-        )
-
-        // 多 CDN 播放（实验）配置项（默认关闭）
-        SettingBooleanItem(
-            state = rememberBooleanPreference(key = PlaybackSettings.KEY_MULTI_CDN, default = false),
-            title = { Text(stringResource(R.string.setting_player_multi_cdn_title)) },
-            text = { Text(stringResource(R.string.setting_player_multi_cdn_text)) },
-            icon = { Icon(Icons.Outlined.AltRoute, null) },
-        )
-
-        // CDN 连接调试（实验）配置项（默认关闭）
-        SettingBooleanItem(
-            state = rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false),
-            title = { Text(stringResource(R.string.setting_cdn_connection_debug_title)) },
-            text = { Text(stringResource(R.string.setting_cdn_connection_debug_text)) },
-            icon = { Icon(Icons.Outlined.Source, null) },
-        )
-
-        // 下载视频播放器选择：内置（internal）/ 第三方（external）
-        SettingPickerItem(
-            selected = DownloadPlayerMode.fromKey(downloadPlayerPref.value),
-            onSelect = { downloadPlayerPref.value = it.key },
-            items = DownloadPlayerMode.entries,
-            itemLabel = { mode ->
-                Text(
-                    text =
-                        stringResource(
-                            when (mode) {
-                                DownloadPlayerMode.INTERNAL -> R.string.setting_player_internal
-                                DownloadPlayerMode.EXTERNAL -> R.string.setting_player_external
-                            }
-                        ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            SettingCategory.DOWNLOAD_STORAGE ->
+                DownloadAndStorageContent(
+                    downloadStorage = downloadStorage,
+                    modifier = scrollModifier,
+                    contentPadding = innerPadding,
                 )
-            },
-            title = { Text(stringResource(R.string.setting_player_download_player_title)) },
-            icon = { Icon(Icons.Outlined.PlayCircle, null) },
-            text = { Text(stringResource(R.string.setting_player_download_player_text)) },
-        )
+        }
     }
 }
 
-/** 评论区图片自动加载配置分组。 */
 @Composable
-private fun CommentImageSection() {
-    SettingItemCategory(title = { Text(stringResource(R.string.setting_comment_image)) }) {
-        val autoLoadImages =
-            rememberBooleanPreference(key = PREFERENCE_KEY_COMMENT_IMAGE_AUTO_LOAD, default = false)
-        SettingBooleanItem(
-            state = autoLoadImages,
-            title = { Text(stringResource(R.string.setting_comment_image_auto_load_title)) },
-            text = { Text(stringResource(R.string.setting_comment_image_auto_load_text)) },
-            icon = { Icon(Icons.Outlined.AutoMode, null) },
-        )
-    }
-}
-
-/** 下载队列恢复、重试、多 CDN 及目录配置分组。 */
-@Composable
-private fun DownloadSection(directoryLabel: String, onSelectDirectory: () -> Unit) {
-    SettingItemCategory(title = { Text(stringResource(R.string.setting_download)) }) {
-        SettingBooleanItem(
-            state =
-                rememberBooleanPreference(
-                    key = DownloadManager.PREFERENCE_KEY_AUTO_RESUME,
-                    default = DownloadManager.DEFAULT_AUTO_RESUME,
-                ),
-            title = { Text(stringResource(R.string.setting_download_auto_resume_title)) },
-            text = { Text(stringResource(R.string.setting_download_auto_resume_text)) },
-            icon = { Icon(Icons.Outlined.PlayCircle, null) },
-        )
-
-        SettingBooleanItem(
-            state =
-                rememberBooleanPreference(
-                    key = DownloadManager.PREFERENCE_KEY_AUTO_RETRY,
-                    default = DownloadManager.DEFAULT_AUTO_RETRY,
-                ),
-            title = { Text(stringResource(R.string.setting_download_auto_retry_title)) },
-            text = { Text(stringResource(R.string.setting_download_auto_retry_text)) },
-            icon = { Icon(Icons.Outlined.Replay, null) },
-        )
-
-        SettingBooleanItem(
-            state =
-                rememberBooleanPreference(
-                    key = DownloadManager.KEY_MULTI_CDN_ENABLED,
-                    default = DownloadManager.DEFAULT_MULTI_CDN_ENABLED,
-                ),
-            title = { Text(stringResource(R.string.setting_download_multi_cdn_title)) },
-            text = { Text(stringResource(R.string.setting_download_multi_cdn_text)) },
-            icon = { Icon(Icons.Outlined.AltRoute, null) },
-        )
-
-        SettingBaseItem(
-            title = { Text(stringResource(R.string.download_directory_title)) },
-            text = { Text(directoryLabel) },
-            icon = { Icon(Icons.Outlined.Folder, null) },
-            onClick = onSelectDirectory,
-        )
-    }
-}
-
-/** 设置页“存储”分组组件，提供缓存体积展示与清除缓存入口。 */
-@Composable
-private fun SettingStorageSection(
-    cacheBytes: Long,
-    onClearCacheClick: () -> Unit,
+private fun SettingCategoryEntryItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
-    SettingItemCategory(
-        modifier = modifier,
-        title = { Text(stringResource(R.string.setting_storage)) },
-    ) {
-        SettingBaseItem(
-            title = { Text(stringResource(R.string.setting_clear_cache_title)) },
-            text = { Text(stringResource(R.string.setting_clear_cache_text, formattedSize)) },
-            icon = { Icon(Icons.Outlined.DeleteSweep, null) },
-            onClick = onClearCacheClick,
-        )
-    }
-}
-
-/** 清除缓存二次确认弹窗组件。 */
-@Composable
-private fun ClearCacheConfirmDialog(
-    cacheBytes: Long,
-    clearing: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val formattedSize = prettyFileSize(cacheBytes.coerceAtLeast(0L))
-    AlertDialog(
-        onDismissRequest = { if (!clearing) onDismiss() },
-        title = { Text(text = stringResource(R.string.setting_clear_cache_title)) },
-        text = {
-            Text(
-                text = stringResource(R.string.setting_clear_cache_confirm_message, formattedSize),
-                style = MaterialTheme.typography.bodyMedium,
+    SettingBaseItem(
+        title = { Text(text = title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        text = { Text(text = subtitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        icon = { Icon(imageVector = icon, contentDescription = null) },
+        action = {
+            Icon(
+                imageVector = Icons.Outlined.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = !clearing) {
-                Text(
-                    text = stringResource(R.string.setting_clear_cache_confirm_action),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !clearing) {
-                Text(text = stringResource(R.string.cancel))
-            }
-        },
+        onClick = onClick,
+        modifier = modifier,
     )
 }
 
-/** 设置页底部“关于”分组组件，提供版本信息弹窗入口（内含检查更新）与自动检查更新开关。 */
 @Composable
-private fun SettingAboutSection(
-    versionName: String,
-    versionCode: Int,
-    onVersionInfoClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val autoCheckUpdate =
-        rememberBooleanPreference(key = SettingKeys.AUTO_CHECK_UPDATE, default = true)
-    SettingItemCategory(
-        modifier = modifier,
-        title = { Text(stringResource(R.string.setting_about)) },
-    ) {
-        SettingBaseItem(
-            title = { Text(stringResource(R.string.setting_about_version_title)) },
-            text = { Text(formatAppVersionDisplay(versionName = versionName, versionCode = versionCode)) },
-            icon = { Icon(Icons.Outlined.Info, null) },
-            onClick = onVersionInfoClick,
-        )
-
-        SettingBooleanItem(
-            state = autoCheckUpdate,
-            title = { Text(stringResource(R.string.setting_about_auto_check_update_title)) },
-            text = { Text(stringResource(R.string.setting_about_auto_check_update_text)) },
-            icon = { Icon(Icons.Outlined.Update, null) },
-        )
-    }
-}
-
-@Composable
-private fun SettingItemCategory(
+internal fun SettingItemCategory(
     modifier: Modifier = Modifier,
     title: @Composable () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
@@ -650,7 +247,7 @@ private fun SettingItemCategory(
 }
 
 @Composable
-private fun SettingBaseItem(
+internal fun SettingBaseItem(
     title: @Composable () -> Unit,
     modifier: Modifier = Modifier,
     text: (@Composable () -> Unit)? = null,
@@ -728,7 +325,7 @@ private fun SettingBaseItem(
 }
 
 @Composable
-private fun SettingBooleanItem(
+internal fun SettingBooleanItem(
     state: MutableState<Boolean>,
     title: @Composable () -> Unit,
     modifier: Modifier = Modifier,
@@ -752,7 +349,7 @@ private fun SettingBooleanItem(
 }
 
 @Composable
-private fun <T> SettingPickerItem(
+internal fun <T> SettingPickerItem(
     selected: T,
     onSelect: (T) -> Unit,
     items: List<T>,

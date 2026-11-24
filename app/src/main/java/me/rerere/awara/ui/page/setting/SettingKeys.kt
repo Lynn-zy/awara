@@ -9,6 +9,7 @@ object SettingKeys {
     const val DYNAMIC_COLOR = "setting.dynamic_color"
     const val AUTO_PLAY = "setting.auto_play"
     const val LOOP_PLAY = "setting.loop_play"
+    const val PLAYER_DOUBLE_TAP_SEEK = "setting.player_double_tap_seek"
     const val PLAYER_SENSOR_ROTATION = "setting.player_sensor_rotation"
     const val DOWNLOAD_PLAYER = "setting.download_player_internal"
     const val AUTO_CHECK_UPDATE = "setting.auto_check_update"
@@ -45,5 +46,26 @@ enum class DownloadPlayerMode(val key: String) {
         /** 根据持久化的键值解析播放器模式，未匹配时回退为内置播放器。 */
         fun fromKey(key: String): DownloadPlayerMode =
             entries.firstOrNull { it.key == key } ?: INTERNAL
+    }
+}
+
+/**
+ * 设置页一级分组枚举，对应三个二级设置页面路由。
+ *
+ * @property routeSegment 二级路由片段（拼装为 `setting/<routeSegment>`）
+ */
+enum class SettingCategory(val routeSegment: String) {
+    APPEARANCE("appearance"),
+    PLAYER("player"),
+    DOWNLOAD_STORAGE("download");
+
+    /** 完整导航路由路径。 */
+    val route: String
+        get() = "setting/$routeSegment"
+
+    companion object {
+        /** 根据路由片段解析设置分组，未匹配时回退至外观与浏览分组。 */
+        fun fromRouteSegment(segment: String?): SettingCategory =
+            entries.firstOrNull { it.routeSegment == segment } ?: APPEARANCE
     }
 }

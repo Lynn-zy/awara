@@ -23,4 +23,21 @@ class VersionInfoTest {
         assertEquals("v1.3.0 (30)", formatAppVersionDisplay(versionName = " v1.3.0 ", versionCode = 30))
         assertEquals("V2.0.0 (40)", formatAppVersionDisplay(versionName = "V2.0.0", versionCode = 40))
     }
+
+    /**
+     * 验证设置页三个二级分组的路由拼装、反查解析与未知片段回退逻辑。
+     */
+    @Test
+    fun settingCategoryResolvesRouteSegmentsAndFallsBackSafely() {
+        assertEquals("setting/appearance", SettingCategory.APPEARANCE.route)
+        assertEquals("setting/player", SettingCategory.PLAYER.route)
+        assertEquals("setting/download", SettingCategory.DOWNLOAD_STORAGE.route)
+
+        assertEquals(SettingCategory.APPEARANCE, SettingCategory.fromRouteSegment("appearance"))
+        assertEquals(SettingCategory.PLAYER, SettingCategory.fromRouteSegment("player"))
+        assertEquals(SettingCategory.DOWNLOAD_STORAGE, SettingCategory.fromRouteSegment("download"))
+        assertEquals(SettingCategory.APPEARANCE, SettingCategory.fromRouteSegment("about"))
+        assertEquals(SettingCategory.APPEARANCE, SettingCategory.fromRouteSegment("unknown"))
+        assertEquals(SettingCategory.APPEARANCE, SettingCategory.fromRouteSegment(null))
+    }
 }
