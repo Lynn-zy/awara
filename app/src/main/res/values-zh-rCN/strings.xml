@@ -165,6 +165,7 @@
     <string name="setting_player_auto_play_text">进入详情页后自动播放；关闭后仍会预缓冲并显示视频首帧</string>
     <string name="setting_player_loop_title">循环播放</string>
     <string name="setting_player_loop_text">播放结束后自动重新开始播放</string>
+    <string name="download_link_author_search_clear">清空筛选</string>
     <string name="setting_player_expanded_buffer_title">扩大缓冲区</string>
     <string name="setting_player_expanded_buffer_text">增加预读数据量以减少卡顿，会消耗更多内存与流量；下次打开视频生效</string>
     <string name="setting_player_multi_cdn_title">多 CDN 播放（实验）</string>

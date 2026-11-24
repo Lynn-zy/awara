@@ -115,4 +115,41 @@ class LinkAuthorTest {
         assertEquals("gone_creator", deletedResolved.authorName)
         assertEquals("https://iwara.tv/images/default-avatar.jpg", deletedResolved.authorAvatar)
     }
+
+    @Test
+    fun sortAndFilterExistingAuthorGroupsSortsAtoZAndMatchesNameOrId() {
+        val now = Instant.ofEpochSecond(1700000000L)
+        fun group(id: String, name: String): DownloadAuthorGroup =
+            DownloadAuthorGroup(
+                authorId = id,
+                authorName = name,
+                avatar = "",
+                items = emptyList(),
+                totalBytes = 0L,
+                latestDownloadTime = now,
+            )
+
+        val raw =
+            listOf(
+                group(id = "", name = ""),
+                group(id = "z_creator", name = "Zeta"),
+                group(id = "b_id", name = "beta_artist"),
+                group(id = "a_id", name = "Alpha"),
+                group(id = "c_only_id", name = ""),
+            )
+
+        val sortedAll = sortAndFilterExistingAuthorGroups(raw)
+        assertEquals(listOf("a_id", "b_id", "c_only_id", "z_creator"), sortedAll.map { it.authorId })
+
+        val byName = sortAndFilterExistingAuthorGroups(raw, "ALPHA")
+        assertEquals(listOf("a_id"), byName.map { it.authorId })
+
+        val byIdWithAt = sortAndFilterExistingAuthorGroups(raw, "@c_only")
+        assertEquals(listOf("c_only_id"), byIdWithAt.map { it.authorId })
+
+        val byIdPlain = sortAndFilterExistingAuthorGroups(raw, "z_cre")
+        assertEquals(listOf("z_creator"), byIdPlain.map { it.authorId })
+
+        assertTrue(sortAndFilterExistingAuthorGroups(raw, "nonexistent").isEmpty())
+    }
 }

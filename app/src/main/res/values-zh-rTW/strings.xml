@@ -122,6 +122,7 @@
     <string name="setting_player_auto_play_text">進入詳情頁後自動播放；關閉後仍會預先緩衝並顯示影片首幀</string>
     <string name="setting_player_loop_title">循環播放</string>
     <string name="setting_player_loop_text">播放結束後自動重新開始播放</string>
+    <string name="download_link_author_search_clear">清除篩選</string>
     <string name="setting_player_expanded_buffer_title">擴大緩衝區</string>
     <string name="setting_player_expanded_buffer_text">增加預讀數據量以減少卡頓，會消耗更多記憶體與流量；下次打開影片生效</string>
     <string name="setting_player_multi_cdn_title">多 CDN 播放（實驗）</string>

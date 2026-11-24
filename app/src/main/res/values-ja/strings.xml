@@ -122,6 +122,7 @@
     <string name="setting_player_auto_play_text">詳細画面で自動再生します。オフでも先読みし、動画の最初のフレームを表示します</string>
     <string name="setting_player_loop_title">ループ</string>
     <string name="setting_player_loop_text">再生終了後、自動再生する</string>
+    <string name="download_link_author_search_clear">絞り込みをクリア</string>
     <string name="setting_player_expanded_buffer_title">バッファを拡張</string>
     <string name="setting_player_expanded_buffer_text">先読み量を増やしてカクつきを抑えます。メモリと通信量が増加します。次回動画を開いた際に有効になります</string>
     <string name="setting_player_multi_cdn_title">マルチ CDN 再生（実験的）</string>

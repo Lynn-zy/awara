@@ -168,6 +168,7 @@
     <string name="setting_player_auto_play_text">Play automatically on the details page; when off, still prebuffer and display the first video frame</string>
     <string name="setting_player_loop_title">Loop Playback</string>
     <string name="setting_player_loop_text">Automatically restart playback after playback ends</string>
+    <string name="download_link_author_search_clear">Clear filter</string>
     <string name="setting_player_expanded_buffer_title">Expand playback buffer</string>
     <string name="setting_player_expanded_buffer_text">Increases pre-buffered data to reduce stuttering, using more memory and network traffic; takes effect next time a video is opened</string>
     <string name="setting_player_multi_cdn_title">Multi-CDN playback (Experimental)</string>
