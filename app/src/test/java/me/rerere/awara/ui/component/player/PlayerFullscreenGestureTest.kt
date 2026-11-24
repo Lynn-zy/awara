@@ -13,9 +13,12 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -24,7 +27,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -35,7 +40,11 @@ import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player as MediaPlayer
@@ -164,6 +173,7 @@ class PlayerFullscreenGestureTest {
         }
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     private fun runGestureHarness(
         widthPx: Int = 1080,
         heightPx: Int = 1920,
@@ -216,6 +226,7 @@ class PlayerFullscreenGestureTest {
                 shadowOf(Looper.getMainLooper()).idle()
                 decorView.measure(widthSpec, heightSpec)
                 decorView.layout(0, 0, widthPx, heightPx)
+                (composeView.getChildAt(0) as? RootForTest)?.measureAndLayoutForTest()
             }
         }
 
@@ -798,23 +809,254 @@ class PlayerFullscreenGestureTest {
         }
     }
 
+    private fun collectSemanticsTags(root: SemanticsNode?, out: MutableList<String> = mutableListOf()): List<String> {
+        if (root == null) return out
+        root.config.getOrNull(SemanticsProperties.TestTag)?.let { out.add(it) }
+        for (child in root.children) {
+            collectSemanticsTags(child, out)
+        }
+        return out
+    }
+
     @Test
-    fun fullscreenControlsOrderAndOpticalButtonSlotSizesMatchSpec() {
-        // 保留 09afdfe 中的双击浮层椭圆宽度比例，同时确认控制栏尺寸已恢复至 v1.3.4 统一 40dp 规格
+    fun fullscreenControlsOrderAndEnlargedDimensionsMatchSpec() {
+        // 保留 09afdfe 中的双击浮层椭圆宽度比例，校验全屏 46dp 放大规格、半屏 38dp 紧凑规格与 30% 浅黑纯平浮层
         assertEquals(0.30f, DOUBLE_TAP_ELLIPSE_WIDTH_RATIO, 0.001f)
-        assertControlBarUnifiedLayout(fullscreen = true, widthPx = 1920, heightPx = 1080)
+        assertEquals(Color.Black.copy(alpha = 0.30f), PLAYER_OVERLAY_BACKGROUND)
+        assertEquals(6.dp, PLAYER_OVERLAY_CORNER_RADIUS)
+
+        val halfSpec = resolvePlayerControlDimensions(fullscreen = false)
+        assertEquals(38.dp, halfSpec.slotSize)
+        assertEquals(13.5.sp, halfSpec.actionTextSize)
+        assertEquals(12.sp, halfSpec.timeTextSize)
+        assertEquals(2.dp, halfSpec.trackHeight)
+        assertEquals(12.dp, halfSpec.thumbSize)
+        assertEquals(32.dp, halfSpec.menuItemHeight)
+        assertEquals(13.5.sp, halfSpec.menuItemTextSize)
+
+        val fullSpec = resolvePlayerControlDimensions(fullscreen = true)
+        assertEquals(46.dp, fullSpec.slotSize)
+        assertEquals(24.dp, fullSpec.backIconSize)
+        assertEquals(23.dp, fullSpec.scaleIconSize)
+        assertEquals(19.dp, fullSpec.rotateIconSize)
+        assertEquals(25.dp, fullSpec.playIconSize)
+        assertEquals(28.dp, fullSpec.fullscreenIconSize)
+        assertEquals(16.sp, fullSpec.actionTextSize)
+        assertEquals(13.sp, fullSpec.timeTextSize)
+        assertEquals(3.dp, fullSpec.trackHeight)
+        assertEquals(13.dp, fullSpec.thumbSize)
+        assertEquals(38.dp, fullSpec.menuItemHeight)
+        assertEquals(16.sp, fullSpec.menuItemTextSize)
+
+        val fullHeights = assertControlBarDimensionsLayout(fullscreen = true, widthPx = 1920, heightPx = 1080)
+        val halfHeights = assertControlBarDimensionsLayout(fullscreen = false, widthPx = 1080, heightPx = 608)
+        assertTrue("全屏顶栏高度应大于半屏紧凑顶栏", fullHeights.first > halfHeights.first)
+        assertTrue("全屏底栏高度应大于半屏紧凑底栏", fullHeights.second > halfHeights.second)
     }
 
     @Test
-    fun compactControlBarMatchesUnified40dpSlotsAnd2dpTrack() {
-        assertControlBarUnifiedLayout(fullscreen = false, widthPx = 1080, heightPx = 608)
+    fun compactHalfscreenControlBarRetains38dpSlotsAnd2dpTrack() {
+        assertControlBarDimensionsLayout(fullscreen = false, widthPx = 1080, heightPx = 608)
     }
 
-    private fun assertControlBarUnifiedLayout(
+    @Test
+    fun longPressSpeedFeedbackPlacesNearTopWithAnimatedChevrons() {
+        assertLongPressSpeedFeedbackPlacement(fullscreen = false, widthPx = 1080, heightPx = 608)
+        assertLongPressSpeedFeedbackPlacement(fullscreen = true, widthPx = 1920, heightPx = 1080)
+    }
+
+    private fun assertLongPressSpeedFeedbackPlacement(
         fullscreen: Boolean,
         widthPx: Int,
         heightPx: Int,
     ) {
+        val (player, _) = createSeekableMockPlayer()
+        val playerState =
+            PlayerState(
+                player = player,
+                initialQuality = "1080p",
+                saveQualityPreference = {},
+                savePlaybackSpeedPreference = {},
+            )
+        val item =
+            PlayerState.PlayerItem(
+                quality = "1080p",
+                mediaItem =
+                    MediaItem.Builder()
+                        .setMediaId("speed_$fullscreen")
+                        .setUri("https://example.com/speed.mp4")
+                        .build(),
+            )
+        playerState.updatePlayerItems(listOf(item), targetPlayWhenReady = true)
+        playerState.markPlaybackStarted()
+        playerState.state = PlayerState.State.READY
+        playerState.playing = true
+        playerState.duration = 120_000L
+
+        val controls = PlayerGestureControlState(FakeGestureTarget())
+        var expectedTopPx = 0f
+
+        runGestureHarness(
+            widthPx = widthPx,
+            heightPx = heightPx,
+            content = {
+                val density = LocalDensity.current
+                val topPadding =
+                    if (fullscreen) PLAYER_SPEED_FEEDBACK_TOP_PADDING_FULLSCREEN
+                    else PLAYER_SPEED_FEEDBACK_TOP_PADDING_HALF
+                expectedTopPx = with(density) { topPadding.toPx() }
+                PlayerController(
+                    modifier = Modifier.fillMaxSize(),
+                    state = playerState,
+                    fullscreen = fullscreen,
+                    controls = controls,
+                    thumbnailEnabled = false,
+                    navigationIcon = { PlayerBackIconButton(onClick = {}) },
+                )
+            },
+        ) { pumpUi, _, _, rootSemantics ->
+            // 先完成首次测量与 playerSize 稳定，再模拟长按倍速期间顶栏收起并展示顶部倍速提示。
+            playerState.controllerState.hide()
+            pumpUi()
+            assertTrue(controls.startTemporarySpeed())
+            pumpUi()
+
+            val root = rootSemantics()
+            val feedbackNode = findSemanticsNodeByTag(root, "player_control_feedback")
+            assertNotNull(
+                "未找到长按倍速浮层：feedback=${controls.feedback}, tags=${collectSemanticsTags(root)}",
+                feedbackNode,
+            )
+            val chevronNode = findSemanticsNodeByTag(root, "player_speed_animated_chevrons")
+
+            assertNotNull("长按倍速浮层必须展示动态三连渐进箭头", chevronNode)
+            assertEquals(expectedTopPx, feedbackNode!!.boundsInRoot.top, 1.5f)
+            assertTrue(
+                "长按倍速浮层应贴近顶部中上方，远离画面中央",
+                feedbackNode.boundsInRoot.bottom < heightPx * 0.35f,
+            )
+
+            controls.finishGesture()
+            pumpUi()
+        }
+    }
+
+    @Test
+    fun dropdownMenuItemsAdaptSizeBetweenHalfscreen32dpAndFullscreen38dp() {
+        val halfTotalPx = assertDropdownMenuItemMetrics(fullscreen = false)
+        val fullTotalPx = assertDropdownMenuItemMetrics(fullscreen = true)
+        assertTrue("全屏选择面板总高应大于半屏紧凑面板", fullTotalPx > halfTotalPx)
+    }
+
+    private fun assertDropdownMenuItemMetrics(fullscreen: Boolean): Float {
+        val dimensions = resolvePlayerControlDimensions(fullscreen)
+        var expectedRowPx = 0f
+        var expectedTotalPx = 0f
+        var measuredTotalPx = 0f
+        var selectedSpeed = 1f
+
+        runGestureHarness(
+            widthPx = if (fullscreen) 1920 else 1080,
+            heightPx = if (fullscreen) 1080 else 608,
+            content = {
+                val density = LocalDensity.current
+                expectedRowPx = with(density) { dimensions.menuItemHeight.toPx() }
+                expectedTotalPx =
+                    with(density) {
+                        (dimensions.menuItemHeight * PlayerPlaybackSpeeds.size +
+                                PLAYER_MENU_VERTICAL_PADDING * 2)
+                            .toPx()
+                    }
+                // 外层 Box 解除 ComposeView 根节点 MATCH_PARENT 固定高度约束，以测量菜单真实包裹高度。
+                CompositionLocalProvider(LocalPlayerControlDimensions provides dimensions) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            modifier =
+                                Modifier.testTag("player_speed_menu_container")
+                                    .width(IntrinsicSize.Max)
+                                    .padding(vertical = PLAYER_MENU_VERTICAL_PADDING)
+                        ) {
+                            PlayerPlaybackSpeeds.forEach { speed ->
+                                PlayerCompactDropdownMenuItem(
+                                    text = playbackSpeedLabel(speed),
+                                    selected = speed == selectedSpeed,
+                                    onClick = { selectedSpeed = speed },
+                                    modifier = Modifier.testTag("player_speed_option_${speed}"),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+        ) { pumpUi, dispatchTouch, _, rootSemantics ->
+            pumpUi()
+            val root = rootSemantics()
+            val containerNode = findSemanticsNodeByTag(root, "player_speed_menu_container")!!
+            measuredTotalPx = containerNode.boundsInRoot.height
+            assertEquals(expectedTotalPx, measuredTotalPx, 1.5f)
+
+            PlayerPlaybackSpeeds.forEach { speed ->
+                val optionNode = findSemanticsNodeByTag(root, "player_speed_option_${speed}")!!
+                assertEquals(expectedRowPx, optionNode.boundsInRoot.height, 1f)
+            }
+
+            // 点击 2x 项应触发回调切换倍速（decorView 使用窗口坐标）
+            val option2x = findSemanticsNodeByTag(root, "player_speed_option_2.0")!!
+            val center = option2x.boundsInWindow.center
+            dispatchTap(dispatchTouch, center.x, center.y)
+            pumpUi()
+            assertEquals(2f, selectedSpeed, 0.001f)
+        }
+        return measuredTotalPx
+    }
+
+    @Test
+    fun compactDropdownPositionProviderAlignsAboveOrBelowAndClampsToWindow() {
+        val window = IntSize(width = 1080, height = 1920)
+        val popup = IntSize(width = 240, height = 408)
+
+        // 顶部栏画质按钮：优先向下展开并右对齐锚点
+        val topAnchor = IntRect(left = 880, top = 0, right = 1056, bottom = 114)
+        val topPos =
+            PlayerCompactDropdownPositionProvider(
+                    verticalOffsetPx = 6,
+                    windowMarginPx = 24,
+                    preferAbove = false,
+                )
+                .calculatePosition(topAnchor, window, LayoutDirection.Ltr, popup)
+        assertEquals(topAnchor.right - popup.width, topPos.x)
+        assertEquals(topAnchor.bottom + 6, topPos.y)
+
+        // 底部栏倍速按钮：半屏态下方虽有空间，但 preferAbove=true 时优先在锚点上方弹出
+        val bottomAnchor = IntRect(left = 760, top = 540, right = 920, bottom = 654)
+        val bottomPos =
+            PlayerCompactDropdownPositionProvider(
+                    verticalOffsetPx = 6,
+                    windowMarginPx = 24,
+                    preferAbove = true,
+                )
+                .calculatePosition(bottomAnchor, window, LayoutDirection.Ltr, popup)
+        assertEquals(bottomAnchor.right - popup.width, bottomPos.x)
+        assertEquals(bottomAnchor.top - 6 - popup.height, bottomPos.y)
+
+        // 左边缘贴边锚点应夹紧至安全边距内
+        val nearLeftAnchor = IntRect(left = 10, top = 20, right = 120, bottom = 134)
+        val clampedPos =
+            PlayerCompactDropdownPositionProvider(
+                    verticalOffsetPx = 6,
+                    windowMarginPx = 24,
+                    preferAbove = true,
+                )
+                .calculatePosition(nearLeftAnchor, window, LayoutDirection.Ltr, popup)
+        assertEquals(24, clampedPos.x)
+        assertEquals(nearLeftAnchor.bottom + 6, clampedPos.y)
+    }
+
+    private fun assertControlBarDimensionsLayout(
+        fullscreen: Boolean,
+        widthPx: Int,
+        heightPx: Int,
+    ): Pair<Float, Float> {
         val (player, _) = createSeekableMockPlayer()
         val quality = if (fullscreen) "1080p" else "720p"
         val playerState =
@@ -840,17 +1082,19 @@ class PlayerFullscreenGestureTest {
         playerState.duration = 70_000L
 
         val controls = PlayerGestureControlState(FakeGestureTarget())
+        val expectedDimensions = resolvePlayerControlDimensions(fullscreen)
         var expectedSlotPx = 0f
         var expectedTrackPx = 0f
         var expectedThumbPx = 0f
+        var measuredHeights = 0f to 0f
 
         runGestureHarness(
             widthPx = widthPx,
             heightPx = heightPx,
             content = {
-                expectedSlotPx = with(LocalDensity.current) { PLAYER_CONTROL_SLOT_SIZE.toPx() }
-                expectedTrackPx = with(LocalDensity.current) { 2.dp.toPx() }
-                expectedThumbPx = with(LocalDensity.current) { PlayerSeekThumbDiameter.toPx() }
+                expectedSlotPx = with(LocalDensity.current) { expectedDimensions.slotSize.toPx() }
+                expectedTrackPx = with(LocalDensity.current) { expectedDimensions.trackHeight.toPx() }
+                expectedThumbPx = with(LocalDensity.current) { expectedDimensions.thumbSize.toPx() }
                 PlayerController(
                     modifier = Modifier.fillMaxSize(),
                     state = playerState,
@@ -884,6 +1128,8 @@ class PlayerFullscreenGestureTest {
             playerState.controllerState.show()
             pumpUi()
             val root = rootSemantics()
+            val topBarNode = findSemanticsNodeByTag(root, "player_top_controls")!!
+            val bottomBarNode = findSemanticsNodeByTag(root, "player_bottom_controls")!!
             val backNode = findSemanticsNodeByTag(root, "player_back_button")!!
             val qualityNode = findSemanticsNodeByTag(root, "player_quality_selector")!!
             val sliderNode = findSemanticsNodeByTag(root, "player_seek_slider")!!
@@ -920,7 +1166,9 @@ class PlayerFullscreenGestureTest {
                 speedNode.boundsInRoot.right <= fullscreenNode.boundsInRoot.left + 1f,
             )
 
-            // 图标按钮热区槽统一为 40dp，进度条轨道为 2dp，滑块圆球为 12dp
+            // 半屏保持 38dp 槽位 + 2dp 轨道 + 12dp 滑块；全屏放大为 46dp 槽位 + 3dp 轨道 + 13dp 滑块
+            assertTrue(topBarNode.boundsInRoot.height >= expectedSlotPx - 1f)
+            assertTrue(bottomBarNode.boundsInRoot.height >= expectedSlotPx - 1f)
             assertEquals(expectedSlotPx, backNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, playNode.boundsInRoot.width, 1f)
             assertEquals(expectedSlotPx, fullscreenNode.boundsInRoot.width, 1f)
@@ -929,6 +1177,8 @@ class PlayerFullscreenGestureTest {
             assertEquals(expectedTrackPx, trackNode.boundsInRoot.height, 1f)
             assertEquals(expectedThumbPx, thumbNode.boundsInRoot.width, 1f)
             assertEquals(expectedThumbPx, thumbNode.boundsInRoot.height, 1f)
+            measuredHeights = topBarNode.boundsInRoot.height to bottomBarNode.boundsInRoot.height
         }
+        return measuredHeights
     }
 }

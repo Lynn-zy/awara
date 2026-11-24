@@ -3,7 +3,7 @@
     <string name="player_speed_change_failed">暂时无法调整播放倍速</string>
     <string name="player_gesture_brightness">亮度 %1$d%%</string>
     <string name="player_gesture_volume">媒体音量 %1$d%%</string>
-    <string name="player_gesture_speed">临时倍速 %1$.2fx</string>
+    <string name="player_gesture_speed">%1$.1fx 倍速中</string>
     <string name="player_gesture_unavailable">暂时无法调整</string>
     <string name="player_scale_mode_fit">适应</string>
     <string name="player_scale_mode_fill">填充</string>

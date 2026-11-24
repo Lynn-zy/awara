@@ -3,7 +3,7 @@
     <string name="player_speed_change_failed">再生速度を変更できません</string>
     <string name="player_gesture_brightness">明るさ %1$d%%</string>
     <string name="player_gesture_volume">メディア音量 %1$d%%</string>
-    <string name="player_gesture_speed">一時再生速度 %1$.2fx</string>
+    <string name="player_gesture_speed">%1$.1fx 倍速中</string>
     <string name="player_gesture_unavailable">調整できません</string>
     <string name="player_scale_mode_fit">フィット</string>
     <string name="player_scale_mode_fill">全画面</string>

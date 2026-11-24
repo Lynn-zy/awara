@@ -7,11 +7,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
@@ -41,6 +36,8 @@ import me.rerere.awara.ui.LocalRouterProvider
 import me.rerere.awara.ui.component.player.Player
 import me.rerere.awara.ui.component.player.PlayerActionTextButton
 import me.rerere.awara.ui.component.player.PlayerBackIconButton
+import me.rerere.awara.ui.component.player.PlayerCompactDropdownMenu
+import me.rerere.awara.ui.component.player.PlayerCompactDropdownMenuItem
 import me.rerere.awara.ui.component.player.PlayerFullscreenIconButton
 import me.rerere.awara.ui.component.player.PlayerScaffold
 import me.rerere.awara.ui.component.player.PlayerState
@@ -232,9 +229,11 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                         }
                                     },
                                 )
-                                DropdownMenu(
+                                PlayerCompactDropdownMenu(
                                     expanded = expandedVideoQuality,
                                     onDismissRequest = { expandedVideoQuality = false },
+                                    preferAbove = false,
+                                    modifier = Modifier.testTag("player_quality_menu"),
                                 ) {
                                     if (localDownload != null) {
                                         val localItemLabel =
@@ -246,7 +245,10 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                 ?: composeStringResource(
                                                     R.string.video_local_playback
                                                 )
-                                        DropdownMenuItem(
+                                        PlayerCompactDropdownMenuItem(
+                                            text = localItemLabel,
+                                            selected = currentDetails.isLocalPlayback,
+                                            minWidth = 96.dp,
                                             onClick = {
                                                 expandedVideoQuality = false
                                                 if (!currentDetails.isLocalPlayback) {
@@ -280,16 +282,6 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                     state.controllerState.hide()
                                                 }
                                             },
-                                            text = { Text(localItemLabel) },
-                                            trailingIcon =
-                                                if (currentDetails.isLocalPlayback) {
-                                                    {
-                                                        Icon(
-                                                            Icons.Outlined.Check,
-                                                            contentDescription = null,
-                                                        )
-                                                    }
-                                                } else null,
                                         )
                                     }
 
@@ -301,7 +293,10 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                         url.qualityKey,
                                                         state.currentQuality,
                                                     )
-                                            DropdownMenuItem(
+                                            PlayerCompactDropdownMenuItem(
+                                                text = videoQualityDisplayName(url.name),
+                                                selected = isSelected,
+                                                minWidth = 96.dp,
                                                 onClick = {
                                                     expandedVideoQuality = false
                                                     val currentPos =
@@ -328,28 +323,20 @@ fun VideoPage(vm: VideoVM = koinViewModel()) {
                                                         syncControllerVisibility = true,
                                                     )
                                                 },
-                                                text = { Text(videoQualityDisplayName(url.name)) },
-                                                trailingIcon =
-                                                    if (isSelected) {
-                                                        {
-                                                            Icon(
-                                                                Icons.Outlined.Check,
-                                                                contentDescription = null,
-                                                            )
-                                                        }
-                                                    } else null,
                                             )
                                         }
                                     } else if (onlineUrlsState.isLoading) {
-                                        DropdownMenuItem(
-                                            onClick = {},
+                                        PlayerCompactDropdownMenuItem(
+                                            text = "…",
                                             enabled = false,
-                                            text = { Text("…") },
+                                            minWidth = 96.dp,
+                                            onClick = {},
                                         )
                                     } else if (onlineUrlsState.errorOrNull != null) {
-                                        DropdownMenuItem(
+                                        PlayerCompactDropdownMenuItem(
+                                            text = composeStringResource(R.string.retry),
+                                            minWidth = 96.dp,
                                             onClick = { vm.requestOnlineUrls() },
-                                            text = { Text(composeStringResource(R.string.retry)) },
                                         )
                                     }
                                 }

@@ -309,12 +309,12 @@ internal fun PlayerSeekPreview(
                     text = "$targetTime ($deltaTime)",
                     modifier =
                         Modifier.background(
-                                Color.Black.copy(alpha = 0.8f),
-                                RoundedCornerShape(4.dp),
+                                PLAYER_OVERLAY_BACKGROUND,
+                                RoundedCornerShape(PLAYER_OVERLAY_CORNER_RADIUS),
                             )
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                             .testTag("player_seek_preview_time"),
-                    color = Color.White,
+                    color = PLAYER_OVERLAY_FOREGROUND,
                     style = MaterialTheme.typography.titleSmall,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
