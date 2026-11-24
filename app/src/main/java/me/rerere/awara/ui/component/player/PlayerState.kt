@@ -49,6 +49,7 @@ import me.rerere.awara.data.playback.PlaybackReadAheadDataSource
 import me.rerere.awara.data.playback.PlaybackSettings
 import me.rerere.awara.data.playback.PlaybackSourceRefresher
 import me.rerere.awara.data.playback.PlayerCache
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.OkHttpClient
 import org.koin.core.context.GlobalContext
@@ -178,6 +179,9 @@ fun rememberPlayerState(
         val speedStr = mmkvPreference.getString(PREFERENCE_KEY_PLAYER_SPEED, "1.0")
         normalizePlaybackSpeed(speedStr?.toFloatOrNull() ?: 1f)
     }
+    val initialLoopPlayEnabled = remember {
+        mmkvPreference.getBoolean(SettingKeys.LOOP_PLAY, false)
+    }
     val state by remember {
         val player =
             builder?.invoke(context)
@@ -190,10 +194,9 @@ fun rememberPlayerState(
                     )
                     .apply {
                         // 自动播放只控制播放意图；暂停时同样允许准备媒体和正常渲染首帧。
-                        playWhenReady = mmkvPreference.getBoolean("setting.auto_play", true)
+                        playWhenReady = mmkvPreference.getBoolean(SettingKeys.AUTO_PLAY, true)
                         repeatMode =
-                            if (mmkvPreference.getBoolean("setting.loop_play", false))
-                                Player.REPEAT_MODE_ONE
+                            if (initialLoopPlayEnabled) Player.REPEAT_MODE_ONE
                             else Player.REPEAT_MODE_OFF
                     }
         val fallbackFactory =
@@ -211,6 +214,7 @@ fun rememberPlayerState(
             PlayerState(
                 player = player,
                 initialPlaybackSpeed = initialSpeed,
+                initialLoopPlayEnabled = initialLoopPlayEnabled,
                 onBufferDiscontinuity = { cdnController?.resetBufferDetection() },
                 connectionTracker = connectionTracker,
                 sourceRefresher = sourceRefresher,
@@ -295,6 +299,10 @@ class PlayerState(
     private val savePlaybackSpeedPreference: (Float) -> Unit = { speed ->
         mmkvPreference.putString(PREFERENCE_KEY_PLAYER_SPEED, speed.toString())
     },
+    initialLoopPlayEnabled: Boolean = (player.repeatMode == Player.REPEAT_MODE_ONE),
+    private val saveLoopPlayPreference: (Boolean) -> Unit = { enabled ->
+        mmkvPreference.putBoolean(SettingKeys.LOOP_PLAY, enabled)
+    },
     private val onBufferDiscontinuity: () -> Unit = {},
     private val connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
     private val sourceRefresher: PlaybackSourceRefresher? = null,
@@ -330,6 +338,14 @@ class PlayerState(
 
     /** 当前播放倍速状态（只读，私有 set，仅通过 [updatePlaybackSpeed] 显式变更并持久化） */
     var currentPlaybackSpeed by mutableFloatStateOf(normalizePlaybackSpeed(initialPlaybackSpeed))
+        private set
+
+    /** 当前是否开启自动重播（全局持久化，半屏与全屏共用，由全屏循环面板显式切换）。 */
+    var loopPlayEnabled by mutableStateOf(initialLoopPlayEnabled)
+        private set
+
+    /** 当前视频会话的 A-B 区间循环状态（切换视频或清空播放列表时自动清除）。 */
+    var abLoopState by mutableStateOf(PlayerAbLoopState())
         private set
 
     /** 当前播放失败状态；为空表示未处于失败态。 */
@@ -369,6 +385,7 @@ class PlayerState(
                 if (!isSameLogicalVideo && mediaItem != null) {
                     renderedFirstFrame = false
                     hasStartedPlayback = player.isPlaying
+                    abLoopState = PlayerAbLoopState()
                 }
             }
 
@@ -404,6 +421,12 @@ class PlayerState(
                     duration = player.duration
                     // 仅在底层明确返回非空条目时同步，避免状态过渡或单测桩返回 null 时丢失同视频上下文
                     player.currentMediaItem?.let { currentMediaItem = it }
+                } else if (playbackState == Player.STATE_ENDED && abLoopState.isActive) {
+                    // 当 B 点紧贴片尾触发 STATE_ENDED 时，主动回跳 A 点并继续播放
+                    abLoopState.startMs?.let { startPos ->
+                        seekTo(startPos)
+                        play()
+                    }
                 }
             }
 
@@ -495,6 +518,11 @@ class PlayerState(
             this.player.playbackParameters =
                 this.player.playbackParameters.withSpeed(currentPlaybackSpeed)
         }
+        val expectedRepeatMode =
+            if (loopPlayEnabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        if (this.player.repeatMode != expectedRepeatMode) {
+            this.player.repeatMode = expectedRepeatMode
+        }
     }
 
     var videoSize by mutableStateOf(VideoSize.UNKNOWN)
@@ -554,6 +582,7 @@ class PlayerState(
             videoSize = VideoSize.UNKNOWN
             hasStartedPlayback = false
             lastRequestedPositionMs = 0L
+            abLoopState = PlayerAbLoopState()
             videoTransform.reset()
             controllerState.resetForNewMedia()
             return
@@ -590,9 +619,10 @@ class PlayerState(
 
         val currentPlayWhenReady = targetPlayWhenReady ?: player.playWhenReady
         if (!sameVideo) {
-            // 切换到不同视频时清空上一视频尺寸与已播标记，并恢复默认适应缩放及仅顶部栏状态
+            // 切换到不同视频时清空上一视频尺寸、已播标记与 A-B 区间，并恢复默认适应缩放及仅顶部栏状态
             videoSize = VideoSize.UNKNOWN
             hasStartedPlayback = false
+            abLoopState = PlayerAbLoopState()
             videoTransform.reset()
             controllerState.resetForNewMedia()
         }
@@ -667,6 +697,56 @@ class PlayerState(
         savePlaybackSpeedPreference(speed)
         controllerState.hide()
         return true
+    }
+
+    /**
+     * 更新自动重播开关状态，同步底层播放器的单曲循环模式并全局持久化。
+     *
+     * @param enabled true 开启单曲自动重播，false 关闭自动重播
+     */
+    fun updateLoopPlayEnabled(enabled: Boolean) {
+        loopPlayEnabled = enabled
+        val targetRepeatMode =
+            if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        if (player.repeatMode != targetRepeatMode) {
+            player.repeatMode = targetRepeatMode
+        }
+        saveLoopPlayPreference(enabled)
+    }
+
+    /**
+     * 记录当前或指定播放进度为 A-B 循环起点 A。
+     *
+     * @param positionMs 目标起点时间戳（毫秒），默认取播放器当前进度
+     * @return 更新后的 A-B 循环状态；若当前视频时长无效则返回 null
+     */
+    fun setAbLoopStart(positionMs: Long = player.currentPosition.coerceAtLeast(0L)): PlayerAbLoopState? {
+        val next = abLoopState.withStart(positionMs = positionMs, durationMs = duration) ?: return null
+        abLoopState = next
+        return next
+    }
+
+    /**
+     * 切换或设置当前视频的 A-B 循环终点 B：已设置 B 点时再次点击将仅取消 B 点并保留 A 点；
+     * 尚未设置 B 点时记录目标进度为 B 点并校验区间合法性。
+     *
+     * @param positionMs 目标终点时间戳（毫秒），默认取播放器当前进度
+     * @return 更新、取消或校验失败结果
+     */
+    fun toggleAbLoopEnd(positionMs: Long = player.currentPosition.coerceAtLeast(0L)): AbLoopEndResult {
+        val result = abLoopState.toggleEnd(positionMs = positionMs, durationMs = duration)
+        when (result) {
+            is AbLoopEndResult.Updated -> abLoopState = result.state
+            is AbLoopEndResult.Cleared -> abLoopState = result.state
+            AbLoopEndResult.MissingStart,
+            AbLoopEndResult.EndNotAfterStart -> Unit
+        }
+        return result
+    }
+
+    /** 清除当前视频的 A-B 循环区间标记。 */
+    fun clearAbLoop() {
+        abLoopState = PlayerAbLoopState()
     }
 
     internal fun markPlaybackStarted() {

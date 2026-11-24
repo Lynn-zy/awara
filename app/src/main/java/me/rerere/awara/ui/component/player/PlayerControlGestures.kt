@@ -28,6 +28,30 @@ internal enum class PlayerDoubleTapZone {
     RIGHT,
 }
 
+/** 播放器双击后的实际执行动作。 */
+internal enum class PlayerDoubleTapAction {
+    SEEK_BACKWARD,
+    SEEK_FORWARD,
+    TOGGLE_PLAY_PAUSE,
+}
+
+/**
+ * 根据双击热区与「双击快进/快退」开关决定执行动作。
+ *
+ * 关闭双击快进/快退后，整个画面左/中/右任意位置双击统一执行播放/暂停。
+ */
+internal fun resolveDoubleTapAction(
+    zone: PlayerDoubleTapZone,
+    doubleTapSeekEnabled: Boolean,
+): PlayerDoubleTapAction {
+    if (!doubleTapSeekEnabled) return PlayerDoubleTapAction.TOGGLE_PLAY_PAUSE
+    return when (zone) {
+        PlayerDoubleTapZone.LEFT -> PlayerDoubleTapAction.SEEK_BACKWARD
+        PlayerDoubleTapZone.RIGHT -> PlayerDoubleTapAction.SEEK_FORWARD
+        PlayerDoubleTapZone.CENTER -> PlayerDoubleTapAction.TOGGLE_PLAY_PAUSE
+    }
+}
+
 /** 左右双击快退/快进热区占比（各占播放器宽度的 30%）。 */
 internal const val DOUBLE_TAP_SIDE_ZONE_RATIO = 0.30f
 

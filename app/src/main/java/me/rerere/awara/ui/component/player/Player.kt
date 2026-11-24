@@ -166,6 +166,7 @@ import kotlinx.coroutines.launch
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
 import me.rerere.awara.ui.component.common.CdnConnectionDebugText
+import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.awara.util.findActivityOrNull
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import me.rerere.compose_setting.preference.rememberStringPreference
@@ -410,7 +411,7 @@ private val PLAYER_MENU_CHECK_GAP = 10.dp
 private val PLAYER_MENU_CORNER_RADIUS = 8.dp
 private val PLAYER_MENU_SURFACE_COLOR = Color(0xFF252830)
 private val PLAYER_MENU_CONTENT_COLOR = Color(0xFFEBEDF2)
-private val PLAYER_MENU_SELECTED_COLOR = Color(0xFF8AB4F8)
+internal val PLAYER_MENU_SELECTED_COLOR = Color(0xFF8AB4F8)
 
 /**
  * 播放器控制栏统一图标按钮，依据当前控制栏规格适配热区槽位与光学图标尺寸。
@@ -430,6 +431,7 @@ internal fun PlayerControlIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     slotSize: Dp = LocalPlayerControlDimensions.current.slotSize,
+    tint: Color = LocalContentColor.current,
 ) {
     // 关闭 M3 默认 48dp 隐式扩张，确保半屏 38dp / 全屏 46dp 槽位严格对齐设计规格。
     CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
@@ -437,6 +439,7 @@ internal fun PlayerControlIconButton(
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
+                tint = tint,
                 modifier = Modifier.size(iconSize),
             )
         }
@@ -581,6 +584,8 @@ fun Player(
         rememberBooleanPreference(key = PREFERENCE_KEY_SEEK_THUMBNAIL_ENABLED, default = true)
     val minimalProgressEnabled by
         rememberBooleanPreference(key = PREFERENCE_KEY_PLAYER_MINIMAL_PROGRESS, default = true)
+    val doubleTapSeekEnabled by
+        rememberBooleanPreference(key = SettingKeys.PLAYER_DOUBLE_TAP_SEEK, default = true)
     val cdnDebugEnabled by rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
     val previewPosition by
         rememberStringPreference(
@@ -600,6 +605,7 @@ fun Player(
                 onRotateScreen = onRotateScreen,
                 thumbnailEnabled = thumbnailEnabled,
                 minimalProgressEnabled = minimalProgressEnabled,
+                doubleTapSeekEnabled = doubleTapSeekEnabled,
                 previewPosition = SeekPreviewPosition.fromKey(previewPosition),
                 cdnDebugEnabled = cdnDebugEnabled,
             )
@@ -624,6 +630,7 @@ internal fun PlayerController(
     previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
     controls: PlayerGestureControlState = rememberPlayerGestureControls(state),
     minimalProgressEnabled: Boolean = true,
+    doubleTapSeekEnabled: Boolean = true,
     cdnDebugEnabled: Boolean = false,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -759,12 +766,46 @@ internal fun PlayerController(
     }
     val controller = state.controllerState
     var speedMenuExpanded by remember(state) { mutableStateOf(false) }
+    var loopMenuExpanded by remember(state) { mutableStateOf(false) }
     var lastInteract by remember { mutableStateOf(System.currentTimeMillis()) }
     var doubleTapSeekFeedback by remember(state) { mutableStateOf<DoubleTapSeekFeedback?>(null) }
     var doubleTapPulseSeq by remember(state) { mutableStateOf(0) }
     var scaleFeedback by remember(state) { mutableStateOf<PlayerScaleFeedback?>(null) }
     var scaleFeedbackVersion by remember(state) { mutableStateOf(0) }
+    var loopFeedback by remember(state) { mutableStateOf<PlayerLoopFeedback?>(null) }
+    var loopFeedbackVersion by remember(state) { mutableStateOf(0) }
     val pinchZoomActive = (scaleFeedback as? PlayerScaleFeedback.PinchZoom)?.active == true
+    val abLoop = state.abLoopState
+
+    // A-B 循环生效且正在播放时以 80ms 频率监测播放进度，触达 B 点立即回跳 A 点。
+    LaunchedEffect(state, state.player, abLoop, state.playing, previewState.isActive) {
+        if (!abLoop.isActive || !state.playing || previewState.isActive) return@LaunchedEffect
+        val startMs = abLoop.startMs ?: return@LaunchedEffect
+        val endMs = abLoop.endMs ?: return@LaunchedEffect
+        var awaitingReturnBelowEnd = false
+        var lastJumpWallMs = 0L
+        while (true) {
+            val pos = state.player.currentPosition.coerceAtLeast(0L)
+            if (pos < endMs) {
+                awaitingReturnBelowEnd = false
+            }
+            val nowMs = System.currentTimeMillis()
+            val canTriggerJump = !awaitingReturnBelowEnd || nowMs - lastJumpWallMs >= 250L
+            if (
+                canTriggerJump &&
+                    abLoop.shouldJumpToStart(
+                        currentPositionMs = pos,
+                        isPlaying = state.playing,
+                        isSeeking = previewState.isActive,
+                    )
+            ) {
+                awaitingReturnBelowEnd = true
+                lastJumpWallMs = nowMs
+                state.seekTo(startMs)
+            }
+            delay(80)
+        }
+    }
 
     val displayPosition =
         when {
@@ -782,9 +823,18 @@ internal fun PlayerController(
             durationMs = state.duration,
             sourceUri = sourceUri,
         )
+    val abLoopStartFraction =
+        abLoop.startMs?.takeIf { state.duration > 0L }?.let {
+            playerProgressFraction(it, state.duration)
+        }
+    val abLoopEndFraction =
+        abLoop.endMs?.takeIf { abLoop.isActive && state.duration > 0L }?.let {
+            playerProgressFraction(it, state.duration)
+        }
 
     // 进入全屏时立即收起全部控件；退出全屏时自动复位全屏缩放与双指偏移状态
     LaunchedEffect(fullscreen) {
+        loopMenuExpanded = false
         if (fullscreen) {
             controller.hide()
         } else {
@@ -795,6 +845,13 @@ internal fun PlayerController(
     LaunchedEffect(mediaItem, mediaGeneration) {
         doubleTapSeekFeedback = null
         scaleFeedback = null
+        loopFeedback = null
+        loopMenuExpanded = false
+    }
+    LaunchedEffect(doubleTapSeekEnabled) {
+        if (!doubleTapSeekEnabled) {
+            doubleTapSeekFeedback = null
+        }
     }
     LaunchedEffect(doubleTapSeekFeedback?.pulseVersion) {
         if (doubleTapSeekFeedback != null) {
@@ -815,12 +872,20 @@ internal fun PlayerController(
             scaleFeedback = null
         }
     }
+    LaunchedEffect(loopFeedback) {
+        val currentFeedback = loopFeedback ?: return@LaunchedEffect
+        delay(SCALE_MODE_FEEDBACK_DURATION_MS)
+        if (loopFeedback == currentFeedback) {
+            loopFeedback = null
+        }
+    }
     LaunchedEffect(
         controller.anyVisible,
         state.playing,
         previewState.isActive,
         controls.feedback,
         speedMenuExpanded,
+        loopMenuExpanded,
         pinchZoomActive,
         lastInteract,
     ) {
@@ -830,6 +895,7 @@ internal fun PlayerController(
                 !previewState.isActive &&
                 controls.feedback == null &&
                 !speedMenuExpanded &&
+                !loopMenuExpanded &&
                 !pinchZoomActive
         ) {
             delay(3000)
@@ -937,6 +1003,7 @@ internal fun PlayerController(
                     onPinchStart = {
                         suppressTap = true
                         speedMenuExpanded = false
+                        loopMenuExpanded = false
                         doubleTapSeekFeedback = null
                         lastInteract = System.currentTimeMillis()
                     },
@@ -979,13 +1046,18 @@ internal fun PlayerController(
                             fullscreen,
                             playerSize,
                             inputEnabled,
+                            doubleTapSeekEnabled,
                             initialInteraction.enableDoubleTapGesture,
                         ),
                     isSuppressed = { suppressTap },
                     onPressStart = { suppressTap = false },
-                    activeRapidSeekZone = { doubleTapSeekFeedback?.zone },
+                    activeRapidSeekZone = {
+                        if (doubleTapSeekEnabled) doubleTapSeekFeedback?.zone else null
+                    },
                     onRapidSeekTap = { zone, tapOffset ->
-                        triggerSideDoubleTapSeek(zone, tapOffset)
+                        if (doubleTapSeekEnabled) {
+                            triggerSideDoubleTapSeek(zone, tapOffset)
+                        }
                     },
                     onDoubleTap = { tapOffset ->
                         if (suppressTap) {
@@ -993,10 +1065,12 @@ internal fun PlayerController(
                             return@playerTapGestures
                         }
                         val zone = resolveDoubleTapZone(tapOffset.x, playerSize.width.toFloat())
-                        when (zone) {
-                            PlayerDoubleTapZone.LEFT,
-                            PlayerDoubleTapZone.RIGHT -> triggerSideDoubleTapSeek(zone, tapOffset)
-                            PlayerDoubleTapZone.CENTER -> {
+                        when (resolveDoubleTapAction(zone, doubleTapSeekEnabled)) {
+                            PlayerDoubleTapAction.SEEK_BACKWARD ->
+                                triggerSideDoubleTapSeek(PlayerDoubleTapZone.LEFT, tapOffset)
+                            PlayerDoubleTapAction.SEEK_FORWARD ->
+                                triggerSideDoubleTapSeek(PlayerDoubleTapZone.RIGHT, tapOffset)
+                            PlayerDoubleTapAction.TOGGLE_PLAY_PAUSE -> {
                                 doubleTapSeekFeedback = null
                                 lastInteract = System.currentTimeMillis()
                                 if (state.playing) {
@@ -1073,6 +1147,7 @@ internal fun PlayerController(
                         if (active) {
                             if (previewState.isActive) controller.showSeek() else controller.hide()
                             speedMenuExpanded = false
+                            loopMenuExpanded = false
                             doubleTapSeekFeedback = null
                         } else if (state.player.playWhenReady) {
                             controller.hide()
@@ -1152,7 +1227,7 @@ internal fun PlayerController(
                                     modifier = Modifier.weight(1f).testTag("player_title"),
                                 )
 
-                                // 全屏右上角按钮顺序（从左到右）：缩放、旋转、清晰度
+                                // 全屏右上角按钮顺序（从左到右）：缩放、旋转、循环、清晰度
                                 if (fullscreen) {
                                     PlayerControlIconButton(
                                         icon = Icons.Outlined.FitScreen,
@@ -1162,6 +1237,7 @@ internal fun PlayerController(
                                         onClick = {
                                             lastInteract = System.currentTimeMillis()
                                             doubleTapSeekFeedback = null
+                                            loopMenuExpanded = false
                                             val nextMode = state.videoTransform.cycleOrResetMode()
                                             scaleFeedbackVersion++
                                             scaleFeedback =
@@ -1169,6 +1245,7 @@ internal fun PlayerController(
                                                     nextMode,
                                                     scaleFeedbackVersion,
                                                 )
+                                            loopFeedback = null
                                         },
                                         modifier = Modifier.testTag("player_scale_mode_button"),
                                     )
@@ -1181,12 +1258,98 @@ internal fun PlayerController(
                                             iconSize = controlDimensions.rotateIconSize,
                                             onClick = {
                                                 lastInteract = System.currentTimeMillis()
+                                                loopMenuExpanded = false
                                                 onRotateScreen()
                                             },
                                             modifier =
                                                 Modifier.testTag("player_rotate_screen_button"),
                                         )
                                     }
+
+                                    fun emitLoopFeedback(buildFeedback: (Int) -> PlayerLoopFeedback) {
+                                        scaleFeedback = null
+                                        loopFeedbackVersion++
+                                        loopFeedback = buildFeedback(loopFeedbackVersion)
+                                        lastInteract = System.currentTimeMillis()
+                                    }
+                                    PlayerLoopSelector(
+                                        loopPlayEnabled = state.loopPlayEnabled,
+                                        abLoop = abLoop,
+                                        canSetAbLoop =
+                                            state.duration > 0L &&
+                                                state.player.isCurrentMediaItemSeekable,
+                                        expanded = loopMenuExpanded,
+                                        onExpandedChange = { expanded ->
+                                            loopMenuExpanded = expanded
+                                            if (expanded) {
+                                                speedMenuExpanded = false
+                                                if (state.hasStartedPlayback) {
+                                                    controller.show()
+                                                }
+                                            }
+                                            lastInteract = System.currentTimeMillis()
+                                        },
+                                        onToggleLoopPlay = {
+                                            val nextEnabled = !state.loopPlayEnabled
+                                            state.updateLoopPlayEnabled(nextEnabled)
+                                            emitLoopFeedback {
+                                                PlayerLoopFeedback.AutoReplay(nextEnabled, it)
+                                            }
+                                        },
+                                        onSetPointA = {
+                                            val updated =
+                                                state.setAbLoopStart() ?: return@PlayerLoopSelector
+                                            val start =
+                                                updated.startMs ?: return@PlayerLoopSelector
+                                            emitLoopFeedback { version ->
+                                                val end = updated.endMs
+                                                if (updated.isActive && end != null) {
+                                                    PlayerLoopFeedback.AbLoopActivated(
+                                                        startMs = start,
+                                                        endMs = end,
+                                                        version = version,
+                                                    )
+                                                } else {
+                                                    PlayerLoopFeedback.AbPointASet(start, version)
+                                                }
+                                            }
+                                        },
+                                        onTogglePointB = {
+                                            when (val result = state.toggleAbLoopEnd()) {
+                                                is AbLoopEndResult.Updated -> {
+                                                    val start = result.state.startMs
+                                                    val end = result.state.endMs
+                                                    if (start != null && end != null) {
+                                                        emitLoopFeedback {
+                                                            PlayerLoopFeedback.AbLoopActivated(
+                                                                startMs = start,
+                                                                endMs = end,
+                                                                version = it,
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                is AbLoopEndResult.Cleared -> {
+                                                    emitLoopFeedback {
+                                                        PlayerLoopFeedback.AbPointBCleared(it)
+                                                    }
+                                                }
+                                                AbLoopEndResult.EndNotAfterStart -> {
+                                                    emitLoopFeedback {
+                                                        PlayerLoopFeedback.AbInvalidEnd(it)
+                                                    }
+                                                }
+                                                AbLoopEndResult.MissingStart ->
+                                                    lastInteract = System.currentTimeMillis()
+                                            }
+                                        },
+                                        onClearAbLoop = {
+                                            state.clearAbLoop()
+                                            emitLoopFeedback {
+                                                PlayerLoopFeedback.AbLoopCleared(it)
+                                            }
+                                        },
+                                    )
                                 }
 
                                 actions()
@@ -1242,7 +1405,12 @@ internal fun PlayerController(
                                 ?.takeIf { it.kind != PlayerControlKind.Speed }
                                 ?.let { PlayerGestureFeedback(it, fullscreen) }
                             if (!previewState.isActive && controls.feedback == null) {
-                                scaleFeedback?.let { PlayerScaleFeedbackOverlay(it) }
+                                val activeScaleFeedback = scaleFeedback
+                                if (activeScaleFeedback != null) {
+                                    PlayerScaleFeedbackOverlay(activeScaleFeedback)
+                                } else {
+                                    loopFeedback?.let { PlayerLoopFeedbackOverlay(it) }
+                                }
                             }
                         }
 
@@ -1275,6 +1443,8 @@ internal fun PlayerController(
                                         previewState = previewState,
                                         fraction = progressFraction,
                                         bufferedFraction = bufferedFraction,
+                                        abLoopStartFraction = abLoopStartFraction,
+                                        abLoopEndFraction = abLoopEndFraction,
                                         enabled =
                                             inputEnabled &&
                                                 state.duration > 0L &&
@@ -1326,8 +1496,11 @@ internal fun PlayerController(
                                             ),
                                         onExpandedChange = { expanded ->
                                             speedMenuExpanded = expanded
-                                            if (expanded && state.hasStartedPlayback) {
-                                                controller.show()
+                                            if (expanded) {
+                                                loopMenuExpanded = false
+                                                if (state.hasStartedPlayback) {
+                                                    controller.show()
+                                                }
                                             }
                                             lastInteract = System.currentTimeMillis()
                                         },
@@ -1377,6 +1550,8 @@ internal fun PlayerController(
             PlayerProgressTrack(
                 playedFraction = progressFraction,
                 bufferedFraction = bufferedFraction,
+                abLoopStartFraction = abLoopStartFraction,
+                abLoopEndFraction = abLoopEndFraction,
                 modifier =
                     Modifier.align(Alignment.BottomCenter)
                         .fillMaxWidth()
@@ -2509,6 +2684,8 @@ private fun ProgressSlider(
     onTouch: () -> Unit,
     onFinished: () -> Unit,
     modifier: Modifier = Modifier,
+    abLoopStartFraction: Float? = null,
+    abLoopEndFraction: Float? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     var isDragCancelled by remember { mutableStateOf(false) }
@@ -2580,6 +2757,8 @@ private fun ProgressSlider(
                     PlayerProgressTrack(
                         playedFraction = positions.activeRange.endInclusive,
                         bufferedFraction = bufferedFraction,
+                        abLoopStartFraction = abLoopStartFraction,
+                        abLoopEndFraction = abLoopEndFraction,
                         modifier =
                             Modifier.fillMaxWidth()
                                 .height(dimensions.trackHeight)
@@ -2629,13 +2808,15 @@ private fun ProgressSlider(
     }
 }
 
-/** 三层轨道区分未播放、已缓冲与已播放；只读细条复用绘制且不接管触摸。 */
+/** 三层轨道区分未播放、已缓冲与已播放；若已设置 A-B 循环则叠加区间高亮与端点标记。 */
 @Composable
 internal fun PlayerProgressTrack(
     playedFraction: Float,
     bufferedFraction: Float,
     modifier: Modifier = Modifier,
     rounded: Boolean = true,
+    abLoopStartFraction: Float? = null,
+    abLoopEndFraction: Float? = null,
 ) {
     val playedColor = MaterialTheme.colorScheme.primary
     val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
@@ -2643,13 +2824,18 @@ internal fun PlayerProgressTrack(
         val start = if (isRtl) size.width else 0f
         val end = if (isRtl) 0f else size.width
         val cap = if (rounded) StrokeCap.Round else StrokeCap.Butt
+        fun clampFraction(fraction: Float): Float =
+            fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+
+        fun fractionToX(clampedFraction: Float): Float = start + (end - start) * clampedFraction
+
         fun drawProgress(fraction: Float, color: Color) {
-            val progress = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
+            val progress = clampFraction(fraction)
             if (progress > 0f) {
                 drawLine(
                     color,
                     Offset(start, center.y),
-                    Offset(start + (end - start) * progress, center.y),
+                    Offset(fractionToX(progress), center.y),
                     strokeWidth = size.height,
                     cap = cap,
                 )
@@ -2658,5 +2844,32 @@ internal fun PlayerProgressTrack(
         drawProgress(1f, Color.White.copy(alpha = 0.24f))
         drawProgress(bufferedFraction, Color.White.copy(alpha = 0.6f))
         drawProgress(playedFraction, playedColor)
+
+        val loopStart = abLoopStartFraction?.takeIf { it.isFinite() }?.coerceIn(0f, 1f)
+        val loopEnd = abLoopEndFraction?.takeIf { it.isFinite() }?.coerceIn(0f, 1f)
+        if (loopStart != null) {
+            val startX = fractionToX(loopStart)
+            val markerRadius = (size.height * 0.9f).coerceAtLeast(2.dp.toPx())
+            if (loopEnd != null && loopEnd > loopStart) {
+                val endX = fractionToX(loopEnd)
+                drawLine(
+                    color = PLAYER_AB_LOOP_TRACK_COLOR.copy(alpha = 0.85f),
+                    start = Offset(startX, center.y),
+                    end = Offset(endX, center.y),
+                    strokeWidth = size.height,
+                    cap = StrokeCap.Butt,
+                )
+                drawCircle(
+                    color = PLAYER_AB_LOOP_TRACK_COLOR,
+                    radius = markerRadius,
+                    center = Offset(endX, center.y),
+                )
+            }
+            drawCircle(
+                color = PLAYER_AB_LOOP_TRACK_COLOR,
+                radius = markerRadius,
+                center = Offset(startX, center.y),
+            )
+        }
     }
 }
