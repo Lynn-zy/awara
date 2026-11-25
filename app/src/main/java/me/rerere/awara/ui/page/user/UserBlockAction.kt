@@ -1,16 +1,22 @@
 package me.rerere.awara.ui.page.user
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.PersonOff
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -18,9 +24,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -28,7 +36,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import me.rerere.awara.R
 
-/** 仅由用户主页调用，确认后拉黑；已拉黑时操作为解除，失败取关另有明确重试。 */
+/** 仅由用户主页调用，确认后拉黑；已拉黑时以紧凑药丸胶囊展示并允许解除，失败取关另有明确重试。 */
 @Composable
 internal fun UserBlockAction(
     userId: String,
@@ -49,29 +57,68 @@ internal fun UserBlockAction(
             Icon(Icons.Outlined.Replay, stringResource(R.string.blocklist_retry_unfollow))
         }
     }
-    IconButton(
-        modifier =
-            Modifier.background(
-                    if (blocked) MaterialTheme.colorScheme.errorContainer else Color.Transparent,
-                    CircleShape,
+    if (blocked) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            modifier =
+                Modifier.padding(horizontal = 4.dp)
+                    .height(32.dp)
+                    .clip(CircleShape)
+                    .clickable(enabled = !loading, role = Role.Button) { confirming = true }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = actionLabel
+                        stateDescription = statusLabel
+                        selected = true
+                    },
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Outlined.Block,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                Text(
+                    text = statusLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
                 )
-                .semantics {
+            }
+        }
+    } else {
+        IconButton(
+            modifier =
+                Modifier.semantics {
                     contentDescription = actionLabel
                     stateDescription = statusLabel
-                    selected = blocked
+                    selected = false
                 },
-        onClick = { confirming = true },
-        enabled = !loading,
-    ) {
-        if (loading) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        else
-            Icon(
-                Icons.Outlined.Block,
-                null,
-                tint =
-                    if (blocked) MaterialTheme.colorScheme.onErrorContainer
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            onClick = { confirming = true },
+            enabled = !loading,
+        ) {
+            if (loading) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.PersonOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
     if (confirming) {
         if (blocked) {
@@ -84,7 +131,7 @@ internal fun UserBlockAction(
                     onUnblock()
                 },
             )
-        } else
+        } else {
             AlertDialog(
                 onDismissRequest = { confirming = false },
                 title = { Text(stringResource(R.string.user_block)) },
@@ -106,6 +153,7 @@ internal fun UserBlockAction(
                     }
                 },
             )
+        }
     }
 }
 
