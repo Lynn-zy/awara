@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.awara.data.download.DownloadStorage
 import me.rerere.awara.data.dto.CommentCreationDto
+import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.HistoryItem
 import me.rerere.awara.data.entity.HistoryType
@@ -104,6 +105,9 @@ class VideoVM(
 
                 override suspend fun parseVideoUrl(video: Video): List<VideoFile> =
                     mediaRepo.parseVideoUrl(video)
+
+                override suspend fun getProfile(username: String): ProfileDto =
+                    userRepo.getProfile(username)
             }
         )
 
@@ -122,18 +126,25 @@ class VideoVM(
                 val details = state.details
                 val video = details.displayVideo
                 val localDownload = details.localDownload
+                val fallbackAuthor = details.offlineDeletedAuthor
                 val title = video?.title ?: localDownload?.title ?: ""
                 val thumbnail = video?.thumbnailUrl() ?: localDownload?.thumbnail ?: ""
                 val authorId =
                     video?.user?.username
                         ?: video?.user?.id
+                        ?: fallbackAuthor?.username
+                        ?: fallbackAuthor?.id
                         ?: localDownload?.authorId
                         ?: ""
-                val authorName = video?.user?.name ?: localDownload?.authorName ?: ""
+                val authorName =
+                    video?.user?.name ?: fallbackAuthor?.name ?: localDownload?.authorName ?: ""
                 val authorAvatar =
-                    (video?.user?.avatar).toAvatarUrl().takeIf {
-                        video?.user?.avatar != null
-                    } ?: localDownload?.authorAvatar ?: ""
+                    (video?.user?.avatar).toAvatarUrl().takeIf { video?.user?.avatar != null }
+                        ?: (fallbackAuthor?.avatar).toAvatarUrl().takeIf {
+                            fallbackAuthor?.avatar != null
+                        }
+                        ?: localDownload?.authorAvatar
+                        ?: ""
                 val publishedAt =
                     video?.createdAt?.epochSecond
                         ?: localDownload?.publishedAtEpochSeconds
@@ -218,8 +229,7 @@ class VideoVM(
                         current.copy(
                             metadata =
                                 VideoDetailsState.Local.Metadata.OfflineFallback(
-                                    isOnlineRemoved = false,
-                                    errorReason = reason,
+                                    status = LocalOfflineStatus.LoadFailed(reason)
                                 )
                         )
                     } else {
@@ -280,8 +290,7 @@ class VideoVM(
                                 playingLocal = playingLocal,
                                 metadata =
                                     VideoDetailsState.Local.Metadata.OfflineFallback(
-                                        isOnlineRemoved = detailsResult.isOnlineRemoved,
-                                        errorReason = detailsResult.errorReason,
+                                        status = detailsResult.offlineStatus
                                     ),
                             )
                     )
@@ -447,9 +456,14 @@ class VideoVM(
         }
     }
 
-    /** 关注或取消关注视频作者。 */
+    /** 关注或取消关注视频作者（兼容视频已删除但作者存活时的本地回退详情页）。 */
     fun followOrUnfollow() {
-        val author = state.details.interactiveVideo?.user?.takeIf { it.deletedAt == null } ?: return
+        val interactiveAuthor =
+            state.details.interactiveVideo?.user?.takeIf { it.deletedAt == null }
+        val author =
+            interactiveAuthor
+                ?: state.details.offlineDeletedAuthor?.takeIf { it.deletedAt == null }
+                ?: return
         viewModelScope.launch {
             runAPICatching {
                     if (author.following) {
@@ -458,7 +472,29 @@ class VideoVM(
                         userRepo.followUser(author.id)
                     }
                 }
-                .onSuccess { getVideo() }
+                .onSuccess {
+                    if (interactiveAuthor != null) {
+                        getVideo()
+                        return@onSuccess
+                    }
+                    val currentLocal = state.details as? VideoDetailsState.Local ?: return@onSuccess
+                    val currentAuthor = currentLocal.offlineDeletedAuthor ?: return@onSuccess
+                    state =
+                        state.copy(
+                            details =
+                                currentLocal.copy(
+                                    metadata =
+                                        VideoDetailsState.Local.Metadata.OfflineFallback(
+                                            status =
+                                                LocalOfflineStatus.VideoDeleted(
+                                                    currentAuthor.copy(
+                                                        following = !author.following
+                                                    )
+                                                )
+                                        )
+                                )
+                        )
+                }
                 .onException { if (it.exception is CancellationException) throw it.exception }
         }
     }
@@ -889,6 +925,9 @@ class VideoVM(
         val interactiveVideo: Video?
             get() = null
 
+        val offlineDeletedAuthor: User?
+            get() = null
+
         /** 用于页面标题、封面与尺寸展示的视频元数据。 */
         val displayVideo: Video?
             get() = interactiveVideo
@@ -974,6 +1013,12 @@ class VideoVM(
             override val interactiveVideo: Video?
                 get() = (metadata as? Metadata.OnlineReady)?.video
 
+            override val offlineDeletedAuthor: User?
+                get() =
+                    ((metadata as? Metadata.OfflineFallback)?.status as?
+                            LocalOfflineStatus.VideoDeleted)
+                        ?.author
+
             override val onlineUrlsState: OnlineUrlsState
                 get() = (metadata as? Metadata.OnlineReady)?.urlsState ?: OnlineUrlsState.Idle
 
@@ -986,8 +1031,7 @@ class VideoVM(
                 ) : Metadata
 
                 data class OfflineFallback(
-                    val isOnlineRemoved: Boolean,
-                    val errorReason: String?,
+                    val status: LocalOfflineStatus,
                 ) : Metadata
             }
         }

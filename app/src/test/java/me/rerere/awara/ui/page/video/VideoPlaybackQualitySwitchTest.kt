@@ -3,6 +3,7 @@ package me.rerere.awara.ui.page.video
 import androidx.media3.common.MediaItem
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
+import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadType
 import me.rerere.awara.data.entity.Video
@@ -34,6 +35,9 @@ class VideoPlaybackQualitySwitchTest {
             parseVideoUrlCalls++
             return onlineUrls
         }
+
+        override suspend fun getProfile(username: String): ProfileDto =
+            ProfileDto(user = video.user, header = null, updatedAt = Instant.EPOCH, body = null)
     }
 
     @Test

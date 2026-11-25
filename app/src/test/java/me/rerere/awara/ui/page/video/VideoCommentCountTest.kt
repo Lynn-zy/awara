@@ -525,8 +525,7 @@ class VideoCommentCountTest {
                     ),
                 metadata =
                     VideoVM.VideoDetailsState.Local.Metadata.OfflineFallback(
-                        isOnlineRemoved = false,
-                        errorReason = "offline",
+                        status = LocalOfflineStatus.LoadFailed("offline")
                     ),
             )
         assertEquals(0, VideoVM.VideoState(details = offlineDetails).displayCommentCount)

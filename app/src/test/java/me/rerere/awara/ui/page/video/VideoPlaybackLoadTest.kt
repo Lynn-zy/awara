@@ -4,6 +4,7 @@ import java.io.IOException
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.DownloadType
 import me.rerere.awara.data.entity.User
@@ -32,11 +33,15 @@ class VideoPlaybackLoadTest {
         var videoHttpErrorCode: Int? = null
         var urlsToReturn: List<VideoFile> = emptyList()
         var urlsThrows: Throwable? = null
+        var profileToReturn: ProfileDto? = null
+        var profileThrows: Throwable? = null
+        var profileHttpErrorCode: Int? = null
 
         var getDownloadItemCallCount = 0
         var isLocalFileAccessibleCallCount = 0
         var getVideoCallCount = 0
         var parseVideoUrlCallCount = 0
+        var getProfileCallCount = 0
 
         override suspend fun getDownloadItem(id: String): DownloadItem? {
             getDownloadItemCallCount++
@@ -70,6 +75,29 @@ class VideoPlaybackLoadTest {
             parseVideoUrlCallCount++
             urlsThrows?.let { throw it }
             return urlsToReturn
+        }
+
+        override suspend fun getProfile(username: String): ProfileDto {
+            getProfileCallCount++
+            profileHttpErrorCode?.let { code ->
+                val errorJson =
+                    if (code == 404) "{\"message\":\"errors.notFound\"}"
+                    else "{\"message\":\"errors.unknown\"}"
+                val response =
+                    Response.error<Any>(
+                        code,
+                        errorJson.toResponseBody("application/json".toMediaType()),
+                    )
+                throw HttpException(response)
+            }
+            profileThrows?.let { throw it }
+            return profileToReturn
+                ?: ProfileDto(
+                    user = createDummyVideo("profile_owner").user?.copy(username = username),
+                    header = null,
+                    updatedAt = Instant.ofEpochSecond(1670000000L),
+                    body = null,
+                )
         }
     }
 
@@ -167,10 +195,74 @@ class VideoPlaybackLoadTest {
 
         val fallback = detailsResult as PlaybackDetailsResult.LocalFallback
         assertEquals("LocalFallback 必须持有原始下载记录", dummyItem, fallback.item)
-        assertTrue("404 必须识别为原视频或作者已不可用", fallback.isOnlineRemoved)
+        assertTrue(
+            "404 且作者账号仍存活时必须识别为仅视频被删除并附带作者信息",
+            fallback.offlineStatus is LocalOfflineStatus.VideoDeleted,
+        )
+        val deletedStatus = fallback.offlineStatus as LocalOfflineStatus.VideoDeleted
+        assertEquals("author_101", deletedStatus.author.username)
 
         assertEquals("必须请求 1 次在线详情尝试对齐最新数据", 1, fakeDataSource.getVideoCallCount)
+        assertEquals("必须核查 1 次关联作者账号状态", 1, fakeDataSource.getProfileCallCount)
         assertEquals("存在本地成品时严禁调用 parseVideoUrl 网络解析", 0, fakeDataSource.parseVideoUrlCallCount)
+    }
+
+    @Test
+    fun localVideo404DistinguishesAuthorDeletedAndUnlinkedAuthor() = runBlocking {
+        // 1. 关联作者 404 -> 作者已注销
+        val author404Item = createDummyDownloadItem("vid_author_404")
+        val author404Source =
+            FakeVideoPlaybackDataSource().apply {
+                downloadItemToReturn = author404Item
+                videoHttpErrorCode = 404
+                profileHttpErrorCode = 404
+            }
+        val author404Result =
+            VideoPlaybackCoordinator(author404Source)
+                .loadDetails(author404Item.resourceId, PlaybackDecision.Local(author404Item))
+                as PlaybackDetailsResult.LocalFallback
+        assertEquals(LocalOfflineStatus.AuthorDeleted, author404Result.offlineStatus)
+
+        // 2. 关联作者已软删（deletedAt != null） -> 作者已注销
+        val softDeletedUser = createDummyVideo("x").user!!.copy(deletedAt = Instant.EPOCH)
+        val authorSoftDeletedSource =
+            FakeVideoPlaybackDataSource().apply {
+                downloadItemToReturn = author404Item
+                videoHttpErrorCode = 404
+                profileToReturn = ProfileDto(softDeletedUser, null, Instant.EPOCH, null)
+            }
+        val softDeletedResult =
+            VideoPlaybackCoordinator(authorSoftDeletedSource)
+                .loadDetails(author404Item.resourceId, PlaybackDecision.Local(author404Item))
+                as PlaybackDetailsResult.LocalFallback
+        assertEquals(LocalOfflineStatus.AuthorDeleted, softDeletedResult.offlineStatus)
+
+        // 3. 本地视频未关联作者 -> 兜底提示视频或作者不可用，不发起作者查询
+        val unlinkedItem = createDummyDownloadItem("vid_unlinked").copy(authorId = "")
+        val unlinkedSource =
+            FakeVideoPlaybackDataSource().apply {
+                downloadItemToReturn = unlinkedItem
+                videoHttpErrorCode = 404
+            }
+        val unlinkedResult =
+            VideoPlaybackCoordinator(unlinkedSource)
+                .loadDetails(unlinkedItem.resourceId, PlaybackDecision.Local(unlinkedItem))
+                as PlaybackDetailsResult.LocalFallback
+        assertEquals(LocalOfflineStatus.VideoOrAuthorUnavailable, unlinkedResult.offlineStatus)
+        assertEquals(0, unlinkedSource.getProfileCallCount)
+
+        // 4. 核查作者时遇到网络错误 -> 不可误判为作者注销，回退通用不可用
+        val profileNetworkErrorSource =
+            FakeVideoPlaybackDataSource().apply {
+                downloadItemToReturn = author404Item
+                videoHttpErrorCode = 404
+                profileThrows = IOException("timeout")
+            }
+        val networkFallbackResult =
+            VideoPlaybackCoordinator(profileNetworkErrorSource)
+                .loadDetails(author404Item.resourceId, PlaybackDecision.Local(author404Item))
+                as PlaybackDetailsResult.LocalFallback
+        assertEquals(LocalOfflineStatus.VideoOrAuthorUnavailable, networkFallbackResult.offlineStatus)
     }
 
     @Test

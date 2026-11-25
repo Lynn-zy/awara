@@ -310,6 +310,8 @@
     <string name="video_local_playback">本地视频</string>
     <string name="video_local_playback_quality">本地视频 · %1$s</string>
     <string name="video_online_removed">原视频或作者账号已不可用</string>
+    <string name="video_online_video_deleted">原视频已被作者删除</string>
+    <string name="video_online_author_deleted">作者账号已注销，原视频已不可用</string>
     <string name="video_author_unavailable">作者账号不可用</string>
     <string name="video_details_load_failed">视频详情加载失败：%1$s</string>
     <string name="video_local_file_unavailable">本地文件不可用，正在尝试在线播放。</string>

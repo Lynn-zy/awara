@@ -356,6 +356,8 @@
     <string name="video_local_playback">Local video</string>
     <string name="video_local_playback_quality">Local video · %1$s</string>
     <string name="video_online_removed">The original video or author account is no longer available</string>
+    <string name="video_online_video_deleted">The original video was deleted by the author</string>
+    <string name="video_online_author_deleted">The author account has been deleted and the video is unavailable</string>
     <string name="video_author_unavailable">Author account unavailable</string>
     <string name="video_details_load_failed">Could not load video details: %1$s</string>
     <string name="video_local_file_unavailable">The local file is unavailable. Trying online playback.</string>

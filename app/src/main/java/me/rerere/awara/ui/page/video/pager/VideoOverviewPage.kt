@@ -97,6 +97,7 @@ import me.rerere.awara.ui.component.iwara.UserStatus
 import me.rerere.awara.ui.component.player.VideoQualityDownloadDialog
 import me.rerere.awara.ui.component.player.videoQualityDisplayName
 import me.rerere.awara.ui.hooks.rememberUnblockedWorks
+import me.rerere.awara.ui.page.video.LocalOfflineStatus
 import me.rerere.awara.ui.page.video.VideoVM
 import me.rerere.awara.ui.page.video.VideoVM.VideoDetailsState
 import me.rerere.awara.ui.page.video.layout.VideoOverviewAuthorCardSlot
@@ -139,18 +140,26 @@ fun VideoOverviewPage(vm: VideoVM) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 contentPadding = PaddingValues(8.dp) + WindowInsets.navigationBars.asPaddingValues(),
             ) {
-                // 本地回退时使用专门的摘要卡片展示原记录
+                // 本地回退时使用专门的摘要卡片展示原记录；若仅原视频被删除且关联作者仍存活，则同时展示完整作者信息卡片
                 if (
                     details is VideoDetailsState.Local &&
                         details.metadata is VideoDetailsState.Local.Metadata.OfflineFallback
                 ) {
+                    val offlineStatus = details.metadata.status
                     item(span = StaggeredGridItemSpan.FullLine) {
                         LocalDownloadSummary(
                             item = details.item,
-                            isOnlineRemoved = details.metadata.isOnlineRemoved,
-                            sourceError = details.metadata.errorReason,
+                            status = offlineStatus,
                             vm = vm,
                         )
+                    }
+                    if (offlineStatus is LocalOfflineStatus.VideoDeleted) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            VideoOverviewAuthorCard(
+                                user = offlineStatus.author,
+                                onClickSub = { vm.followOrUnfollow() },
+                            )
+                        }
                     }
                 }
 
@@ -744,8 +753,7 @@ internal fun shouldShowLocalVideoBadge(state: VideoVM.VideoState): Boolean =
 @Composable
 private fun LocalDownloadSummary(
     item: DownloadItem,
-    isOnlineRemoved: Boolean,
-    sourceError: String?,
+    status: LocalOfflineStatus,
     vm: VideoVM,
 ) {
     val context = LocalContext.current
@@ -771,11 +779,18 @@ private fun LocalDownloadSummary(
                         fontWeight = FontWeight.SemiBold,
                     )
                     val statusText =
-                        if (isOnlineRemoved) {
-                            stringResource(R.string.video_online_removed)
-                        } else if (!sourceError.isNullOrBlank()) {
-                            stringResource(R.string.video_details_load_failed, sourceError)
-                        } else null
+                        when (status) {
+                            is LocalOfflineStatus.VideoDeleted ->
+                                stringResource(R.string.video_online_video_deleted)
+                            LocalOfflineStatus.AuthorDeleted ->
+                                stringResource(R.string.video_online_author_deleted)
+                            LocalOfflineStatus.VideoOrAuthorUnavailable ->
+                                stringResource(R.string.video_online_removed)
+                            is LocalOfflineStatus.LoadFailed ->
+                                status.reason?.takeIf { it.isNotBlank() }?.let {
+                                    stringResource(R.string.video_details_load_failed, it)
+                                }
+                        }
                     if (statusText != null) {
                         Text(
                             text = statusText,
@@ -817,7 +832,10 @@ private fun LocalDownloadSummary(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (item.authorName.isNotBlank()) {
+                    if (
+                        status !is LocalOfflineStatus.VideoDeleted &&
+                            item.authorName.isNotBlank()
+                    ) {
                         Text(
                             text = item.authorName,
                             style = MaterialTheme.typography.bodySmall,

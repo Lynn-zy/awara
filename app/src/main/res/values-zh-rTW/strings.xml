@@ -266,6 +266,8 @@
     <string name="video_local_playback">本機影片</string>
     <string name="video_local_playback_quality">本機影片 · %1$s</string>
     <string name="video_online_removed">原影片或作者帳號已無法使用</string>
+    <string name="video_online_video_deleted">原影片已被作者刪除</string>
+    <string name="video_online_author_deleted">作者帳號已註銷，原影片已無法使用</string>
     <string name="video_author_unavailable">作者帳號無法使用</string>
     <string name="video_details_load_failed">影片詳情載入失敗：%1$s</string>
     <string name="video_local_file_unavailable">本機檔案無法使用，正在嘗試線上播放。</string>

@@ -266,6 +266,8 @@
     <string name="video_local_playback">ローカル動画</string>
     <string name="video_local_playback_quality">ローカル動画 · %1$s</string>
     <string name="video_online_removed">元の動画または投稿者のアカウントは利用できません</string>
+    <string name="video_online_video_deleted">元の動画は投稿者によって削除されました</string>
+    <string name="video_online_author_deleted">投稿者のアカウントは削除されており、動画は利用できません</string>
     <string name="video_author_unavailable">投稿者のアカウントは利用できません</string>
     <string name="video_details_load_failed">動画の詳細を読み込めませんでした：%1$s</string>
     <string name="video_local_file_unavailable">ローカルファイルを利用できません。オンライン再生を試みています。</string>

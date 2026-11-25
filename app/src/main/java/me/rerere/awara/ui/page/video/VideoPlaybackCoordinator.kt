@@ -1,6 +1,7 @@
 package me.rerere.awara.ui.page.video
 
 import kotlinx.coroutines.CancellationException
+import me.rerere.awara.data.dto.ProfileDto
 import me.rerere.awara.data.entity.DownloadItem
 import me.rerere.awara.data.entity.User
 import me.rerere.awara.data.entity.Video
@@ -19,6 +20,23 @@ interface VideoPlaybackDataSource {
     suspend fun getVideo(id: String): Video
 
     suspend fun parseVideoUrl(video: Video): List<VideoFile>
+
+    suspend fun getProfile(username: String): ProfileDto
+}
+
+/** 本地视频远端详情不可用时的细分状态，明确区分视频被删除、作者已销号与通用/网络失败。 */
+sealed interface LocalOfflineStatus {
+    /** 原视频已被删除，但已关联的作者账号仍然存在，可展示正常作者卡片并进入作者主页。 */
+    data class VideoDeleted(val author: User) : LocalOfflineStatus
+
+    /** 作者账号已注销（销号），视频与作者均不可用。 */
+    data object AuthorDeleted : LocalOfflineStatus
+
+    /** 远端返回 404 且本地未关联作者或无法核实作者状态时的兜底状态。 */
+    data object VideoOrAuthorUnavailable : LocalOfflineStatus
+
+    /** 非 404 的请求或网络异常。 */
+    data class LoadFailed(val reason: String?) : LocalOfflineStatus
 }
 
 sealed interface PlaybackDecision {
@@ -37,8 +55,7 @@ sealed interface PlaybackDetailsResult {
     // 本地播放回退持有原始下载记录，不伪造远端元数据
     data class LocalFallback(
         val item: DownloadItem,
-        val isOnlineRemoved: Boolean,
-        val errorReason: String?,
+        val offlineStatus: LocalOfflineStatus,
     ) : PlaybackDetailsResult
 
     data class OnlineFailure(
@@ -76,7 +93,7 @@ class VideoPlaybackCoordinator(private val dataSource: VideoPlaybackDataSource) 
         }
     }
 
-    // 本地播放优先仅拉取远端详情，严禁解析网络播放源，失败则使用原记录兜底
+    // 本地播放优先仅拉取远端详情，严禁解析网络播放源；视频 404 时按已关联作者进一步区分视频删除与作者销号
     private suspend fun loadLocalDetails(id: String, item: DownloadItem): PlaybackDetailsResult {
         var result: PlaybackDetailsResult? = null
         runAPICatching { dataSource.getVideo(id) }
@@ -85,11 +102,16 @@ class VideoPlaybackCoordinator(private val dataSource: VideoPlaybackDataSource) 
             }
             .onError { error ->
                 val isRemoved = error.status == 404 || error.message == "errors.notFound"
+                val offlineStatus =
+                    if (isRemoved) {
+                        resolveRemovedLocalStatus(item)
+                    } else {
+                        LocalOfflineStatus.LoadFailed(error.message)
+                    }
                 result =
                     PlaybackDetailsResult.LocalFallback(
                         item = item,
-                        isOnlineRemoved = isRemoved,
-                        errorReason = error.message,
+                        offlineStatus = offlineStatus,
                     )
             }
             .onException { exception ->
@@ -99,16 +121,47 @@ class VideoPlaybackCoordinator(private val dataSource: VideoPlaybackDataSource) 
                 result =
                     PlaybackDetailsResult.LocalFallback(
                         item = item,
-                        isOnlineRemoved = false,
-                        errorReason = sanitizeReason(exception.exception),
+                        offlineStatus = LocalOfflineStatus.LoadFailed(sanitizeReason(exception.exception)),
                     )
             }
         return result
             ?: PlaybackDetailsResult.LocalFallback(
                 item = item,
-                isOnlineRemoved = false,
-                errorReason = null,
+                offlineStatus = LocalOfflineStatus.LoadFailed(null),
             )
+    }
+
+    private suspend fun resolveRemovedLocalStatus(item: DownloadItem): LocalOfflineStatus {
+        val authorHandle = item.authorId.trim()
+        if (authorHandle.isEmpty()) {
+            return LocalOfflineStatus.VideoOrAuthorUnavailable
+        }
+        var status: LocalOfflineStatus = LocalOfflineStatus.VideoOrAuthorUnavailable
+        runAPICatching { dataSource.getProfile(authorHandle) }
+            .onSuccess { profile ->
+                val user = profile.user
+                status =
+                    if (user != null && user.deletedAt == null) {
+                        LocalOfflineStatus.VideoDeleted(user)
+                    } else {
+                        LocalOfflineStatus.AuthorDeleted
+                    }
+            }
+            .onError { error ->
+                status =
+                    if (error.status == 404 || error.message == "errors.notFound") {
+                        LocalOfflineStatus.AuthorDeleted
+                    } else {
+                        LocalOfflineStatus.VideoOrAuthorUnavailable
+                    }
+            }
+            .onException { exception ->
+                if (exception.exception is CancellationException) {
+                    throw exception.exception
+                }
+                status = LocalOfflineStatus.VideoOrAuthorUnavailable
+            }
+        return status
     }
 
     private suspend fun loadOnlineDetails(id: String): PlaybackDetailsResult {
