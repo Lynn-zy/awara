@@ -1,5 +1,7 @@
 package me.rerere.awara.di
 
+import me.rerere.awara.data.playback.PlaybackPositionRepository
+import me.rerere.awara.data.playback.PlaybackPositionStore
 import me.rerere.awara.data.repo.CommentRepo
 import me.rerere.awara.data.repo.MediaRepo
 import me.rerere.awara.data.repo.UserRepo
@@ -30,6 +32,9 @@ val repoModule = module {
             },
         )
     }
+
+    // 与播放器共用同一进度仓储单例，确保历史页清理与播放读写共享同一把锁。
+    single<PlaybackPositionRepository> { PlaybackPositionStore.default }
 
     single { UserRepo(get()) }
 
