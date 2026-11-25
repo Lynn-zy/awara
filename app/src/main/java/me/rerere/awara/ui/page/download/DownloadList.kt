@@ -232,3 +232,23 @@ fun groupDownloadedItemsByAuthor(
     val mode = DownloadSortMode.fromKey(sortKey)
     return groupDownloadedItemsByAuthor(items, mode, ascending ?: mode.defaultAscending)
 }
+
+/**
+ * 按当前可见已下载视频列表顺序首尾循环解析上一个或下一个目标视频。
+ *
+ * @param items 当前可见已下载视频列表
+ * @param currentItemId 当前正在播放的下载记录主键 ID
+ * @param step 步进偏移（-1 表示上一个，+1 表示下一个）
+ * @return 目标切换视频；列表不足 2 项或当前项不在列表中时返回 null
+ */
+fun resolveAdjacentDownloadItem(
+    items: List<DownloadItem>,
+    currentItemId: Int?,
+    step: Int,
+): DownloadItem? {
+    if (items.size <= 1 || currentItemId == null || step == 0) return null
+    val currentIndex = items.indexOfFirst { it.id == currentItemId }
+    if (currentIndex < 0) return null
+    val targetIndex = Math.floorMod(currentIndex + step, items.size)
+    return items[targetIndex]
+}

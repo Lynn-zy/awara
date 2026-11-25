@@ -166,6 +166,8 @@
     <string name="setting_player">Player Setting</string>
     <string name="setting_player_auto_play_title">Autoplay</string>
     <string name="setting_player_auto_play_text">Play automatically on the details page; when off, still prebuffer and display the first video frame</string>
+    <string name="setting_player_remember_position_title">Remember playback position</string>
+    <string name="setting_player_remember_position_text">Automatically resume from the last position when replaying a video</string>
     <string name="setting_player_double_tap_seek_title">Double-tap to seek</string>
     <string name="setting_player_double_tap_seek_text">Double-tap left/right edges to rewind or fast-forward; when off, double-tap anywhere toggles play/pause</string>
     <string name="setting_player_playback_group">Playback &amp; Controls</string>
@@ -176,10 +178,13 @@
     <string name="setting_category_download_storage">Downloads &amp; Storage</string>
     <string name="setting_category_download_storage_desc">Download folder, task recovery, cache management</string>
     <string name="download_link_author_search_clear">Clear filter</string>
-    <string name="player_loop_menu_action">Loop &amp; A-B repeat</string>
+    <string name="player_ab_loop_action">A-B repeat</string>
+    <string name="player_end_behavior_pause">Pause after video</string>
     <string name="player_auto_replay">Auto replay</string>
-    <string name="player_auto_replay_on">Auto replay: On</string>
-    <string name="player_auto_replay_off">Auto replay: Off</string>
+    <string name="player_end_behavior_play_next">Play next</string>
+    <string name="player_previous_video">Previous video</string>
+    <string name="player_next_video">Next video</string>
+    <string name="player_resumed_position">Resumed at %1$s</string>
     <string name="player_ab_set_a">Set point A</string>
     <string name="player_ab_set_b">Set point B</string>
     <string name="player_ab_point_a_value">Point A · %1$s</string>

@@ -1,7 +1,6 @@
 package me.rerere.awara.ui.component.player
 
 import android.app.Application
-import android.graphics.Canvas
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
@@ -9,10 +8,14 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -157,6 +160,7 @@ class PlayerLifecycleAutoPauseTest {
         }
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     private fun runControllerHarness(
         block: (
             controller: ActivityController<TestLifecycleActivity>,
@@ -192,18 +196,21 @@ class PlayerLifecycleAutoPauseTest {
         val clock = BroadcastFrameClock()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + clock)
         val recomposer = Recomposer(scope.coroutineContext as CoroutineContext)
+        val wrappedContext = wrapTestResourcesContext(activity)
         val composeView = ComposeView(activity)
         composeView.setParentCompositionContext(recomposer)
         composeView.setContent {
-            MaterialTheme {
-                PlayerController(
-                    modifier = Modifier.fillMaxSize(),
-                    state = state,
-                    fullscreen = false,
-                    thumbnailEnabled = false,
-                    minimalProgressEnabled = false,
-                    cdnDebugEnabled = false,
-                )
+            CompositionLocalProvider(LocalContext provides wrappedContext) {
+                MaterialTheme {
+                    PlayerController(
+                        modifier = Modifier.fillMaxSize(),
+                        state = state,
+                        fullscreen = false,
+                        thumbnailEnabled = false,
+                        minimalProgressEnabled = false,
+                        cdnDebugEnabled = false,
+                    )
+                }
             }
         }
         activity.setContentView(
@@ -221,7 +228,6 @@ class PlayerLifecycleAutoPauseTest {
         var frameTimeNanos = 1_000_000_000L
 
         fun pumpUi() {
-            val canvas = Canvas()
             repeat(4) {
                 Snapshot.sendApplyNotifications()
                 frameTimeNanos += 16_666_667L
@@ -229,7 +235,7 @@ class PlayerLifecycleAutoPauseTest {
                 shadowOf(Looper.getMainLooper()).idle()
                 decorView.measure(widthSpec, heightSpec)
                 decorView.layout(0, 0, 1080, 1920)
-                decorView.draw(canvas)
+                (composeView.getChildAt(0) as? RootForTest)?.measureAndLayoutForTest()
             }
         }
 

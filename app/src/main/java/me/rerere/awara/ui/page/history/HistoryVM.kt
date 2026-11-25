@@ -22,11 +22,16 @@ import me.rerere.awara.R
 import me.rerere.awara.data.SearchCategory
 import me.rerere.awara.data.history.HistoryRetention
 import me.rerere.awara.data.history.HistoryRetentionPeriod
+import me.rerere.awara.data.playback.PlaybackPositionRepository
+import me.rerere.awara.data.playback.PlaybackPositionStore
 import me.rerere.awara.di.AppDatabase
 import me.rerere.awara.ui.component.iwara.UiText
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class HistoryVM(private val database: AppDatabase) : ViewModel() {
+class HistoryVM(
+    private val database: AppDatabase,
+    private val playbackPositionStore: PlaybackPositionRepository = PlaybackPositionStore.default,
+) : ViewModel() {
     private val queryState = MutableStateFlow("")
     val searchQuery: StateFlow<String> = queryState.asStateFlow()
     private val categoryState = MutableStateFlow(SearchCategory.TITLE)
@@ -78,19 +83,25 @@ class HistoryVM(private val database: AppDatabase) : ViewModel() {
             period.cutoff()?.let { cutoff ->
                 database.historyDao().deleteHistoryBefore(cutoff.epochSecond)
             }
+            playbackPositionStore.pruneExpired(period)
             HistoryRetention.save(period)
         }
     }
 
     fun clearAll() {
-        runHistoryOperation { database.historyDao().clearAllHistory() }
+        runHistoryOperation {
+            database.historyDao().clearAllHistory()
+            playbackPositionStore.clearAll()
+        }
     }
 
     private fun pruneExpired() {
         runHistoryOperation {
-            HistoryRetention.current().cutoff()?.let { cutoff ->
+            val currentPeriod = HistoryRetention.current()
+            currentPeriod.cutoff()?.let { cutoff ->
                 database.historyDao().deleteHistoryBefore(cutoff.epochSecond)
             }
+            playbackPositionStore.pruneExpired(currentPeriod)
         }
     }
 

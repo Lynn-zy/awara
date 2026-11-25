@@ -8,7 +8,8 @@ object SettingKeys {
     const val WORK_MODE = "setting.work_mode"
     const val DYNAMIC_COLOR = "setting.dynamic_color"
     const val AUTO_PLAY = "setting.auto_play"
-    const val LOOP_PLAY = "setting.loop_play"
+    const val PLAYBACK_END_BEHAVIOR = "setting.playback_end_behavior"
+    const val REMEMBER_PLAYBACK_POSITION = "setting.remember_playback_position"
     const val PLAYER_DOUBLE_TAP_SEEK = "setting.player_double_tap_seek"
     const val PLAYER_SENSOR_ROTATION = "setting.player_sensor_rotation"
     const val DOWNLOAD_PLAYER = "setting.download_player_internal"
@@ -46,6 +47,36 @@ enum class DownloadPlayerMode(val key: String) {
         /** 根据持久化的键值解析播放器模式，未匹配时回退为内置播放器。 */
         fun fromKey(key: String): DownloadPlayerMode =
             entries.firstOrNull { it.key == key } ?: INTERNAL
+    }
+}
+
+/**
+ * 播放器播完行为枚举，全局共用同一偏好；仅已下载视频列表支持 [PLAY_NEXT]，
+ * 视频详情页读取到 [PLAY_NEXT] 时自动回退为 [PAUSE] 且不覆写已保存偏好。
+ *
+ * @property key 持久化字符串键值
+ */
+enum class PlaybackEndBehavior(val key: String) {
+    PAUSE("pause"),
+    AUTO_REPLAY("auto_replay"),
+    PLAY_NEXT("play_next");
+
+    /** 计算在当前页面能力下实际生效的播完行为。 */
+    fun effective(allowPlayNext: Boolean): PlaybackEndBehavior =
+        if (this == PLAY_NEXT && !allowPlayNext) PAUSE else this
+
+    /** 计算单击右上角按钮后的下一个播完行为。 */
+    fun next(allowPlayNext: Boolean): PlaybackEndBehavior =
+        when (effective(allowPlayNext)) {
+            PAUSE -> AUTO_REPLAY
+            AUTO_REPLAY -> if (allowPlayNext) PLAY_NEXT else PAUSE
+            PLAY_NEXT -> PAUSE
+        }
+
+    companion object {
+        /** 根据持久化的键值解析播完行为，未知或缺失值回退为播完暂停。 */
+        fun fromKey(key: String?): PlaybackEndBehavior =
+            entries.firstOrNull { it.key == key } ?: PAUSE
     }
 }
 

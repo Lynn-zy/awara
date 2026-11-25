@@ -68,6 +68,47 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
+ * 在未打包 Android 资源的 Robolectric 单测环境下，为 Compose `stringResource(...)` 提供回退文案。
+ */
+internal fun wrapTestResourcesContext(base: Context): Context {
+    val baseResources = base.resources
+    @Suppress("DEPRECATION")
+    val fallbackResources =
+        object :
+            Resources(
+                baseResources.assets,
+                baseResources.displayMetrics,
+                baseResources.configuration,
+            ) {
+            override fun getText(id: Int): CharSequence =
+                try {
+                    super.getText(id)
+                } catch (_: NotFoundException) {
+                    "res_$id"
+                }
+
+            override fun getText(id: Int, def: CharSequence): CharSequence =
+                try {
+                    super.getText(id, def)
+                } catch (_: NotFoundException) {
+                    def
+                }
+
+            override fun getString(id: Int): String = getText(id).toString()
+
+            override fun getString(id: Int, vararg formatArgs: Any?): String =
+                try {
+                    super.getString(id, *formatArgs)
+                } catch (_: NotFoundException) {
+                    "res_$id"
+                }
+        }
+    return object : ContextWrapper(base) {
+        override fun getResources(): Resources = fallbackResources
+    }
+}
+
+/**
  * 验证 [PlayerScaffold] 与 [PlayerController] 在半屏与全屏状态下，
  * 真实触摸手势（横滑进度、左侧亮度、右侧音量、双击暂停、长按倍速）的行为表现。
  */
@@ -133,44 +174,6 @@ class PlayerFullscreenGestureTest {
                 }
             } as MediaPlayer
         return wrapper to handler
-    }
-
-    private fun wrapTestResourcesContext(base: Context): Context {
-        val baseResources = base.resources
-        @Suppress("DEPRECATION")
-        val fallbackResources =
-            object :
-                Resources(
-                    baseResources.assets,
-                    baseResources.displayMetrics,
-                    baseResources.configuration,
-                ) {
-                override fun getText(id: Int): CharSequence =
-                    try {
-                        super.getText(id)
-                    } catch (_: NotFoundException) {
-                        "res_$id"
-                    }
-
-                override fun getText(id: Int, def: CharSequence): CharSequence =
-                    try {
-                        super.getText(id, def)
-                    } catch (_: NotFoundException) {
-                        def
-                    }
-
-                override fun getString(id: Int): String = getText(id).toString()
-
-                override fun getString(id: Int, vararg formatArgs: Any?): String =
-                    try {
-                        super.getString(id, *formatArgs)
-                    } catch (_: NotFoundException) {
-                        "res_$id"
-                    }
-            }
-        return object : ContextWrapper(base) {
-            override fun getResources(): Resources = fallbackResources
-        }
     }
 
     @OptIn(ExperimentalComposeUiApi::class)

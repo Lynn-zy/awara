@@ -120,6 +120,8 @@
     <string name="setting_player">プレーヤーの設定</string>
     <string name="setting_player_auto_play_title">自動再生</string>
     <string name="setting_player_auto_play_text">詳細画面で自動再生します。オフでも先読みし、動画の最初のフレームを表示します</string>
+    <string name="setting_player_remember_position_title">前回の再生位置を記憶</string>
+    <string name="setting_player_remember_position_text">以前に視聴した動画を再生する際、前回の位置から自動で再開します</string>
     <string name="setting_player_double_tap_seek_title">ダブルタップで早送り/巻き戻し</string>
     <string name="setting_player_double_tap_seek_text">画面の左右をダブルタップして巻き戻し・早送りします。オフにすると画面のどこをダブルタップしても再生/一時停止します</string>
     <string name="setting_player_playback_group">再生と操作</string>
@@ -130,10 +132,13 @@
     <string name="setting_category_download_storage">ダウンロードとストレージ</string>
     <string name="setting_category_download_storage_desc">保存先フォルダ、タスク再開と再試行、キャッシュ削除</string>
     <string name="download_link_author_search_clear">絞り込みをクリア</string>
-    <string name="player_loop_menu_action">リピートと A-B リピート</string>
+    <string name="player_ab_loop_action">A-B リピート</string>
+    <string name="player_end_behavior_pause">再生後に一時停止</string>
     <string name="player_auto_replay">自動リピート</string>
-    <string name="player_auto_replay_on">自動リピート：オン</string>
-    <string name="player_auto_replay_off">自動リピート：オフ</string>
+    <string name="player_end_behavior_play_next">次の動画を再生</string>
+    <string name="player_previous_video">前の動画</string>
+    <string name="player_next_video">次の動画</string>
+    <string name="player_resumed_position">%1$s から再開しました</string>
     <string name="player_ab_set_a">A 点を設定</string>
     <string name="player_ab_set_b">B 点を設定</string>
     <string name="player_ab_point_a_value">A 点 · %1$s</string>

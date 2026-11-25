@@ -92,6 +92,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import coil.compose.AsyncImage
 import com.airbnb.lottie.compose.LottieAnimation
@@ -496,7 +497,15 @@ fun DownloadPage(
             },
         )
     }
-    val state = rememberPlayerState(enableOnlineStreaming = false)
+    var currentPlayingItemId by remember { mutableStateOf<Int?>(null) }
+    var playbackRequestSeq by remember { mutableStateOf(0) }
+    var pendingAutoNextSeq by remember { mutableStateOf(0) }
+    val state =
+        rememberPlayerState(
+            enableOnlineStreaming = false,
+            allowPlayNext = true,
+            onAutoPlayNext = { pendingAutoNextSeq++ },
+        )
     var requestOrientation by rememberRequestedScreenOrientation()
     val configuration = LocalConfiguration.current
     val sensorRotationEnabled by
@@ -530,6 +539,8 @@ fun DownloadPage(
     fun exitFullScreen() {
         requestOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         fullscreen = false
+        currentPlayingItemId = null
+        playbackRequestSeq++
         state.pause()
         // 清空上一视频上下文与尺寸，确保再次进入同视频或同分辨率视频时仍能触发屏幕方向同步。
         state.updatePlayerItems(emptyList())
@@ -628,8 +639,11 @@ fun DownloadPage(
             playExternal(item)
             return
         }
+        val requestSeq = ++playbackRequestSeq
         launchWithValidatedVideoUri(item) { contentUri ->
+            if (requestSeq != playbackRequestSeq) return@launchWithValidatedVideoUri
             try {
+                val displayTitle = item.title.ifBlank { item.resourceId }
                 val playerItem =
                     PlayerState.PlayerItem(
                         quality = item.quality.ifBlank { "local" },
@@ -637,13 +651,17 @@ fun DownloadPage(
                             MediaItem.Builder()
                                 .setMediaId(item.resourceId.ifBlank { contentUri.toString() })
                                 .setUri(contentUri)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder().setTitle(displayTitle).build()
+                                )
                                 .build(),
                     )
-                // 先复位旧媒体与尺寸，再应用当前条目与起播意图，统一走 PlayerState 解码兜底链路。
+                currentPlayingItemId = item.id
+                // 先复位旧媒体与尺寸（自动保存上一视频进度），再应用新条目并按设置恢复上次播放位置。
                 state.updatePlayerItems(emptyList())
                 state.updatePlayerItems(
                     items = listOf(playerItem),
-                    preservePositionMs = 0L,
+                    preservePositionMs = null,
                     targetPlayWhenReady = true,
                 )
                 state.markPlaybackStarted()
@@ -656,6 +674,22 @@ fun DownloadPage(
             }
         }
     }
+
+    fun switchAdjacentDownload(step: Int) {
+        val nextItem = resolveAdjacentDownloadItem(visibleItems, currentPlayingItemId, step) ?: return
+        playDownloadedItem(nextItem)
+    }
+
+    LaunchedEffect(pendingAutoNextSeq) {
+        if (pendingAutoNextSeq > 0 && fullscreen) {
+            switchAdjacentDownload(1)
+        }
+    }
+
+    val canSwitchAdjacentVideo =
+        remember(visibleItems, currentPlayingItemId) {
+            resolveAdjacentDownloadItem(visibleItems, currentPlayingItemId, 1) != null
+        }
 
     PlayerScaffold(
         fullscreen = fullscreen,
@@ -672,6 +706,9 @@ fun DownloadPage(
                     )
                 },
                 onRotateScreen = { rotateFullScreen() },
+                onPreviousVideo = { switchAdjacentDownload(-1) },
+                onNextVideo = { switchAdjacentDownload(1) },
+                canSwitchAdjacentVideo = canSwitchAdjacentVideo,
                 controllerTrail = {
                     PlayerFullscreenIconButton(
                         fullscreen = fullscreen,

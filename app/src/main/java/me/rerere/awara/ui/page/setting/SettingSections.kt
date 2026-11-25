@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.ColorLens
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.HomeWork
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Info
@@ -88,6 +89,8 @@ internal fun PlayerSettingsContent(
     contentPadding: PaddingValues,
 ) {
     val autoPlay = rememberBooleanPreference(key = SettingKeys.AUTO_PLAY, default = true)
+    val rememberPlaybackPosition =
+        rememberBooleanPreference(key = SettingKeys.REMEMBER_PLAYBACK_POSITION, default = true)
     val doubleTapSeek =
         rememberBooleanPreference(key = SettingKeys.PLAYER_DOUBLE_TAP_SEEK, default = true)
     val seekThumbnailEnabled =
@@ -120,6 +123,15 @@ internal fun PlayerSettingsContent(
                     title = { Text(stringResource(R.string.setting_player_auto_play_title)) },
                     text = { Text(stringResource(R.string.setting_player_auto_play_text)) },
                     icon = { Icon(Icons.Outlined.AutoMode, null) },
+                )
+
+                SettingBooleanItem(
+                    state = rememberPlaybackPosition,
+                    title = {
+                        Text(stringResource(R.string.setting_player_remember_position_title))
+                    },
+                    text = { Text(stringResource(R.string.setting_player_remember_position_text)) },
+                    icon = { Icon(Icons.Outlined.History, null) },
                 )
 
                 SettingBooleanItem(

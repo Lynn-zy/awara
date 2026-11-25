@@ -332,4 +332,23 @@ class DownloadListTest {
             filterDownloadedItems(items, "NonExistentQuery404", SearchCategory.AUTHOR).isEmpty()
         )
     }
+
+    @Test
+    fun resolveAdjacentDownloadItemWrapsAroundAndHandlesBoundaries() {
+        val first = createItem(id = 10, title = "First")
+        val second = createItem(id = 20, title = "Second")
+        val third = createItem(id = 30, title = "Third")
+        val items = listOf(first, second, third)
+
+        assertEquals(second, resolveAdjacentDownloadItem(items, currentItemId = 10, step = 1))
+        assertEquals(third, resolveAdjacentDownloadItem(items, currentItemId = 10, step = -1))
+        assertEquals(first, resolveAdjacentDownloadItem(items, currentItemId = 30, step = 1))
+        assertEquals(second, resolveAdjacentDownloadItem(items, currentItemId = 30, step = -1))
+
+        // 列表不足 2 项或当前项不存在时返回 null
+        assertEquals(null, resolveAdjacentDownloadItem(listOf(first), currentItemId = 10, step = 1))
+        assertEquals(null, resolveAdjacentDownloadItem(emptyList(), currentItemId = 10, step = 1))
+        assertEquals(null, resolveAdjacentDownloadItem(items, currentItemId = 999, step = 1))
+        assertEquals(null, resolveAdjacentDownloadItem(items, currentItemId = null, step = 1))
+    }
 }

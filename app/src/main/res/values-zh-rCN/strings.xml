@@ -163,6 +163,8 @@
     <string name="setting_player">播放器设置</string>
     <string name="setting_player_auto_play_title">自动播放</string>
     <string name="setting_player_auto_play_text">进入详情页后自动播放；关闭后仍会预缓冲并显示视频首帧</string>
+    <string name="setting_player_remember_position_title">记住上次播放位置</string>
+    <string name="setting_player_remember_position_text">重新播放之前看过的视频时，自动定位到上次播放位置</string>
     <string name="setting_player_double_tap_seek_title">双击快进/快退</string>
     <string name="setting_player_double_tap_seek_text">双击画面左右两侧快退或快进；关闭后画面任意位置双击均切换播放/暂停</string>
     <string name="setting_player_playback_group">播放与交互</string>
@@ -173,10 +175,13 @@
     <string name="setting_category_download_storage">下载与存储</string>
     <string name="setting_category_download_storage_desc">下载文件夹、任务恢复与重试、缓存清理</string>
     <string name="download_link_author_search_clear">清空筛选</string>
-    <string name="player_loop_menu_action">循环播放与 A-B 复读</string>
+    <string name="player_ab_loop_action">A-B 循环</string>
+    <string name="player_end_behavior_pause">播完暂停</string>
     <string name="player_auto_replay">自动重播</string>
-    <string name="player_auto_replay_on">自动重播：开启</string>
-    <string name="player_auto_replay_off">自动重播：关闭</string>
+    <string name="player_end_behavior_play_next">播放下一个</string>
+    <string name="player_previous_video">上一个视频</string>
+    <string name="player_next_video">下一个视频</string>
+    <string name="player_resumed_position">已定位到 %1$s</string>
     <string name="player_ab_set_a">设 A 点</string>
     <string name="player_ab_set_b">设 B 点</string>
     <string name="player_ab_point_a_value">A 点 · %1$s</string>

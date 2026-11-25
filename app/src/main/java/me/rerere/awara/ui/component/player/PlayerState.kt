@@ -45,10 +45,13 @@ import me.rerere.awara.data.diagnostics.CdnTrackingDataSourceFactory
 import me.rerere.awara.data.playback.LocalDataSourceHttpProxy
 import me.rerere.awara.data.playback.PlaybackBufferSample
 import me.rerere.awara.data.playback.PlaybackCdnController
+import me.rerere.awara.data.playback.PlaybackPositionRepository
+import me.rerere.awara.data.playback.PlaybackPositionStore
 import me.rerere.awara.data.playback.PlaybackReadAheadDataSource
 import me.rerere.awara.data.playback.PlaybackSettings
 import me.rerere.awara.data.playback.PlaybackSourceRefresher
 import me.rerere.awara.data.playback.PlayerCache
+import me.rerere.awara.ui.page.setting.PlaybackEndBehavior
 import me.rerere.awara.ui.page.setting.SettingKeys
 import me.rerere.compose_setting.preference.mmkvPreference
 import okhttp3.OkHttpClient
@@ -102,11 +105,14 @@ internal fun createAwaraExoPlayer(
 fun rememberPlayerState(
     refreshPlaybackSource: suspend (String) -> String? = { null },
     enableOnlineStreaming: Boolean = true,
+    allowPlayNext: Boolean = false,
+    onAutoPlayNext: () -> Unit = {},
     builder: ((Context) -> ExoPlayer)? = null,
 ): PlayerState {
     val context = LocalContext.current
     val settings = remember { PlaybackSettings.read() }
     val refreshSource by rememberUpdatedState(refreshPlaybackSource)
+    val latestOnAutoPlayNext by rememberUpdatedState(onAutoPlayNext)
     val scope = rememberCoroutineScope()
     val sourceRefresher = remember { PlaybackSourceRefresher(refreshSource = { refreshSource(it) }) }
     val connectionTracker = remember { CdnConnectionTracker() }
@@ -179,8 +185,13 @@ fun rememberPlayerState(
         val speedStr = mmkvPreference.getString(PREFERENCE_KEY_PLAYER_SPEED, "1.0")
         normalizePlaybackSpeed(speedStr?.toFloatOrNull() ?: 1f)
     }
-    val initialLoopPlayEnabled = remember {
-        mmkvPreference.getBoolean(SettingKeys.LOOP_PLAY, false)
+    val initialEndBehavior = remember {
+        PlaybackEndBehavior.fromKey(
+            mmkvPreference.getString(
+                SettingKeys.PLAYBACK_END_BEHAVIOR,
+                PlaybackEndBehavior.PAUSE.key,
+            )
+        )
     }
     val state by remember {
         val player =
@@ -196,8 +207,14 @@ fun rememberPlayerState(
                         // 自动播放只控制播放意图；暂停时同样允许准备媒体和正常渲染首帧。
                         playWhenReady = mmkvPreference.getBoolean(SettingKeys.AUTO_PLAY, true)
                         repeatMode =
-                            if (initialLoopPlayEnabled) Player.REPEAT_MODE_ONE
-                            else Player.REPEAT_MODE_OFF
+                            if (
+                                initialEndBehavior.effective(allowPlayNext) ==
+                                    PlaybackEndBehavior.AUTO_REPLAY
+                            ) {
+                                Player.REPEAT_MODE_ONE
+                            } else {
+                                Player.REPEAT_MODE_OFF
+                            }
                     }
         val fallbackFactory =
             localProxy?.let { proxy ->
@@ -214,7 +231,10 @@ fun rememberPlayerState(
             PlayerState(
                 player = player,
                 initialPlaybackSpeed = initialSpeed,
-                initialLoopPlayEnabled = initialLoopPlayEnabled,
+                allowPlayNext = allowPlayNext,
+                initialPlaybackEndBehavior = initialEndBehavior,
+                onAutoPlayNext = { latestOnAutoPlayNext() },
+                playbackPositionStore = PlaybackPositionStore.default,
                 onBufferDiscontinuity = { cdnController?.resetBufferDetection() },
                 connectionTracker = connectionTracker,
                 sourceRefresher = sourceRefresher,
@@ -299,10 +319,18 @@ class PlayerState(
     private val savePlaybackSpeedPreference: (Float) -> Unit = { speed ->
         mmkvPreference.putString(PREFERENCE_KEY_PLAYER_SPEED, speed.toString())
     },
-    initialLoopPlayEnabled: Boolean = (player.repeatMode == Player.REPEAT_MODE_ONE),
-    private val saveLoopPlayPreference: (Boolean) -> Unit = { enabled ->
-        mmkvPreference.putBoolean(SettingKeys.LOOP_PLAY, enabled)
+    private val allowPlayNext: Boolean = false,
+    initialPlaybackEndBehavior: PlaybackEndBehavior =
+        if (player.repeatMode == Player.REPEAT_MODE_ONE) PlaybackEndBehavior.AUTO_REPLAY
+        else PlaybackEndBehavior.PAUSE,
+    private val savePlaybackEndBehaviorPreference: (PlaybackEndBehavior) -> Unit = { behavior ->
+        mmkvPreference.putString(SettingKeys.PLAYBACK_END_BEHAVIOR, behavior.key)
     },
+    private val onAutoPlayNext: () -> Unit = {},
+    private val isRememberPlaybackPositionEnabled: () -> Boolean = {
+        mmkvPreference.getBoolean(SettingKeys.REMEMBER_PLAYBACK_POSITION, true)
+    },
+    private val playbackPositionStore: PlaybackPositionRepository? = null,
     private val onBufferDiscontinuity: () -> Unit = {},
     private val connectionTracker: CdnConnectionTracker = CdnConnectionTracker(),
     private val sourceRefresher: PlaybackSourceRefresher? = null,
@@ -340,8 +368,16 @@ class PlayerState(
     var currentPlaybackSpeed by mutableFloatStateOf(normalizePlaybackSpeed(initialPlaybackSpeed))
         private set
 
-    /** 当前是否开启自动重播（全局持久化，半屏与全屏共用，由全屏循环面板显式切换）。 */
-    var loopPlayEnabled by mutableStateOf(initialLoopPlayEnabled)
+    /** 全局保存的播完行为偏好（视频详情页遇到 PLAY_NEXT 时通过 [effectiveEndBehavior] 回退为 PAUSE）。 */
+    var playbackEndBehavior by mutableStateOf(initialPlaybackEndBehavior)
+        private set
+
+    /** 当前页面能力下实际生效的播完行为。 */
+    val effectiveEndBehavior: PlaybackEndBehavior
+        get() = playbackEndBehavior.effective(allowPlayNext)
+
+    /** 自动定位到上次播放位置后待展示的左下角轻提示状态。 */
+    var resumedPositionNotice by mutableStateOf<ResumedPositionNotice?>(null)
         private set
 
     /** 当前视频会话的 A-B 区间循环状态（切换视频或清空播放列表时自动清除）。 */
@@ -354,7 +390,11 @@ class PlayerState(
 
     private var isRefreshingSource by mutableStateOf(false)
     private var mediaSwitchEpoch = 0
+    private var lastAutoNextHandledEpoch = -1
     private var lastRequestedPositionMs = 0L
+    private var currentMediaCanPersistPosition = false
+    private var pendingResumedPositionMs: Long? = null
+    private var resumedNoticeVersion = 0
     private var refreshJob: Job? = null
     private var refreshTargetPlayWhenReady = false
     private var softwareDecoderFallbackEpoch = -1
@@ -419,13 +459,37 @@ class PlayerState(
                 if (playbackState == Player.STATE_READY) {
                     playbackError = null
                     duration = player.duration
+                    if (duration > 0L) {
+                        currentMediaCanPersistPosition = true
+                    }
+                    val pendingResume = pendingResumedPositionMs
+                    if (pendingResume != null) {
+                        pendingResumedPositionMs = null
+                        resumedNoticeVersion++
+                        resumedPositionNotice =
+                            ResumedPositionNotice(
+                                positionMs = pendingResume,
+                                version = resumedNoticeVersion,
+                            )
+                    }
                     // 仅在底层明确返回非空条目时同步，避免状态过渡或单测桩返回 null 时丢失同视频上下文
                     player.currentMediaItem?.let { currentMediaItem = it }
-                } else if (playbackState == Player.STATE_ENDED && abLoopState.isActive) {
-                    // 当 B 点紧贴片尾触发 STATE_ENDED 时，主动回跳 A 点并继续播放
-                    abLoopState.startMs?.let { startPos ->
-                        seekTo(startPos)
-                        play()
+                } else if (playbackState == Player.STATE_ENDED) {
+                    if (abLoopState.isActive) {
+                        // 当 B 点紧贴片尾触发 STATE_ENDED 时，主动回跳 A 点并继续播放
+                        abLoopState.startMs?.let { startPos ->
+                            seekTo(startPos)
+                            play()
+                        }
+                    } else {
+                        saveCurrentPlaybackPosition(forceEnded = true)
+                        if (
+                            effectiveEndBehavior == PlaybackEndBehavior.PLAY_NEXT &&
+                                lastAutoNextHandledEpoch != mediaSwitchEpoch
+                        ) {
+                            lastAutoNextHandledEpoch = mediaSwitchEpoch
+                            onAutoPlayNext()
+                        }
                     }
                 }
             }
@@ -436,6 +500,9 @@ class PlayerState(
                 if (isPlaying) {
                     hasStartedPlayback = true
                     playbackError = null
+                    if (player.duration > 0L || duration > 0L) {
+                        currentMediaCanPersistPosition = true
+                    }
                 }
                 duration = player.duration
             }
@@ -518,8 +585,7 @@ class PlayerState(
             this.player.playbackParameters =
                 this.player.playbackParameters.withSpeed(currentPlaybackSpeed)
         }
-        val expectedRepeatMode =
-            if (loopPlayEnabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        val expectedRepeatMode = expectedRepeatMode()
         if (this.player.repeatMode != expectedRepeatMode) {
             this.player.repeatMode = expectedRepeatMode
         }
@@ -547,7 +613,37 @@ class PlayerState(
 
     fun seekTo(newPosition: Long) {
         if (duration <= 0L) return
+        dismissResumedPositionNotice()
         player.seekTo(newPosition.coerceIn(0..duration))
+    }
+
+    /** 关闭或取消待展示的左下角「已定位到 xx:xx」提示。 */
+    fun dismissResumedPositionNotice() {
+        pendingResumedPositionMs = null
+        if (resumedPositionNotice != null) {
+            resumedPositionNotice = null
+        }
+    }
+
+    /**
+     * 持久化当前正在播放的视频进度；仅在当前媒体已就绪（或已播完）且开关开启时写入或清理，
+     * 避免未加载完成即退出时将原有续播位置覆盖清零。
+     */
+    fun saveCurrentPlaybackPosition(forceEnded: Boolean = false) {
+        val store = playbackPositionStore ?: return
+        if (!isRememberPlaybackPositionEnabled()) return
+        val mediaId = currentMediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
+        if (!forceEnded && !currentMediaCanPersistPosition) return
+        val effectiveDuration = maxOf(duration, player.duration.coerceAtLeast(0L))
+        val effectivePosition = player.currentPosition.coerceAtLeast(0L)
+        val isEnded =
+            forceEnded || state == State.ENDED || player.playbackState == Player.STATE_ENDED
+        store.savePosition(
+            mediaId = mediaId,
+            positionMs = effectivePosition,
+            durationMs = effectiveDuration,
+            isEnded = isEnded,
+        )
     }
 
     /**
@@ -572,8 +668,12 @@ class PlayerState(
         playbackError = null
         playerItems = items
         if (items.isEmpty()) {
+            saveCurrentPlaybackPosition()
             mediaSwitchEpoch++
             renderedFirstFrame = false
+            currentMediaCanPersistPosition = false
+            pendingResumedPositionMs = null
+            resumedPositionNotice = null
             onBufferDiscontinuity()
             resetToPrimaryPlayer()
             player.clearMediaItems()
@@ -618,16 +718,30 @@ class PlayerState(
         }
 
         val currentPlayWhenReady = targetPlayWhenReady ?: player.playWhenReady
+        var restoredNoticePositionMs: Long? = null
         if (!sameVideo) {
-            // 切换到不同视频时清空上一视频尺寸、已播标记与 A-B 区间，并恢复默认适应缩放及仅顶部栏状态
+            // 切换到不同视频前先保存上一视频进度，再清空尺寸、已播标记与 A-B 区间，并恢复默认适应缩放及仅顶部栏状态
+            saveCurrentPlaybackPosition()
+            currentMediaCanPersistPosition = false
             videoSize = VideoSize.UNKNOWN
             hasStartedPlayback = false
             abLoopState = PlayerAbLoopState()
             videoTransform.reset()
             controllerState.resetForNewMedia()
+            if (preservePositionMs == null) {
+                restoredNoticePositionMs =
+                    playbackPositionStore?.getSavedPosition(
+                        mediaId = targetItem.mediaItem.mediaId,
+                        rememberEnabled = isRememberPlaybackPositionEnabled(),
+                    )
+            }
+            // 暂存待提示位置，待底层真正进入 STATE_READY 后再弹出并开始 3 秒倒计时。
+            resumedPositionNotice = null
+            pendingResumedPositionMs = restoredNoticePositionMs
         }
 
-        val rawPosition = preservePositionMs ?: if (sameVideo) player.currentPosition else 0L
+        val rawPosition =
+            preservePositionMs ?: if (sameVideo) player.currentPosition else restoredNoticePositionMs ?: 0L
         val isAtEndedStream = state == State.ENDED || player.playbackState == Player.STATE_ENDED
         val resolvedPosition =
             if (
@@ -700,19 +814,28 @@ class PlayerState(
     }
 
     /**
-     * 更新自动重播开关状态，同步底层播放器的单曲循环模式并全局持久化。
+     * 单击右上角按钮循环切换播完行为：
+     * - 允许播放下一个时：`播完暂停 -> 自动重播 -> 播放下一个 -> 播完暂停`
+     * - 仅单视频详情页时：`播完暂停 -> 自动重播 -> 播完暂停`
      *
-     * @param enabled true 开启单曲自动重播，false 关闭自动重播
+     * 切换后同步底层播放器 `repeatMode` 并持久化全局偏好。
+     *
+     * @return 切换后的播完行为
      */
-    fun updateLoopPlayEnabled(enabled: Boolean) {
-        loopPlayEnabled = enabled
-        val targetRepeatMode =
-            if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+    fun cyclePlaybackEndBehavior(): PlaybackEndBehavior {
+        val next = playbackEndBehavior.next(allowPlayNext)
+        playbackEndBehavior = next
+        val targetRepeatMode = expectedRepeatMode()
         if (player.repeatMode != targetRepeatMode) {
             player.repeatMode = targetRepeatMode
         }
-        saveLoopPlayPreference(enabled)
+        savePlaybackEndBehaviorPreference(next)
+        return next
     }
+
+    private fun expectedRepeatMode(): Int =
+        if (effectiveEndBehavior == PlaybackEndBehavior.AUTO_REPLAY) Player.REPEAT_MODE_ONE
+        else Player.REPEAT_MODE_OFF
 
     /**
      * 记录当前或指定播放进度为 A-B 循环起点 A。
@@ -754,6 +877,7 @@ class PlayerState(
     }
 
     fun pause() {
+        saveCurrentPlaybackPosition()
         refreshTargetPlayWhenReady = false
         playWhenReady = false
         player.pause()
@@ -818,6 +942,7 @@ class PlayerState(
 
     /** 释放当前所有已创建的主备播放器实例与挂起任务，避免退页后残留线程或解码资源。 */
     internal fun release() {
+        saveCurrentPlaybackPosition()
         cancelPendingRefresh()
         player.removeListener(playbackListener)
         fallbackPlayer?.let { fallback ->
@@ -1026,6 +1151,9 @@ class PlayerState(
     }
 
     data class PlayerItem(val quality: String, val mediaItem: MediaItem)
+
+    /** 自动定位到上次播放位置后左下角提示的数据模型。 */
+    data class ResumedPositionNotice(val positionMs: Long, val version: Int)
 
     /** 播放器错误信息模型，用于在界面展示清晰失败原因与重试入口。 */
     data class PlaybackError(

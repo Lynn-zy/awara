@@ -1,5 +1,6 @@
 package me.rerere.awara.ui.component.player
 
+import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -50,6 +51,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.Brightness6
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -61,9 +63,13 @@ import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Replay
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.ZoomIn
+import androidx.compose.material.icons.outlined.ZoomOutMap
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -116,6 +122,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -431,15 +438,21 @@ internal fun PlayerControlIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     slotSize: Dp = LocalPlayerControlDimensions.current.slotSize,
+    slotWidth: Dp = slotSize,
     tint: Color = LocalContentColor.current,
+    enabled: Boolean = true,
 ) {
     // 关闭 M3 默认 48dp 隐式扩张，确保半屏 38dp / 全屏 46dp 槽位严格对齐设计规格。
     CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-        IconButton(onClick = onClick, modifier = modifier.size(slotSize)) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier.width(slotWidth).height(slotSize),
+        ) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                tint = tint,
+                tint = if (enabled) tint else tint.copy(alpha = 0.38f),
                 modifier = Modifier.size(iconSize),
             )
         }
@@ -547,6 +560,34 @@ private const val SCALE_MODE_FEEDBACK_DURATION_MS = 1200L
 /** 双指缩放手势结束后倍率提示停留时长（毫秒）。 */
 private const val PINCH_ZOOM_FEEDBACK_HOLD_MS = 800L
 
+/** 左下角「已定位到 xx:xx」提示自动关闭停留时长（毫秒）。 */
+private const val RESUMED_POSITION_NOTICE_DURATION_MS = 3000L
+
+/** 根据当前全屏画面缩放状态返回对应的标准 Material 图标。 */
+internal fun resolveScaleModeIcon(
+    scaleMode: PlayerScaleMode,
+    isCustomTransform: Boolean,
+): ImageVector =
+    if (isCustomTransform) {
+        Icons.Outlined.RestartAlt
+    } else {
+        when (scaleMode) {
+            PlayerScaleMode.FIT -> Icons.Outlined.FitScreen
+            PlayerScaleMode.FILL -> Icons.Outlined.ZoomOutMap
+            PlayerScaleMode.ORIGINAL -> Icons.Outlined.AspectRatio
+        }
+    }
+
+/** 仅在媒体已就绪可交互且未出错时展示右上角播完模式按钮，避免初始 loading 期间提前露空。 */
+internal fun shouldShowEndBehaviorButton(
+    hasMediaItem: Boolean,
+    blockLoadingInteraction: Boolean,
+    playbackError: PlayerState.PlaybackError?,
+): Boolean = hasMediaItem && !blockLoadingInteraction && playbackError == null
+
+/** 播放过程中周期性持久化播放位置的间隔（毫秒）。 */
+private const val PLAYBACK_POSITION_SAVE_INTERVAL_MS = 2000L
+
 /** 左右双击快进/快退的浮层反馈状态，包含起手锚点、受限有效累加秒数、跳转时间坐标与触点位置。 */
 private data class DoubleTapSeekFeedback(
     val zone: PlayerDoubleTapZone,
@@ -578,6 +619,9 @@ fun Player(
     navigationIcon: @Composable (() -> Unit)? = null,
     controllerTrail: @Composable (() -> Unit)? = null,
     onRotateScreen: (() -> Unit)? = null,
+    onPreviousVideo: (() -> Unit)? = null,
+    onNextVideo: (() -> Unit)? = null,
+    canSwitchAdjacentVideo: Boolean = false,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val thumbnailEnabled by
@@ -603,6 +647,9 @@ fun Player(
                 actions = actions,
                 controllerTrail = controllerTrail,
                 onRotateScreen = onRotateScreen,
+                onPreviousVideo = onPreviousVideo,
+                onNextVideo = onNextVideo,
+                canSwitchAdjacentVideo = canSwitchAdjacentVideo,
                 thumbnailEnabled = thumbnailEnabled,
                 minimalProgressEnabled = minimalProgressEnabled,
                 doubleTapSeekEnabled = doubleTapSeekEnabled,
@@ -626,6 +673,9 @@ internal fun PlayerController(
     actions: @Composable RowScope.() -> Unit = {},
     controllerTrail: @Composable (() -> Unit)? = null,
     onRotateScreen: (() -> Unit)? = null,
+    onPreviousVideo: (() -> Unit)? = null,
+    onNextVideo: (() -> Unit)? = null,
+    canSwitchAdjacentVideo: Boolean = false,
     thumbnailEnabled: Boolean = true,
     previewPosition: SeekPreviewPosition = SeekPreviewPosition.FollowSlider,
     controls: PlayerGestureControlState = rememberPlayerGestureControls(state),
@@ -879,6 +929,33 @@ internal fun PlayerController(
             loopFeedback = null
         }
     }
+    // 播放期间定期保存播放进度，避免应用被系统回收时丢失上次位置。
+    LaunchedEffect(state, state.playing, mediaItem) {
+        if (!state.playing || mediaItem == null) return@LaunchedEffect
+        while (true) {
+            delay(PLAYBACK_POSITION_SAVE_INTERVAL_MS)
+            state.saveCurrentPlaybackPosition()
+        }
+    }
+    // 左下角「已定位到 xx:xx」提示停留固定时间后自动消失。
+    val resumedNotice = state.resumedPositionNotice
+    LaunchedEffect(resumedNotice) {
+        val currentNotice = resumedNotice ?: return@LaunchedEffect
+        delay(RESUMED_POSITION_NOTICE_DURATION_MS)
+        if (state.resumedPositionNotice == currentNotice) {
+            state.dismissResumedPositionNotice()
+        }
+    }
+    // 用户操作导致进度条变化（长按倍速、拖动/横滑进度条、双击快进/快退）时立即关闭续播提示。
+    LaunchedEffect(previewState.isActive, controls.feedback?.kind, doubleTapSeekFeedback) {
+        if (
+            previewState.isActive ||
+                controls.feedback?.kind == PlayerControlKind.Speed ||
+                doubleTapSeekFeedback != null
+        ) {
+            state.dismissResumedPositionNotice()
+        }
+    }
     LaunchedEffect(
         controller.anyVisible,
         state.playing,
@@ -982,6 +1059,15 @@ internal fun PlayerController(
     val safeRight = maxOf(edgeMargin, systemGestures.getRight(density, layoutDirection).toFloat())
     val safeTop = maxOf(edgeMargin, systemBars.getTop(density).toFloat())
     val safeBottom = maxOf(edgeMargin, systemGestures.getBottom(density).toFloat())
+    val controlDimensions = resolvePlayerControlDimensions(fullscreen)
+    val configuration = LocalConfiguration.current
+    val useStackedBottomControls =
+        fullscreen &&
+            if (playerSize.width > 0 && playerSize.height > 0) {
+                playerSize.width < playerSize.height
+            } else {
+                configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+            }
 
     Box(
         modifier =
@@ -1179,7 +1265,7 @@ internal fun PlayerController(
                     modifier =
                         Modifier.align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .height(68.dp)
+                            .height(if (useStackedBottomControls) 96.dp else 68.dp)
                             .background(
                                 Brush.verticalGradient(
                                     0f to Color.Transparent,
@@ -1189,7 +1275,6 @@ internal fun PlayerController(
                 )
             }
 
-            val controlDimensions = resolvePlayerControlDimensions(fullscreen)
             CompositionLocalProvider(LocalPlayerControlDimensions provides controlDimensions) {
                 Box(
                     modifier =
@@ -1227,10 +1312,22 @@ internal fun PlayerController(
                                     modifier = Modifier.weight(1f).testTag("player_title"),
                                 )
 
-                                // 全屏右上角按钮顺序（从左到右）：缩放、旋转、循环、清晰度
+                                fun emitLoopFeedback(buildFeedback: (Int) -> PlayerLoopFeedback) {
+                                    scaleFeedback = null
+                                    loopFeedbackVersion++
+                                    loopFeedback = buildFeedback(loopFeedbackVersion)
+                                    lastInteract = System.currentTimeMillis()
+                                }
+
+                                // 顶部右上角按钮顺序（从左到右）：全屏时展示 缩放、旋转、A-B 循环；半屏与全屏均展示 播完模式、清晰度
                                 if (fullscreen) {
                                     PlayerControlIconButton(
-                                        icon = Icons.Outlined.FitScreen,
+                                        icon =
+                                            resolveScaleModeIcon(
+                                                scaleMode = state.videoTransform.scaleMode,
+                                                isCustomTransform =
+                                                    state.videoTransform.isCustomTransform,
+                                            ),
                                         contentDescription =
                                             stringResource(R.string.player_scale_mode_action),
                                         iconSize = controlDimensions.scaleIconSize,
@@ -1266,14 +1363,7 @@ internal fun PlayerController(
                                         )
                                     }
 
-                                    fun emitLoopFeedback(buildFeedback: (Int) -> PlayerLoopFeedback) {
-                                        scaleFeedback = null
-                                        loopFeedbackVersion++
-                                        loopFeedback = buildFeedback(loopFeedbackVersion)
-                                        lastInteract = System.currentTimeMillis()
-                                    }
-                                    PlayerLoopSelector(
-                                        loopPlayEnabled = state.loopPlayEnabled,
+                                    PlayerAbLoopSelector(
                                         abLoop = abLoop,
                                         canSetAbLoop =
                                             state.duration > 0L &&
@@ -1289,18 +1379,12 @@ internal fun PlayerController(
                                             }
                                             lastInteract = System.currentTimeMillis()
                                         },
-                                        onToggleLoopPlay = {
-                                            val nextEnabled = !state.loopPlayEnabled
-                                            state.updateLoopPlayEnabled(nextEnabled)
-                                            emitLoopFeedback {
-                                                PlayerLoopFeedback.AutoReplay(nextEnabled, it)
-                                            }
-                                        },
                                         onSetPointA = {
                                             val updated =
-                                                state.setAbLoopStart() ?: return@PlayerLoopSelector
+                                                state.setAbLoopStart()
+                                                    ?: return@PlayerAbLoopSelector
                                             val start =
-                                                updated.startMs ?: return@PlayerLoopSelector
+                                                updated.startMs ?: return@PlayerAbLoopSelector
                                             emitLoopFeedback { version ->
                                                 val end = updated.endMs
                                                 if (updated.isActive && end != null) {
@@ -1347,6 +1431,28 @@ internal fun PlayerController(
                                             state.clearAbLoop()
                                             emitLoopFeedback {
                                                 PlayerLoopFeedback.AbLoopCleared(it)
+                                            }
+                                        },
+                                    )
+                                }
+
+                                if (
+                                    shouldShowEndBehaviorButton(
+                                        hasMediaItem = state.currentMediaItem != null,
+                                        blockLoadingInteraction =
+                                            initialInteraction.blockLoadingInteraction,
+                                        playbackError = state.playbackError,
+                                    )
+                                ) {
+                                    PlayerEndBehaviorButton(
+                                        behavior = state.effectiveEndBehavior,
+                                        onCycle = {
+                                            loopMenuExpanded = false
+                                            speedMenuExpanded = false
+                                            doubleTapSeekFeedback = null
+                                            val nextBehavior = state.cyclePlaybackEndBehavior()
+                                            emitLoopFeedback {
+                                                PlayerLoopFeedback.EndBehavior(nextBehavior, it)
                                             }
                                         },
                                     )
@@ -1414,104 +1520,214 @@ internal fun PlayerController(
                             }
                         }
 
-                        // 时间区域限宽并允许长时长换行，优先给同排进度条保留可拖动空间。
+                        // 全屏竖屏采用「进度条在上、控制按钮在下」两行布局；横屏及半屏保持单行布局，并收紧上下集与播放键间距。
                         if (controller.bottomVisible) {
-                            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                                val timeMaxWidth = maxWidth * 0.28f
+                            val hasAdjacentControls = onPreviousVideo != null || onNextVideo != null
+                            val transportSlotWidth =
+                                if (hasAdjacentControls) {
+                                    if (fullscreen) 36.dp else 32.dp
+                                } else {
+                                    controlDimensions.slotSize
+                                }
+                            val playbackTimeStyle =
+                                MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = controlDimensions.timeTextSize,
+                                    fontWeight = FontWeight.Medium,
+                                    fontFeatureSettings = "tnum",
+                                )
+                            val playbackTransportButtons: @Composable () -> Unit = {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    modifier =
-                                        Modifier.fillMaxWidth()
-                                            .heightIn(min = controlDimensions.slotSize)
-                                            .testTag("player_bottom_controls"),
+                                    horizontalArrangement = Arrangement.spacedBy(0.dp),
                                 ) {
+                                    if (onPreviousVideo != null) {
+                                        PlayerControlIconButton(
+                                            icon = Icons.Outlined.SkipPrevious,
+                                            contentDescription =
+                                                stringResource(R.string.player_previous_video),
+                                            iconSize = controlDimensions.playIconSize,
+                                            slotWidth = transportSlotWidth,
+                                            enabled = canSwitchAdjacentVideo,
+                                            onClick = {
+                                                lastInteract = System.currentTimeMillis()
+                                                onPreviousVideo()
+                                            },
+                                            modifier = Modifier.testTag("player_previous_video"),
+                                        )
+                                    }
+
                                     PlayerControlIconButton(
                                         icon =
                                             if (state.playing) Icons.Outlined.Pause
                                             else Icons.Outlined.PlayArrow,
                                         contentDescription = if (state.playing) "Pause" else "Play",
                                         iconSize = controlDimensions.playIconSize,
+                                        slotWidth = transportSlotWidth,
                                         onClick = {
                                             if (state.playing) state.pause() else state.play()
                                         },
                                         modifier = Modifier.testTag("player_play_pause"),
                                     )
 
-                                    ProgressSlider(
-                                        state = state,
-                                        previewState = previewState,
-                                        fraction = progressFraction,
-                                        bufferedFraction = bufferedFraction,
-                                        abLoopStartFraction = abLoopStartFraction,
-                                        abLoopEndFraction = abLoopEndFraction,
-                                        enabled =
-                                            inputEnabled &&
-                                                state.duration > 0L &&
-                                                state.player.isCurrentMediaItemSeekable,
-                                        interactionKey =
-                                            listOf(
-                                                mediaItem,
-                                                mediaGeneration,
-                                                fullscreen,
-                                                playerSize,
-                                                inputEnabled,
-                                            ),
-                                        modifier =
-                                            Modifier.weight(1f).onGloballyPositioned {
-                                                sliderBoundsInWindow = it.boundsInWindow()
+                                    if (onNextVideo != null) {
+                                        PlayerControlIconButton(
+                                            icon = Icons.Outlined.SkipNext,
+                                            contentDescription =
+                                                stringResource(R.string.player_next_video),
+                                            iconSize = controlDimensions.playIconSize,
+                                            slotWidth = transportSlotWidth,
+                                            enabled = canSwitchAdjacentVideo,
+                                            onClick = {
+                                                lastInteract = System.currentTimeMillis()
+                                                onNextVideo()
                                             },
-                                        onTouch = {
-                                            controller.showSeek()
-                                            lastInteract = System.currentTimeMillis()
-                                        },
-                                        onFinished = {
-                                            if (state.player.playWhenReady) controller.hide()
-                                            lastInteract = System.currentTimeMillis()
-                                        },
-                                    )
-
-                                    Text(
-                                        text =
-                                            "${formatTime(displayPosition)}/${formatTime(state.duration)}",
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        style =
-                                            MaterialTheme.typography.labelSmall.copy(
-                                                fontSize = controlDimensions.timeTextSize,
-                                                fontWeight = FontWeight.Medium,
-                                                fontFeatureSettings = "tnum",
-                                            ),
-                                        modifier =
-                                            Modifier.widthIn(max = timeMaxWidth)
-                                                .testTag("player_playback_time"),
-                                    )
-
-                                    PlayerSpeedSelector(
-                                        currentSpeed = state.currentPlaybackSpeed,
-                                        expanded = speedMenuExpanded,
-                                        enabled =
-                                            state.player.isCommandAvailable(
-                                                MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
-                                            ),
-                                        onExpandedChange = { expanded ->
-                                            speedMenuExpanded = expanded
-                                            if (expanded) {
-                                                loopMenuExpanded = false
-                                                if (state.hasStartedPlayback) {
-                                                    controller.show()
-                                                }
+                                            modifier = Modifier.testTag("player_next_video"),
+                                        )
+                                    }
+                                }
+                            }
+                            val speedControl: @Composable () -> Unit = {
+                                PlayerSpeedSelector(
+                                    currentSpeed = state.currentPlaybackSpeed,
+                                    expanded = speedMenuExpanded,
+                                    enabled =
+                                        state.player.isCommandAvailable(
+                                            MediaPlayer.COMMAND_SET_SPEED_AND_PITCH
+                                        ),
+                                    onExpandedChange = { expanded ->
+                                        speedMenuExpanded = expanded
+                                        if (expanded) {
+                                            loopMenuExpanded = false
+                                            if (state.hasStartedPlayback) {
+                                                controller.show()
                                             }
-                                            lastInteract = System.currentTimeMillis()
+                                        }
+                                        lastInteract = System.currentTimeMillis()
+                                    },
+                                    onSpeedSelected = { speed ->
+                                        // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
+                                        controls.finishGesture()
+                                        state.dismissResumedPositionNotice()
+                                        state.updatePlaybackSpeed(speed)
+                                    },
+                                )
+                            }
+                            val sliderEnabled =
+                                inputEnabled &&
+                                    state.duration > 0L &&
+                                    state.player.isCurrentMediaItemSeekable
+                            val sliderInteractionKey =
+                                listOf(
+                                    mediaItem,
+                                    mediaGeneration,
+                                    fullscreen,
+                                    playerSize,
+                                    inputEnabled,
+                                )
+                            val progressSlider: @Composable (Modifier) -> Unit = { sliderModifier ->
+                                ProgressSlider(
+                                    state = state,
+                                    previewState = previewState,
+                                    fraction = progressFraction,
+                                    bufferedFraction = bufferedFraction,
+                                    abLoopStartFraction = abLoopStartFraction,
+                                    abLoopEndFraction = abLoopEndFraction,
+                                    enabled = sliderEnabled,
+                                    interactionKey = sliderInteractionKey,
+                                    modifier =
+                                        sliderModifier.onGloballyPositioned {
+                                            sliderBoundsInWindow = it.boundsInWindow()
                                         },
-                                        onSpeedSelected = { speed ->
-                                            // 显式选择先结束临时加速，防止旧长按结束时覆盖新配置。
-                                            controls.finishGesture()
-                                            state.updatePlaybackSpeed(speed)
-                                        },
-                                    )
+                                    onTouch = {
+                                        state.dismissResumedPositionNotice()
+                                        controller.showSeek()
+                                        lastInteract = System.currentTimeMillis()
+                                    },
+                                    onFinished = {
+                                        if (state.player.playWhenReady) controller.hide()
+                                        lastInteract = System.currentTimeMillis()
+                                    },
+                                )
+                            }
 
-                                    controllerTrail?.invoke()
+                            if (useStackedBottomControls) {
+                                Column(
+                                    modifier =
+                                        Modifier.fillMaxWidth()
+                                            .testTag("player_bottom_controls"),
+                                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier =
+                                            Modifier.fillMaxWidth()
+                                                .padding(horizontal = 4.dp),
+                                    ) {
+                                        Text(
+                                            text = formatTime(displayPosition),
+                                            maxLines = 1,
+                                            style = playbackTimeStyle,
+                                            modifier = Modifier.testTag("player_playback_time"),
+                                        )
+
+                                        progressSlider(Modifier.weight(1f))
+
+                                        Text(
+                                            text = formatTime(state.duration),
+                                            maxLines = 1,
+                                            style = playbackTimeStyle,
+                                            modifier = Modifier.testTag("player_playback_duration"),
+                                        )
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier =
+                                            Modifier.fillMaxWidth()
+                                                .heightIn(min = controlDimensions.slotSize),
+                                    ) {
+                                        playbackTransportButtons()
+                                        Spacer(Modifier.weight(1f))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            speedControl()
+                                            controllerTrail?.invoke()
+                                        }
+                                    }
+                                }
+                            } else {
+                                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                                    val timeMaxWidth = maxWidth * 0.28f
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier =
+                                            Modifier.fillMaxWidth()
+                                                .heightIn(min = controlDimensions.slotSize)
+                                                .testTag("player_bottom_controls"),
+                                    ) {
+                                        playbackTransportButtons()
+
+                                        progressSlider(Modifier.weight(1f))
+
+                                        Text(
+                                            text =
+                                                "${formatTime(displayPosition)}/${formatTime(state.duration)}",
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = playbackTimeStyle,
+                                            modifier =
+                                                Modifier.widthIn(max = timeMaxWidth)
+                                                    .testTag("player_playback_time"),
+                                        )
+
+                                        speedControl()
+
+                                        controllerTrail?.invoke()
+                                    }
                                 }
                             }
                         } else {
@@ -1575,6 +1791,35 @@ internal fun PlayerController(
                     tapCenter = tapVeilCenter,
                 )
             }
+        }
+
+        // 重新播放之前看过的视频自动定位后，在左下角短暂展示「已定位到 xx:xx」提示。
+        AnimatedVisibility(
+            visible = resumedNotice != null,
+            enter = fadeIn(tween(150)),
+            exit = fadeOut(tween(150)),
+            modifier =
+                Modifier.align(Alignment.BottomStart)
+                    .then(
+                        if (fullscreen) {
+                            Modifier.windowInsetsPadding(
+                                WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .padding(
+                        start = 12.dp,
+                        bottom =
+                            when {
+                                !controller.bottomVisible -> 14.dp
+                                useStackedBottomControls -> controlDimensions.slotSize + 36.dp
+                                else -> controlDimensions.slotSize + 10.dp
+                            },
+                    ),
+        ) {
+            resumedNotice?.let { notice -> PlayerResumedPositionNotice(notice = notice) }
         }
 
         // 初始缓冲已完成且首帧就绪时，在右下角展示方案 B 白色半透明圆润矩形播放按钮
