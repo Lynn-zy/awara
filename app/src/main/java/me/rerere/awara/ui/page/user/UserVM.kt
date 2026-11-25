@@ -241,10 +241,8 @@ class UserVM(
     }
 
     /** 切换主页视频分页页码并加载对应页。 */
-    fun changeVideoPage(page: Int) {
-        if (state.profile?.user?.id.isNullOrEmpty()) return
-        videoLoader.jumpPage(page)
-    }
+    fun changeVideoPage(page: Int) =
+        if (state.profile?.user?.id.isNullOrEmpty()) null else videoLoader.jumpPage(page)
 
     /** 加载主页视频列表。 */
     fun loadVideoList(force: Boolean = false) {
@@ -253,10 +251,8 @@ class UserVM(
     }
 
     /** 切换主页图片分页页码并加载对应页。 */
-    fun changeImagePage(page: Int) {
-        if (state.profile?.user?.id.isNullOrEmpty()) return
-        imageLoader.jumpPage(page)
-    }
+    fun changeImagePage(page: Int) =
+        if (state.profile?.user?.id.isNullOrEmpty()) null else imageLoader.jumpPage(page)
 
     /** 加载主页图片列表。 */
     fun loadImageList(force: Boolean = false) {
@@ -568,8 +564,8 @@ class UserVM(
         val profileError: UiText? = null,
         val friendStatus: FriendStatus = FriendStatus.NONE,
         val friendLoading: Boolean = false,
-        val videos: PagedFeedState<Video> = PagedFeedState(),
-        val images: PagedFeedState<Image> = PagedFeedState(),
+        val videos: PagedFeedState<Video> = PagedFeedState(allowProbeBeyondMaxPage = true),
+        val images: PagedFeedState<Image> = PagedFeedState(allowProbeBeyondMaxPage = true),
         val commentState: CommentState = CommentState(),
         val commentPosting: Boolean = false,
         val conversationCreating: Boolean = false,

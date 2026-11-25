@@ -13,9 +13,14 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.launch
 import me.rerere.awara.data.entity.Media
+import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.component.common.EmptyStatus
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.UiStateBox
@@ -39,7 +44,7 @@ fun <Item> PagedStaggeredGridPage(
     displayItems: List<Item>,
     displayUiState: UiState,
     itemKey: (Item) -> Any,
-    onPageChange: (Int) -> Unit,
+    onPageChange: (Int) -> Deferred<RefreshResult>?,
     onErrorRetry: () -> Unit,
     onRefresh: (suspend () -> RefreshResult)? = null,
     modifier: Modifier = Modifier,
@@ -53,6 +58,8 @@ fun <Item> PagedStaggeredGridPage(
     itemContent: @Composable (Item) -> Unit,
 ) {
     val gridState = rememberLazyStaggeredGridState()
+    val scope = rememberCoroutineScope()
+    val message = LocalMessageProvider.current
     PageScrollEffect(feed.loadedPage) { gridState.scrollToItem(0) }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -97,7 +104,24 @@ fun <Item> PagedStaggeredGridPage(
                 page = feed.page,
                 limit = feed.limit,
                 total = feed.total,
-                onPageChange = onPageChange,
+                allowProbeBeyondMaxPage = feed.allowProbeBeyondMaxPage,
+                probing = feed.probingPage,
+                onPageChange = { targetPage ->
+                    val isProbeJump = feed.allowProbeBeyondMaxPage && targetPage > feed.maxPage
+                    val deferred = onPageChange(targetPage)
+                    if (isProbeJump && deferred != null) {
+                        scope.launch {
+                            try {
+                                val result = deferred.await()
+                                if (result is RefreshResult.Failure) {
+                                    message.error { result.message() }
+                                }
+                            } catch (_: CancellationException) {
+                                // 被新的翻页或刷新请求取代时静默收尾，不弹错误提示
+                            }
+                        }
+                    }
+                },
                 contentPadding = paginationPadding,
                 leading = paginationLeading,
                 trailing = paginationTrailing,
@@ -116,7 +140,7 @@ fun <Item> OnlineMediaPagedGrid(
     authorId: (Item) -> String?,
     mediaOf: (Item) -> Media,
     itemKey: (Item) -> Any,
-    onPageChange: (Int) -> Unit,
+    onPageChange: (Int) -> Deferred<RefreshResult>?,
     onErrorRetry: () -> Unit,
     onRefresh: (suspend () -> RefreshResult)?,
     modifier: Modifier = Modifier,

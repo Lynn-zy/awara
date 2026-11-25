@@ -21,7 +21,7 @@ private data class IndexMediaBinding(
     val feed: PagedFeedState<Media>,
     val sort: String,
     val filters: List<FilterValue>,
-    val onPageChange: (Int) -> Unit,
+    val onPageChange: (Int) -> Deferred<RefreshResult>?,
     val onReload: (Boolean) -> Deferred<RefreshResult>?,
     val onSortChange: (String) -> Unit,
     val onFilterAdd: (FilterValue) -> Unit,

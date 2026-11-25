@@ -63,7 +63,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.collectLatest
+import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.R
 import me.rerere.awara.data.dto.FriendStatus
 import me.rerere.awara.data.dto.ProfileDto
@@ -740,7 +742,7 @@ private fun UserCard(
 @Composable
 private fun <T : Media> UserMediaTabPage(
     feed: PagedFeedState<T>,
-    onPageChange: (Int) -> Unit,
+    onPageChange: (Int) -> Deferred<RefreshResult>?,
     onRetry: () -> Unit,
 ) {
     PagedStaggeredGridPage(

@@ -13,21 +13,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.ui.component.iwara.OnlineMediaPagedGrid
-import me.rerere.awara.ui.hooks.rememberDebounce
 import me.rerere.awara.ui.page.index.IndexVM
 
 /** 首页订阅分页网格，复用 `OnlineMediaPagedGrid` 并附加视频/图片订阅类型切换入口。 */
 @Composable
 fun IndexSubscriptionPage(vm: IndexVM) {
-    val pageJumpDebounce =
-        rememberDebounce(delay = 500L) { page: Int -> vm.jumpToSubscriptionPage(page) }
-
     OnlineMediaPagedGrid(
         feed = vm.state.subscriptions,
         authorId = { it.user?.id },
         mediaOf = { it },
         itemKey = { it.id },
-        onPageChange = { pageJumpDebounce(it) },
+        onPageChange = vm::jumpToSubscriptionPage,
         onErrorRetry = { vm.loadSubscriptions(force = true) },
         onRefresh = { vm.loadSubscriptions(refresh = true)?.await() ?: RefreshResult.Ignored },
         paginationLeading = {

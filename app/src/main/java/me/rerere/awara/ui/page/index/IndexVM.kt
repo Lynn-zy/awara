@@ -238,10 +238,13 @@ class IndexVM(
     }
 
     data class IndexState(
-        val subscriptions: PagedFeedState<Media> = PagedFeedState(limit = INDEX_PAGE_LIMIT),
+        val subscriptions: PagedFeedState<Media> =
+            PagedFeedState(limit = INDEX_PAGE_LIMIT, allowProbeBeyondMaxPage = true),
         val subscriptionType: SubscriptionType = SubscriptionType.VIDEO,
-        val videos: PagedFeedState<Media> = PagedFeedState(limit = INDEX_PAGE_LIMIT),
-        val images: PagedFeedState<Media> = PagedFeedState(limit = INDEX_PAGE_LIMIT),
+        val videos: PagedFeedState<Media> =
+            PagedFeedState(limit = INDEX_PAGE_LIMIT, allowProbeBeyondMaxPage = true),
+        val images: PagedFeedState<Media> =
+            PagedFeedState(limit = INDEX_PAGE_LIMIT, allowProbeBeyondMaxPage = true),
         val followingCount: Int = 0,
         val followerCount: Int = 0,
         val friendsCount: Int = 0,

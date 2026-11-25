@@ -7,10 +7,15 @@ import kotlinx.coroutines.yield
 import me.rerere.awara.data.source.Pager
 import me.rerere.awara.ui.component.common.UiState
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
 
 /** 验证共享分页加载器的状态迁移、互斥取消、手势刷新回滚以及页码边界保护。 */
 class PagedListLoaderTest {
@@ -145,5 +150,147 @@ class PagedListLoaderTest {
         assertEquals(1, state.page)
         assertEquals(1, state.loadedPage)
         assertEquals(listOf("page-1"), state.items)
+    }
+
+    @Test
+    fun probeJumpSwitchesPageWhenTargetHasResultsAndRollsBackWhenEmptyOrBadRequest() = runBlocking {
+        var state =
+            PagedFeedState(
+                items = listOf("p1-a", "p1-b"),
+                page = 1,
+                limit = 24,
+                total = 48, // 估算为 1/2 页，存在下一页
+                loadedPage = 1,
+                uiState = UiState.Success,
+                allowProbeBeyondMaxPage = true,
+            )
+        val requestedPages = mutableListOf<Int>()
+        val loader =
+            PagedListLoader(
+                scope = this,
+                getState = { state },
+                updateState = { state = it },
+                fetchPage = { page ->
+                    requestedPages.add(page)
+                    when (page) {
+                        99_999_999 -> Pager(count = 48, limit = 24, page = page - 1, results = emptyList())
+                        88_888_888 ->
+                            throw HttpException(
+                                Response.error<Unit>(
+                                    400,
+                                    """{"message":"errors.badRequest"}"""
+                                        .toResponseBody("application/json".toMediaType()),
+                                )
+                            )
+                        5 -> Pager(count = 144, limit = 24, page = 4, results = listOf("p5-a"))
+                        else -> error("unexpected page $page")
+                    }
+                },
+            )
+
+        // 1. 极端无效页码返回空列表：不切页、原列表保留、probingPage 复原、返回 Failure
+        val emptyProbe = loader.jumpPage(99_999_999)?.await()
+        assertTrue(emptyProbe is RefreshResult.Failure)
+        assertEquals(1, state.page)
+        assertEquals(1, state.loadedPage)
+        assertEquals(listOf("p1-a", "p1-b"), state.items)
+        assertEquals(UiState.Success, state.uiState)
+        assertFalse(state.probingPage)
+
+        // 2. 服务端返回 400 参数越界：同样不切页并保留原列表
+        val badRequestProbe = loader.jumpPage(88_888_888)?.await()
+        assertTrue(badRequestProbe is RefreshResult.Failure)
+        assertEquals(1, state.page)
+        assertEquals(listOf("p1-a", "p1-b"), state.items)
+        assertFalse(state.probingPage)
+
+        // 3. 目标第 5 页有数据：正式切换至第 5 页并更新估算总数
+        val validProbe = loader.jumpPage(5)?.await()
+        assertTrue(validProbe is RefreshResult.Success)
+        assertEquals(5, state.page)
+        assertEquals(5, state.loadedPage)
+        assertEquals(listOf("p5-a"), state.items)
+        assertEquals(144, state.total)
+        assertEquals(UiState.Success, state.uiState)
+        assertFalse(state.probingPage)
+        assertEquals(listOf(99_999_999, 88_888_888, 5), requestedPages)
+    }
+
+    @Test
+    fun probeJumpRejectsLocallyOnTrueLastPageWithoutNetworkRequest() = runBlocking {
+        var state =
+            PagedFeedState(
+                items = listOf("last-page-item"),
+                page = 3,
+                limit = 24,
+                total = 60, // maxPage == 3，已到达真实尾页
+                loadedPage = 3,
+                uiState = UiState.Success,
+                allowProbeBeyondMaxPage = true,
+            )
+        var networkCalls = 0
+        val loader =
+            PagedListLoader(
+                scope = this,
+                getState = { state },
+                updateState = { state = it },
+                fetchPage = {
+                    networkCalls++
+                    Pager(count = 60, limit = 24, page = it - 1, results = emptyList())
+                },
+            )
+
+        val outcome = loader.jumpPage(4)?.await()
+        assertTrue(outcome is RefreshResult.Failure)
+        assertEquals(0, networkCalls)
+        assertEquals(3, state.page)
+        assertEquals(listOf("last-page-item"), state.items)
+        assertFalse(state.probingPage)
+    }
+
+    @Test
+    fun cancellingInFlightProbeForNewProbePreservesNewProbingState() = runBlocking {
+        var state =
+            PagedFeedState(
+                items = listOf("p1"),
+                page = 1,
+                limit = 24,
+                total = 48,
+                loadedPage = 1,
+                uiState = UiState.Success,
+                allowProbeBeyondMaxPage = true,
+            )
+        val firstProbeGate = CompletableDeferred<Pager<String>>()
+        val secondProbeGate = CompletableDeferred<Pager<String>>()
+        val loader =
+            PagedListLoader(
+                scope = this,
+                getState = { state },
+                updateState = { state = it },
+                fetchPage = { page ->
+                    when (page) {
+                        10 -> firstProbeGate.await()
+                        4 -> secondProbeGate.await()
+                        else -> error("unexpected page $page")
+                    }
+                },
+            )
+
+        val firstProbe = loader.jumpPage(10)
+        yield()
+        assertTrue("探测期间应开启 probingPage 并保持停留在原页", state.probingPage)
+        assertEquals(1, state.page)
+
+        val secondProbe = loader.jumpPage(4)
+        yield()
+        assertTrue("旧探测应被取消", firstProbe!!.isCancelled)
+        assertTrue("旧探测取消的 finally 不得把新探测的 probingPage 清为 false", state.probingPage)
+
+        secondProbeGate.complete(Pager(count = 120, limit = 24, page = 3, results = listOf("p4")))
+        val result = secondProbe?.await()
+        assertTrue(result is RefreshResult.Success)
+        assertFalse(state.probingPage)
+        assertEquals(4, state.page)
+        assertEquals(listOf("p4"), state.items)
     }
 }
