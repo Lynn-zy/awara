@@ -6,9 +6,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.state.ToggleableState
@@ -99,9 +101,9 @@ internal fun resolveLinkableAuthorTargets(
 /** 已下载页面列表筛选、排序、作者分组与多选状态持有者。 */
 @Stable
 internal class DownloadPageUiController(
-    sortKeyState: MutableState<String>,
-    sortAscendingState: MutableState<Boolean>,
-    groupByAuthorsState: MutableState<Boolean>,
+    private val sortKeyStateHolder: State<MutableState<String>>,
+    private val sortAscendingStateHolder: State<MutableState<Boolean>>,
+    private val groupByAuthorsStateHolder: State<MutableState<Boolean>>,
     selectedAuthorIdState: MutableState<String?>,
     selectedIdsState: MutableState<Set<Int>>,
     searchOpenState: MutableState<Boolean>,
@@ -110,9 +112,24 @@ internal class DownloadPageUiController(
     val rootListState: LazyListState,
     val videoListState: LazyListState,
 ) {
-    var sortKey by sortKeyState
-    var sortAscending by sortAscendingState
-    var groupByAuthors by groupByAuthorsState
+    var sortKey: String
+        get() = sortKeyStateHolder.value.value
+        set(value) {
+            sortKeyStateHolder.value.value = value
+        }
+
+    var sortAscending: Boolean
+        get() = sortAscendingStateHolder.value.value
+        set(value) {
+            sortAscendingStateHolder.value.value = value
+        }
+
+    var groupByAuthors: Boolean
+        get() = groupByAuthorsStateHolder.value.value
+        set(value) {
+            groupByAuthorsStateHolder.value.value = value
+        }
+
     var selectedAuthorId by selectedAuthorIdState
     var selectedIds by selectedIdsState
     var searchOpen by searchOpenState
@@ -181,23 +198,27 @@ internal fun rememberDownloadPageState(
     downloadedItems: List<DownloadItem>,
     uiState: UiState,
     focusResourceId: String?,
+    sortKeyState: MutableState<String> =
+        rememberStringPreference(
+            key = PREFERENCE_KEY_DOWNLOAD_SORT,
+            default = DownloadSortMode.TIME.key,
+        ),
+    sortAscendingState: MutableState<Boolean> =
+        rememberBooleanPreference(
+            key = PREFERENCE_KEY_DOWNLOAD_SORT_ASCENDING,
+            default = DownloadSortMode.fromKey(sortKeyState.value).defaultAscending,
+        ),
+    groupByAuthorsState: MutableState<Boolean> =
+        rememberBooleanPreference(key = PREFERENCE_KEY_DOWNLOAD_GROUP_AUTHORS, default = false),
 ): Pair<DownloadPageUiController, DownloadPageProjection> {
     // 独立作者根目录和内层视频列表的状态，避免共用同一个 LazyListState 导致 attach 错误
     val rootListState = rememberLazyListState()
     val videoListState = rememberLazyListState()
 
-    val sortKeyState =
-        rememberStringPreference(
-            key = PREFERENCE_KEY_DOWNLOAD_SORT,
-            default = DownloadSortMode.TIME.key,
-        )
-    val sortAscendingState =
-        rememberBooleanPreference(
-            key = PREFERENCE_KEY_DOWNLOAD_SORT_ASCENDING,
-            default = DownloadSortMode.fromKey(sortKeyState.value).defaultAscending,
-        )
-    val groupByAuthorsState =
-        rememberBooleanPreference(key = PREFERENCE_KEY_DOWNLOAD_GROUP_AUTHORS, default = false)
+    // compose-setting 每次重组均返回新匿名 MutableState 包装，必须用 rememberUpdatedState 稳定持有引用
+    val currentSortKeyState = rememberUpdatedState(sortKeyState)
+    val currentSortAscendingState = rememberUpdatedState(sortAscendingState)
+    val currentGroupByAuthorsState = rememberUpdatedState(groupByAuthorsState)
 
     // 选中作者ID：null 表示在根目录，"" 表示未知作者分组
     val selectedAuthorIdState = rememberSaveable { mutableStateOf<String?>(null) }
@@ -209,9 +230,9 @@ internal fun rememberDownloadPageState(
 
     val controller =
         remember(
-            sortKeyState,
-            sortAscendingState,
-            groupByAuthorsState,
+            currentSortKeyState,
+            currentSortAscendingState,
+            currentGroupByAuthorsState,
             selectedAuthorIdState,
             selectedIdsState,
             searchOpenState,
@@ -221,9 +242,9 @@ internal fun rememberDownloadPageState(
             videoListState,
         ) {
             DownloadPageUiController(
-                sortKeyState = sortKeyState,
-                sortAscendingState = sortAscendingState,
-                groupByAuthorsState = groupByAuthorsState,
+                sortKeyStateHolder = currentSortKeyState,
+                sortAscendingStateHolder = currentSortAscendingState,
+                groupByAuthorsStateHolder = currentGroupByAuthorsState,
                 selectedAuthorIdState = selectedAuthorIdState,
                 selectedIdsState = selectedIdsState,
                 searchOpenState = searchOpenState,

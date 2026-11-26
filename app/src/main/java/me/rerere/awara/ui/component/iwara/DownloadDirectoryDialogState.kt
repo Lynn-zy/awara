@@ -122,17 +122,18 @@ internal class DownloadDirectoryDialogState(
     private val scope: CoroutineScope,
     private val downloadStorage: DownloadStorage,
     private val downloadFolderScanner: DownloadFolderScanner,
-    private val directoryPreferenceState: androidx.compose.runtime.MutableState<String>,
+    private val directoryPreferenceHolder: State<androidx.compose.runtime.MutableState<String>>,
+    private val readStoredDirectoryUriState: State<() -> String>,
     private val onDismissState: State<() -> Unit>,
     private val onDirectoryChangedState: State<(String) -> Unit>,
 ) {
     var directoryUri: String
-        get() = directoryPreferenceState.value
+        get() = directoryPreferenceHolder.value.value
         set(value) {
-            directoryPreferenceState.value = value
+            directoryPreferenceHolder.value.value = value
         }
 
-    var selectedDirectoryUri by mutableStateOf(directoryPreferenceState.value)
+    var selectedDirectoryUri by mutableStateOf(directoryPreferenceHolder.value.value)
     var stage by mutableStateOf(DirectoryDialogStage.SELECT_DIRECTORY)
     var saving by mutableStateOf(false)
     var scanningLocal by mutableStateOf(false)
@@ -144,7 +145,7 @@ internal class DownloadDirectoryDialogState(
     lateinit var notificationPermissionLauncher: ManagedActivityResultLauncher<String, Boolean>
 
     fun syncStoredDirectory() {
-        val current = downloadStorage.directoryUri()
+        val current = readStoredDirectoryUriState.value()
         if (directoryUri != current) {
             directoryUri = current
         }
@@ -325,14 +326,18 @@ internal fun rememberDownloadDirectoryDialogState(
     downloadFolderScanner: DownloadFolderScanner,
     onDismiss: () -> Unit,
     onDirectoryChanged: (String) -> Unit,
+    directoryPreferenceState: androidx.compose.runtime.MutableState<String> =
+        rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = ""),
+    readStoredDirectoryUri: () -> String = downloadStorage::directoryUri,
 ): Pair<DownloadDirectoryDialogState, String> {
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
     val currentOnDismiss = rememberUpdatedState(onDismiss)
     val currentOnDirectoryChanged = rememberUpdatedState(onDirectoryChanged)
-    val directoryPreferenceState =
-        rememberStringPreference(key = DownloadStorage.PREFERENCE_KEY_DIRECTORY, default = "")
+    // compose-setting 每次重组都会创建新的 MutableState 包装实例，使用 rememberUpdatedState 避免触发 remember 重建
+    val currentDirectoryPreferenceState = rememberUpdatedState(directoryPreferenceState)
+    val currentReadStoredDirectoryUri = rememberUpdatedState(readStoredDirectoryUri)
 
     val dialogState =
         remember(
@@ -341,7 +346,10 @@ internal fun rememberDownloadDirectoryDialogState(
             scope,
             downloadStorage,
             downloadFolderScanner,
-            directoryPreferenceState,
+            currentDirectoryPreferenceState,
+            currentReadStoredDirectoryUri,
+            currentOnDismiss,
+            currentOnDirectoryChanged,
         ) {
             DownloadDirectoryDialogState(
                 context = context,
@@ -349,7 +357,8 @@ internal fun rememberDownloadDirectoryDialogState(
                 scope = scope,
                 downloadStorage = downloadStorage,
                 downloadFolderScanner = downloadFolderScanner,
-                directoryPreferenceState = directoryPreferenceState,
+                directoryPreferenceHolder = currentDirectoryPreferenceState,
+                readStoredDirectoryUriState = currentReadStoredDirectoryUri,
                 onDismissState = currentOnDismiss,
                 onDirectoryChangedState = currentOnDirectoryChanged,
             )

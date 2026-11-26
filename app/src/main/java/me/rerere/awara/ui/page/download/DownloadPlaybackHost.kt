@@ -67,7 +67,7 @@ internal class DownloadPlaybackController(
     private val internalPlayerState: State<String>,
     private val sensorRotationState: State<Boolean>,
     private val configurationState: State<Configuration>,
-    private val requestOrientationState: MutableState<Int>,
+    private val requestOrientationStateHolder: State<MutableState<Int>>,
     pendingAutoNextSeqState: MutableState<Int>,
 ) {
     var fullscreen by mutableStateOf(false)
@@ -82,7 +82,7 @@ internal class DownloadPlaybackController(
         // 进入全屏时统一收起顶部与底部所有控件
         playerState.controllerState.hide()
         fullscreen = true
-        requestOrientationState.value =
+        requestOrientationStateHolder.value.value =
             resolveFullscreenOrientation(
                 landscape = playerState.videoSize.width > playerState.videoSize.height,
                 sensorRotationEnabled = sensorRotationState.value,
@@ -90,7 +90,7 @@ internal class DownloadPlaybackController(
     }
 
     fun exitFullScreen() {
-        requestOrientationState.value = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        requestOrientationStateHolder.value.value = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         fullscreen = false
         currentPlayingItemId = null
         playbackRequestSeq++
@@ -102,7 +102,7 @@ internal class DownloadPlaybackController(
     fun rotateFullScreen() {
         val isLandscape =
             configurationState.value.orientation == Configuration.ORIENTATION_LANDSCAPE
-        requestOrientationState.value =
+        requestOrientationStateHolder.value.value =
             resolveToggledFullscreenOrientation(
                 isCurrentlyLandscape = isLandscape,
                 sensorRotationEnabled = sensorRotationState.value,
@@ -220,28 +220,36 @@ internal class DownloadPlaybackController(
 internal fun rememberDownloadPlaybackController(
     downloadStorage: DownloadStorage,
     visibleItems: List<DownloadItem>,
+    internalPlayer: String =
+        rememberStringPreference(
+                key = SettingKeys.DOWNLOAD_PLAYER,
+                default = DownloadPlayerMode.INTERNAL.key,
+            )
+            .value,
+    sensorRotationEnabled: Boolean =
+        rememberBooleanPreference(key = SettingKeys.PLAYER_SENSOR_ROTATION, default = true).value,
+    playerStateFactory: @Composable (onAutoPlayNext: () -> Unit) -> PlayerState = { onAutoPlayNext ->
+        rememberPlayerState(
+            enableOnlineStreaming = false,
+            allowPlayNext = true,
+            onAutoPlayNext = onAutoPlayNext,
+        )
+    },
 ): DownloadPlaybackController {
     val context = LocalContext.current
     val message = LocalMessageProvider.current
     val scope = rememberCoroutineScope()
     val visibleItemsState = rememberUpdatedState(visibleItems)
-    val internalPlayerState =
-        rememberStringPreference(
-            key = SettingKeys.DOWNLOAD_PLAYER,
-            default = DownloadPlayerMode.INTERNAL.key,
-        )
-    val sensorRotationState =
-        rememberBooleanPreference(key = SettingKeys.PLAYER_SENSOR_ROTATION, default = true)
+    // compose-setting 每次重组都会创建新包装实例，通过 rememberUpdatedState 保证控制器始终读取最新偏好值
+    val internalPlayerState = rememberUpdatedState(internalPlayer)
+    val sensorRotationState = rememberUpdatedState(sensorRotationEnabled)
     val configurationState = rememberUpdatedState(LocalConfiguration.current)
+    // rememberRequestedScreenOrientation 每次重组都会创建全新匿名 MutableState，不能直接作为 remember key
     val requestOrientationState = rememberRequestedScreenOrientation()
+    val currentRequestOrientationState = rememberUpdatedState(requestOrientationState)
     val pendingAutoNextSeqState = remember { mutableStateOf(0) }
 
-    val playerState =
-        rememberPlayerState(
-            enableOnlineStreaming = false,
-            allowPlayNext = true,
-            onAutoPlayNext = { pendingAutoNextSeqState.value++ },
-        )
+    val playerState = playerStateFactory { pendingAutoNextSeqState.value++ }
 
     val controller =
         remember(
@@ -250,7 +258,11 @@ internal fun rememberDownloadPlaybackController(
             scope,
             downloadStorage,
             playerState,
-            requestOrientationState,
+            visibleItemsState,
+            internalPlayerState,
+            sensorRotationState,
+            configurationState,
+            currentRequestOrientationState,
             pendingAutoNextSeqState,
         ) {
             DownloadPlaybackController(
@@ -263,7 +275,7 @@ internal fun rememberDownloadPlaybackController(
                 internalPlayerState = internalPlayerState,
                 sensorRotationState = sensorRotationState,
                 configurationState = configurationState,
-                requestOrientationState = requestOrientationState,
+                requestOrientationStateHolder = currentRequestOrientationState,
                 pendingAutoNextSeqState = pendingAutoNextSeqState,
             )
         }

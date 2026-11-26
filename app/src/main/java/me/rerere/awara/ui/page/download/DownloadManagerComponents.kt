@@ -66,7 +66,7 @@ internal fun computeDownloadManagerBatchCounts(tasks: List<DownloadTask>): Downl
 internal fun rememberDownloadResumeAction(onResumeTask: (String) -> Unit): (DownloadTask) -> Unit {
     val context = LocalContext.current
     val message = LocalMessageProvider.current
-    val currentOnResumeTask by rememberUpdatedState(onResumeTask)
+    val currentOnResumeTask = rememberUpdatedState(onResumeTask)
 
     val notificationLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -77,7 +77,13 @@ internal fun rememberDownloadResumeAction(onResumeTask: (String) -> Unit): (Down
             // 权限请求回调后由用户再次点击重试
         }
 
-    return remember(context, message) {
+    return remember(
+        context,
+        message,
+        currentOnResumeTask,
+        notificationLauncher,
+        storageLauncher,
+    ) {
         { task: DownloadTask ->
             when {
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -106,7 +112,7 @@ internal fun rememberDownloadResumeAction(onResumeTask: (String) -> Unit): (Down
                     }
                     storageLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                 }
-                else -> currentOnResumeTask(task.taskId)
+                else -> currentOnResumeTask.value(task.taskId)
             }
         }
     }
