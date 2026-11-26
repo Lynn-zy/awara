@@ -6,7 +6,6 @@ import me.rerere.awara.ui.component.iwara.comment.CommentState
 
 /** 用户主页社交操作与可见性衍生状态。 */
 internal data class UserInteractionUiState(
-    val isSelf: Boolean,
     val canStartConversation: Boolean,
     val canShowBlockAction: Boolean,
     val isBlocked: Boolean,
@@ -63,7 +62,6 @@ internal fun resolveUserInteractionUiState(
     val isBlocked = targetUser != null && blockedUsers.any { it.user.id == targetUser.id }
     val stillFollowing = targetUser?.following == true
     return UserInteractionUiState(
-        isSelf = isSelf,
         canStartConversation = currentUser != null && isActiveOtherUser,
         canShowBlockAction = isActiveOtherUser,
         isBlocked = isBlocked,

@@ -166,9 +166,9 @@ private fun CommentReplyComposerBar(
                         ),
                     keyboardActions = KeyboardActions(onSend = { onSend() }),
                 )
-                if (replyState.error != null) {
+                replyState.error?.let { error ->
                     Text(
-                        text = replyState.error.orEmpty(),
+                        text = error,
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),

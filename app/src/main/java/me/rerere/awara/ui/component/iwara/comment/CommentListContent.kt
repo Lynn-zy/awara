@@ -106,7 +106,6 @@ internal fun CommentThreadList(
                     contentPadding = PaddingValues(8.dp),
                 ) {
                     items(currentComment.comments, key = { it.id }) { comment ->
-                        // 评论内容接入 SelectionContainer 支持系统长按复制
                         SelectionContainer {
                             CommentCard(
                                 comment = comment,

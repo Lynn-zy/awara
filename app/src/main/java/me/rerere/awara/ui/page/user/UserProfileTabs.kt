@@ -66,7 +66,6 @@ internal fun UserProfileTabsPager(
     onCommentDelete: suspend (String) -> Boolean,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        // 用户主页包含视频、图片、留言3个分页，页数由 PagerState 统一提供
         val pagerState = rememberPagerState { 3 }
         val tabController = rememberPagerTabController(pagerState)
         BetterTabBar(selectedTabIndex = tabController.selectedPage) {
@@ -87,7 +86,6 @@ internal fun UserProfileTabsPager(
             )
         }
 
-        // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f).fillMaxWidth(),

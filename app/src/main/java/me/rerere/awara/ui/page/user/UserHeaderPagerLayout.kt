@@ -58,10 +58,7 @@ internal object UserHeaderPagerMath {
         if (delta >= 0f || headerHeightPx <= 0f) {
             return Pair(0f, clampOffset(currentOffsetPx, headerHeightPx))
         }
-        val clampedCurrent = clampOffset(currentOffsetPx, headerHeightPx)
-        val newOffset = (clampedCurrent + delta).coerceIn(-headerHeightPx, 0f)
-        val consumed = newOffset - clampedCurrent
-        return Pair(consumed, newOffset)
+        return consumeScrollDelta(delta, currentOffsetPx, headerHeightPx)
     }
 
     /** 在子列表触顶回弹后吸收向下滑动（`delta > 0`）以重新拉出头部，返回 `(实际消费位移, 新偏移量)`。 */
@@ -73,10 +70,19 @@ internal object UserHeaderPagerMath {
         if (delta <= 0f || headerHeightPx <= 0f) {
             return Pair(0f, clampOffset(currentOffsetPx, headerHeightPx))
         }
+        return consumeScrollDelta(delta, currentOffsetPx, headerHeightPx)
+    }
+
+    /** 按给定垂直位移夹紧并计算实际消费的头部偏移，返回 `(实际消费位移, 新偏移量)`。 */
+    fun consumeScrollDelta(
+        delta: Float,
+        currentOffsetPx: Float,
+        headerHeightPx: Float,
+    ): Pair<Float, Float> {
+        if (headerHeightPx <= 0f) return Pair(0f, 0f)
         val clampedCurrent = clampOffset(currentOffsetPx, headerHeightPx)
         val newOffset = (clampedCurrent + delta).coerceIn(-headerHeightPx, 0f)
-        val consumed = newOffset - clampedCurrent
-        return Pair(consumed, newOffset)
+        return Pair(newOffset - clampedCurrent, newOffset)
     }
 }
 
@@ -156,19 +162,11 @@ internal fun UserHeaderPagerLayout(
                         state =
                             rememberScrollableState { delta ->
                                 val (consumed, newOffset) =
-                                    if (delta < 0f) {
-                                        UserHeaderPagerMath.consumePreScroll(
-                                            delta,
-                                            headerOffsetPx,
-                                            headerHeightPx,
-                                        )
-                                    } else {
-                                        UserHeaderPagerMath.consumePostScroll(
-                                            delta,
-                                            headerOffsetPx,
-                                            headerHeightPx,
-                                        )
-                                    }
+                                    UserHeaderPagerMath.consumeScrollDelta(
+                                        delta = delta,
+                                        currentOffsetPx = headerOffsetPx,
+                                        headerHeightPx = headerHeightPx,
+                                    )
                                 headerOffsetPx = newOffset
                                 consumed
                             },

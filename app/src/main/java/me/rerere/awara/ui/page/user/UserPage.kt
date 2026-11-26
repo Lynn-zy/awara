@@ -146,7 +146,6 @@ private fun UserPageEventEffect(
     val navController = LocalRouterProvider.current
     val currentOnConversationCreated by rememberUpdatedState(onConversationCreated)
 
-    // 监听 ViewModel 异步事件反馈
     LaunchedEffect(vm) {
         vm.events.collectLatest { event ->
             when (event) {
@@ -207,7 +206,6 @@ private fun UserPageEventEffect(
                     }
                 }
                 is UserVM.UserVMEvent.ConversationCreated -> {
-                    // 创建成功：关闭弹窗、清空草稿、导航至消息页面并弹出提示
                     currentOnConversationCreated()
                     navController.navigate("conversation/${event.conversationId}/messages")
                     message.success { Text(stringResource(R.string.conversation_create_success)) }

@@ -66,7 +66,6 @@ fun VideoOverviewPage(vm: VideoVM) {
         return
     }
 
-    // 视频概览区域保留初始加载与网格展示，移除下拉刷新容器与刷新状态
     Spin(show = details.isLoading, modifier = Modifier.fillMaxSize()) {
         LazyVerticalStaggeredGrid(
             modifier = Modifier.fillMaxSize(),
@@ -86,7 +85,6 @@ fun VideoOverviewPage(vm: VideoVM) {
                 onRetry = vm::getVideo,
             )
 
-            // 仅远端元数据真实存在时展示完整信息卡片
             displayVideo?.let { video ->
                 item(span = StaggeredGridItemSpan.FullLine) {
                     VideoInfoCard(
@@ -218,7 +216,6 @@ private fun LazyStaggeredGridScope.authorMoreVideosSection(
     if (!hasValidAuthor || (!loading && error == null && authorVideos.isEmpty())) {
         return
     }
-    // 加大作者其他视频区域与上方内容的间距
     item(span = StaggeredGridItemSpan.FullLine) { Spacer(modifier = Modifier.height(16.dp)) }
     item(span = StaggeredGridItemSpan.FullLine) {
         Text(
@@ -257,7 +254,6 @@ private fun LazyStaggeredGridScope.authorMoreVideosSection(
 
 private fun LazyStaggeredGridScope.relatedVideosSection(relatedVideos: List<Video>) {
     if (relatedVideos.isEmpty()) return
-    // 加大类似视频区域与上方内容的间距
     item(span = StaggeredGridItemSpan.FullLine) { Spacer(modifier = Modifier.height(16.dp)) }
     item(span = StaggeredGridItemSpan.FullLine) {
         Text(

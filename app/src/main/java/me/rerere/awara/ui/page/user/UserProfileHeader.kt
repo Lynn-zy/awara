@@ -107,7 +107,7 @@ internal fun UserTopAppBar(
  */
 @Composable
 internal fun UserHeaderContent(
-    profileState: ProfileDto?,
+    profileState: ProfileDto,
     interactionState: UserInteractionUiState,
     friendStatus: FriendStatus,
     friendLoading: Boolean,
@@ -121,54 +121,29 @@ internal fun UserHeaderContent(
         if (expand) {
             // 展开简介时在可滚动头部内展示头图，随头部内容一同滚走
             AsyncImage(
-                model = profileState?.header.toHeaderUrl(),
+                model = profileState.header.toHeaderUrl(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxWidth().height(150.dp),
                 contentScale = ContentScale.Crop,
             )
         }
-        UserProfileCard(
-            profileState = profileState,
-            showFollowButton = interactionState.showFollowButton,
-            friendStatus = friendStatus,
-            friendLoading = friendLoading,
-            followLoading = followLoading,
-            expand = expand,
-            onChangeExpand = onChangeExpand,
-            onFollow = onFollow,
-            onFriend = onFriend,
-        )
-    }
-}
-
-@Composable
-private fun UserProfileCard(
-    profileState: ProfileDto?,
-    showFollowButton: Boolean,
-    friendStatus: FriendStatus,
-    friendLoading: Boolean,
-    followLoading: Boolean,
-    expand: Boolean,
-    onChangeExpand: (Boolean) -> Unit,
-    onFollow: () -> Unit,
-    onFriend: () -> Unit,
-) {
-    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        UserIdentityRow(user = profileState?.user)
-        UserRelationshipActions(
-            following = profileState?.user?.following == true,
-            showFollowButton = showFollowButton,
-            friendStatus = friendStatus,
-            friendLoading = friendLoading,
-            followLoading = followLoading,
-            onFollow = onFollow,
-            onFriend = onFriend,
-        )
-        UserBioSection(
-            bio = profileState?.body.orEmpty(),
-            expand = expand,
-            onToggleExpand = { onChangeExpand(!expand) },
-        )
+        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            UserIdentityRow(user = profileState.user)
+            UserRelationshipActions(
+                following = profileState.user?.following == true,
+                showFollowButton = interactionState.showFollowButton,
+                friendStatus = friendStatus,
+                friendLoading = friendLoading,
+                followLoading = followLoading,
+                onFollow = onFollow,
+                onFriend = onFriend,
+            )
+            UserBioSection(
+                bio = profileState.body.orEmpty(),
+                expand = expand,
+                onToggleExpand = { onChangeExpand(!expand) },
+            )
+        }
     }
 }
 
@@ -200,9 +175,9 @@ private fun UserIdentityRow(user: User?) {
                 user?.let { UserStatus(user = it) }
             }
 
-            if (!user?.username.isNullOrBlank()) {
+            user?.username?.takeIf { it.isNotBlank() }?.let { username ->
                 Text(
-                    text = "@" + user?.username.orEmpty(),
+                    text = "@$username",
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

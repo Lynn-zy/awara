@@ -37,8 +37,8 @@ internal fun buildVideoHistoryItem(
     val authorName =
         video?.user?.name ?: fallbackAuthor?.name ?: localDownload?.authorName ?: ""
     val authorAvatar =
-        (video?.user?.avatar).toAvatarUrl().takeIf { video?.user?.avatar != null }
-            ?: (fallbackAuthor?.avatar).toAvatarUrl().takeIf { fallbackAuthor?.avatar != null }
+        video?.user?.avatar?.toAvatarUrl()
+            ?: fallbackAuthor?.avatar?.toAvatarUrl()
             ?: localDownload?.authorAvatar
             ?: ""
     val publishedAt =
@@ -46,7 +46,8 @@ internal fun buildVideoHistoryItem(
     val durationSeconds =
         video?.duration
             ?: video?.file?.duration
-            ?: (localDownload?.durationMs?.div(1000L)?.toInt() ?: 0)
+            ?: localDownload?.durationMs?.div(1000L)?.toInt()
+            ?: 0
     return HistoryItem(
         time = now,
         type = HistoryType.VIDEO,
@@ -77,7 +78,7 @@ internal class VideoHistoryRecorder(
         scope.launch { record(videoId = videoId, details = detailsProvider()) }
     }
 
-    internal suspend fun record(videoId: String, details: VideoVM.VideoDetailsState) {
+    private suspend fun record(videoId: String, details: VideoVM.VideoDetailsState) {
         try {
             val item = buildVideoHistoryItem(videoId = videoId, details = details)
             appDatabase.historyDao().insertHistory(item)

@@ -97,8 +97,8 @@ internal fun LocalVideoBadge(quality: String = "") {
  */
 @Composable
 internal fun VideoOverviewAuthorCard(user: User?, onClickSub: (() -> Unit)?) {
-    val router = LocalRouterProvider.current
     if (user == null) return
+    val router = LocalRouterProvider.current
     val profileId = user.profileIdentifier
     val onProfileClick: () -> Unit = { profileId?.let { router.navigate("user/$it") } }
     val displayName =

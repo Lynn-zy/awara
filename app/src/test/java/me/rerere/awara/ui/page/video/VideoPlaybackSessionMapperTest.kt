@@ -8,6 +8,7 @@ import me.rerere.awara.data.entity.File
 import me.rerere.awara.data.entity.HistoryType
 import me.rerere.awara.data.entity.VideoFile
 import me.rerere.awara.data.entity.VideoSrc
+import me.rerere.awara.data.playback.playbackResourceKey
 import me.rerere.awara.ui.page.video.VideoVM.OnlineUrlsState
 import me.rerere.awara.ui.page.video.VideoVM.VideoDetailsState
 import org.junit.Assert.assertEquals
@@ -198,7 +199,7 @@ class VideoPlaybackSessionMapperTest {
             findMatchingRefreshedUrl(
                 refreshedFiles = listOf(freshSource, fresh540),
                 previousFile = stale540,
-                resourceKey = me.rerere.awara.data.playback.playbackResourceKey(key),
+                resourceKey = playbackResourceKey(key),
             )
         assertEquals(
             "https://cdn-b.iwara.tv/view?filename=540.mp4&path=2026/01/abc&quality=540&hash=fresh",

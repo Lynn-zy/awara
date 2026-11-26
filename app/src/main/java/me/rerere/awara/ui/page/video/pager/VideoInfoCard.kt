@@ -71,7 +71,6 @@ internal fun VideoInfoCard(
                 if (expand) R.string.hide_description else R.string.show_description
             ),
         expandedBody = {
-            // 展开简介前增大与标题的垂直间距
             Spacer(modifier = Modifier.height(12.dp))
             SelectionContainer {
                 RichText(

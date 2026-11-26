@@ -130,7 +130,6 @@ internal fun VideoPlayerSideEffects(
         }
     }
 
-    // 本地记录文件丢失或无权限读取时给予警告提示
     LaunchedEffect(details.localFileUnavailable) {
         if (details.localFileUnavailable) {
             message.warning { Text(composeStringResource(R.string.video_local_file_unavailable)) }

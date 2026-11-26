@@ -41,7 +41,6 @@ class UserProfileUiPolicyTest {
                 blockedUsers = emptyList(),
                 unfollowFailed = true,
             )
-        assertTrue(selfState.isSelf)
         assertFalse(selfState.canStartConversation)
         assertFalse(selfState.canShowBlockAction)
         assertTrue(selfState.showFollowButton)
@@ -53,7 +52,6 @@ class UserProfileUiPolicyTest {
                 blockedUsers = emptyList(),
                 unfollowFailed = false,
             )
-        assertFalse(deletedState.isSelf)
         assertFalse(deletedState.canStartConversation)
         assertFalse(deletedState.canShowBlockAction)
     }

@@ -172,14 +172,8 @@ internal class VideoPlaybackSessionHandler(
                     withContext(Dispatchers.IO) {
                         val rawUri = item.uri.trim()
                         if (rawUri.isEmpty()) return@withContext false
-                        val uri =
-                            try {
-                                Uri.parse(rawUri)
-                            } catch (_: Exception) {
-                                return@withContext false
-                            }
                         try {
-                            downloadStorage.exists(uri)
+                            downloadStorage.exists(Uri.parse(rawUri))
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
@@ -292,8 +286,7 @@ internal class VideoPlaybackSessionHandler(
             return
         }
         scope.launch {
-            val cachedUrls = currentDetails.urls
-            updateDetails { it.withUrlsState(OnlineUrlsState.Loading(cachedUrls)) }
+            updateDetails { it.withUrlsState(OnlineUrlsState.Loading()) }
             try {
                 resolveOnlineUrlsWithFallback(readDetails().displayVideo)
                     .onSuccess { urls ->
@@ -303,9 +296,7 @@ internal class VideoPlaybackSessionHandler(
                     .onError { error ->
                         Log.w(TAG, "requestOnlineUrls: $error")
                         updateDetails {
-                            it.withUrlsState(
-                                OnlineUrlsState.Failed(reason = error.message, urls = cachedUrls)
-                            )
+                            it.withUrlsState(OnlineUrlsState.Failed(reason = error.message))
                         }
                     }
                     .onException { exception ->
@@ -316,14 +307,13 @@ internal class VideoPlaybackSessionHandler(
                                 OnlineUrlsState.Failed(
                                     reason =
                                         VideoPlaybackCoordinator.sanitizeReason(exception.exception),
-                                    urls = cachedUrls,
                                 )
                             )
                         }
                     }
             } finally {
                 if (isActive) {
-                    updateDetails { restoreOnlineUrlsAfterLoading(it, cachedUrls) }
+                    updateDetails { restoreOnlineUrlsAfterLoading(it, emptyList()) }
                 }
             }
         }

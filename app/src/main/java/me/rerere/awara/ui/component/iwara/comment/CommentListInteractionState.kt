@@ -81,7 +81,7 @@ internal class CommentReplyState(
     var error by mutableStateOf<String?>(null)
         private set
 
-    fun selectTarget(comment: Comment?, fallbackName: String) {
+    private fun selectTarget(comment: Comment?, fallbackName: String) {
         targetId = comment?.id
         targetName = resolveCommentTargetDisplayName(comment, fallbackName)
     }
