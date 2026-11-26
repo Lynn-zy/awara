@@ -1,46 +1,13 @@
 package me.rerere.awara.ui.page.download
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.SystemUpdate
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -50,95 +17,33 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
-import coil.compose.AsyncImage
-import com.airbnb.lottie.compose.LottieAnimation
-import com.airbnb.lottie.compose.LottieCompositionSpec
-import com.airbnb.lottie.compose.LottieConstants
-import com.airbnb.lottie.compose.animateLottieCompositionAsState
-import com.airbnb.lottie.compose.rememberLottieComposition
 import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.data.diagnostics.PREFERENCE_KEY_CDN_CONNECTION_DEBUG
-import me.rerere.awara.data.download.DownloadManager
 import me.rerere.awara.data.entity.DownloadTask
-import me.rerere.awara.data.entity.DownloadTaskStatus
-import me.rerere.awara.data.entity.DownloadTaskType
 import me.rerere.awara.ui.LocalMessageProvider
-import me.rerere.awara.ui.LocalRouterProvider
-import me.rerere.awara.ui.component.common.BackButton
-import me.rerere.awara.ui.component.common.CdnConnectionDebugText
 import me.rerere.awara.ui.component.common.UiStateBox
-import me.rerere.awara.util.prettyFileSize
 import me.rerere.compose_setting.preference.rememberBooleanPreference
 import org.koin.androidx.compose.koinViewModel
 
+/**
+ * 下载任务管理页面，展示当前进行中、暂停、失败及已完成的下载任务，并提供单任务及批量控制能力。
+ *
+ * @param vm 下载任务管理 ViewModel
+ */
 @Composable
 fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
     val cdnDebugEnabled by rememberBooleanPreference(PREFERENCE_KEY_CDN_CONNECTION_DEBUG, false)
     val connections =
         if (cdnDebugEnabled) vm.connectionSnapshots.collectAsState().value else emptyMap()
-    val context = LocalContext.current
     val message = LocalMessageProvider.current
     var taskToCancel by remember { mutableStateOf<DownloadTask?>(null) }
     var taskToDelete by remember { mutableStateOf<DownloadTask?>(null) }
     var showCancelAllDialog by remember { mutableStateOf(false) }
 
-    val notificationLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-            // 权限请求回调后由用户再次点击重试
-        }
-
-    val storageLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-            // 权限请求回调后由用户再次点击重试
-        }
-
-    fun checkAndResume(task: DownloadTask) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS,
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                message.error {
-                    Text(stringResource(R.string.please_grant_notification_permission))
-                }
-                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
-            }
-        }
-
-        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
-            message.error { Text(stringResource(R.string.notification_is_not_enabled)) }
-            return
-        }
-
-        // Android 8.0-9.0 仅视频任务写入公共下载目录时需运行时存储权限；应用更新写入私有缓存目录无需此权限
-        if (
-            task.taskType == DownloadTaskType.VIDEO &&
-                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                task.directoryUri.isBlank() &&
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            message.error { Text(stringResource(R.string.download_storage_permission_required)) }
-            storageLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            return
-        }
-
-        vm.resume(task.taskId)
-    }
+    val onResumeTask = rememberDownloadResumeAction(onResumeTask = vm::resume)
 
     LaunchedEffect(vm.state.operationError) {
         val error = vm.state.operationError ?: return@LaunchedEffect
@@ -160,181 +65,29 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
         vm.clearBatchError()
     }
 
-    taskToCancel?.let { task ->
-        AlertDialog(
-            onDismissRequest = { taskToCancel = null },
-            title = { Text(stringResource(R.string.download_task_cancel_title)) },
-            text = {
-                Text(
-                    stringResource(
-                        R.string.download_task_cancel_message,
-                        task.title.ifBlank { task.resourceId },
-                    )
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val id = task.taskId
-                        taskToCancel = null
-                        vm.cancel(id)
-                    }
-                ) {
-                    Text(
-                        text = stringResource(R.string.confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { taskToCancel = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
-    taskToDelete?.let { task ->
-        AlertDialog(
-            onDismissRequest = { taskToDelete = null },
-            title = { Text(stringResource(R.string.download_task_delete_title)) },
-            text = {
-                Text(
-                    stringResource(
-                        R.string.download_task_delete_message,
-                        task.title.ifBlank { task.resourceId },
-                    )
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val id = task.taskId
-                        taskToDelete = null
-                        vm.cancel(id)
-                    }
-                ) {
-                    Text(
-                        text = stringResource(R.string.confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { taskToDelete = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
-    if (showCancelAllDialog) {
-        val count = DownloadManager.filterCancellableTasks(vm.state.tasks).size
-        AlertDialog(
-            onDismissRequest = { showCancelAllDialog = false },
-            title = { Text(stringResource(R.string.download_task_cancel_all_title)) },
-            text = { Text(stringResource(R.string.download_task_cancel_all_message, count)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showCancelAllDialog = false
-                        vm.cancelAll()
-                    }
-                ) {
-                    Text(
-                        text = stringResource(R.string.confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCancelAllDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
+    DownloadManagerDialogs(
+        taskToCancel = taskToCancel,
+        taskToDelete = taskToDelete,
+        showCancelAllDialog = showCancelAllDialog,
+        tasks = vm.state.tasks,
+        onDismissCancel = { taskToCancel = null },
+        onConfirmCancel = vm::cancel,
+        onDismissDelete = { taskToDelete = null },
+        onConfirmDelete = vm::cancel,
+        onDismissCancelAll = { showCancelAllDialog = false },
+        onConfirmCancelAll = vm::cancelAll,
+    )
 
     Scaffold(
         topBar = {
-            var menuExpanded by remember { mutableStateOf(false) }
-            val pausableCount =
-                remember(vm.state.tasks) {
-                    vm.state.tasks.count {
-                        it.status == DownloadTaskStatus.QUEUED ||
-                            it.status == DownloadTaskStatus.RUNNING ||
-                            it.status == DownloadTaskStatus.RETRYING
-                    }
-                }
-            val resumableCount =
-                remember(vm.state.tasks) {
-                    vm.state.tasks.count { it.status == DownloadTaskStatus.PAUSED }
-                }
-            val cancellableCount =
-                remember(vm.state.tasks) {
-                    DownloadManager.filterCancellableTasks(vm.state.tasks).size
-                }
-
-            TopAppBar(
-                title = { Text(stringResource(R.string.download_manager)) },
-                navigationIcon = { BackButton() },
-                actions = {
-                    if (cancellableCount > 0) {
-                        IconButton(
-                            onClick = { menuExpanded = true },
-                            enabled = !vm.state.isBatchOperating && vm.state.operatingIds.isEmpty(),
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.MoreVert,
-                                contentDescription = stringResource(R.string.download_task_actions),
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        stringResource(
-                                            if (pausableCount > 0) {
-                                                R.string.download_task_pause_all
-                                            } else {
-                                                R.string.download_task_resume_all
-                                            }
-                                        )
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    if (pausableCount > 0) vm.pauseAll() else vm.resumeAll()
-                                },
-                                enabled =
-                                    !vm.state.isBatchOperating &&
-                                        vm.state.operatingIds.isEmpty() &&
-                                        vm.state.resumingIds.isEmpty() &&
-                                        (pausableCount > 0 || resumableCount > 0),
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = stringResource(R.string.download_task_cancel_all),
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    showCancelAllDialog = true
-                                },
-                                enabled =
-                                    !vm.state.isBatchOperating &&
-                                        vm.state.operatingIds.isEmpty() &&
-                                        cancellableCount > 0,
-                            )
-                        }
-                    }
-                },
+            DownloadManagerTopBar(
+                tasks = vm.state.tasks,
+                isBatchOperating = vm.state.isBatchOperating,
+                hasOperatingTasks = vm.state.operatingIds.isNotEmpty(),
+                hasResumingTasks = vm.state.resumingIds.isNotEmpty(),
+                onPauseAll = vm::pauseAll,
+                onResumeAll = vm::resumeAll,
+                onRequestCancelAll = { showCancelAllDialog = true },
             )
         }
     ) { innerPadding ->
@@ -342,28 +95,10 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
             modifier = Modifier.padding(innerPadding).fillMaxSize(),
             state = vm.state.uiState,
             emptyStatus = {
-                val composition by
-                    rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.coffee))
-                val progress by
-                    animateLottieCompositionAsState(
-                        composition = composition,
-                        iterations = LottieConstants.IterateForever,
-                    )
-                Column(
+                DownloadCoffeeEmptyState(
+                    text = stringResource(R.string.download_manager_empty),
                     modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    LottieAnimation(
-                        composition = composition,
-                        progress = { progress },
-                        modifier = Modifier.size(200.dp),
-                        contentScale = ContentScale.Crop,
-                    )
-                    Text(
-                        text = stringResource(R.string.download_manager_empty),
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                }
+                )
             },
             onErrorRetry = vm::reload,
         ) {
@@ -379,7 +114,7 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                             vm.state.isBatchOperating || task.taskId in vm.state.operatingIds,
                         isResuming = task.taskId in vm.state.resumingIds,
                         onPause = { vm.pause(task.taskId) },
-                        onResume = { checkAndResume(task) },
+                        onResume = { onResumeTask(task) },
                         onCancel = { taskToCancel = task },
                         onDelete = { taskToDelete = task },
                         onInstall = { vm.installAppUpdate(task) },
@@ -390,365 +125,6 @@ fun DownloadManagerPage(vm: DownloadManagerVM = koinViewModel()) {
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-internal fun DownloadTaskCard(
-    task: DownloadTask,
-    isOperating: Boolean,
-    isResuming: Boolean = false,
-    onPause: () -> Unit,
-    onResume: () -> Unit,
-    onCancel: () -> Unit,
-    onDelete: () -> Unit = {},
-    onInstall: () -> Unit = {},
-    onRetryCleanup: () -> Unit,
-    cdnSnapshot: CdnConnectionSnapshot? = null,
-) {
-    val router = LocalRouterProvider.current
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val thumbWidth = if (maxWidth >= 600.dp) 112.dp else 96.dp
-        val hasKnownTotal = task.totalBytes > 0L
-        val progressFraction =
-            if (hasKnownTotal) {
-                (task.downloadedBytes.coerceAtLeast(0L).toDouble() / task.totalBytes.toDouble())
-                    .coerceIn(0.0, 1.0)
-            } else {
-                0.0
-            }
-        val percentage = (progressFraction * 100.0).toInt().coerceIn(0, 100)
-
-        val progressText =
-            if (hasKnownTotal) {
-                stringResource(
-                    R.string.download_task_progress,
-                    percentage,
-                    prettyFileSize(task.downloadedBytes.coerceAtLeast(0L)),
-                    prettyFileSize(task.totalBytes),
-                )
-            } else {
-                stringResource(
-                    R.string.download_task_unknown_progress,
-                    prettyFileSize(task.downloadedBytes.coerceAtLeast(0L)),
-                )
-            }
-
-        val (statusLabel, statusColor) =
-            when (task.status) {
-                DownloadTaskStatus.QUEUED ->
-                    stringResource(R.string.download_task_queued) to
-                        MaterialTheme.colorScheme.secondary
-                DownloadTaskStatus.RUNNING ->
-                    stringResource(R.string.download_task_running) to
-                        MaterialTheme.colorScheme.primary
-                DownloadTaskStatus.PAUSED ->
-                    stringResource(R.string.download_task_paused) to
-                        MaterialTheme.colorScheme.outline
-                DownloadTaskStatus.SAVING ->
-                    stringResource(R.string.download_task_saving) to
-                        MaterialTheme.colorScheme.tertiary
-                DownloadTaskStatus.RETRYING ->
-                    stringResource(R.string.download_task_retrying) to
-                        MaterialTheme.colorScheme.secondary
-                DownloadTaskStatus.FAILED ->
-                    stringResource(R.string.download_task_failed) to MaterialTheme.colorScheme.error
-                DownloadTaskStatus.CANCELLING ->
-                    stringResource(R.string.download_task_cancelling) to
-                        MaterialTheme.colorScheme.error
-                DownloadTaskStatus.COMPLETED ->
-                    stringResource(R.string.download_task_completed) to
-                        MaterialTheme.colorScheme.primary
-            }
-
-        val isVideoTask = task.taskType == DownloadTaskType.VIDEO
-        val cardContent: @Composable ColumnScope.() -> Unit = {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (isVideoTask) {
-                        // 左侧 16:9 视频缩略图
-                        AsyncImage(
-                            model = task.thumbnail,
-                            contentDescription = null,
-                            modifier =
-                                Modifier.width(thumbWidth)
-                                    .aspectRatio(16f / 9f)
-                                    .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop,
-                        )
-                    } else {
-                        // 应用更新任务图标底座
-                        Box(
-                            modifier =
-                                Modifier
-                                    .width(thumbWidth)
-                                    .aspectRatio(16f / 9f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.SystemUpdate,
-                                contentDescription = null,
-                                modifier = Modifier.size(28.dp),
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = task.title.ifBlank { task.resourceId },
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-
-                        if (task.authorName.isNotBlank()) {
-                            Text(
-                                text = task.authorName.trim(),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = statusColor,
-                    )
-                    Text(
-                        text = progressText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                cdnSnapshot?.let { snapshot ->
-                    CdnConnectionDebugText(snapshot, Modifier.fillMaxWidth())
-                }
-
-                if (!task.error.isNullOrBlank() && task.status != DownloadTaskStatus.RETRYING) {
-                    Text(
-                        text = task.error,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-
-                // Card 背景同为 surfaceVariant，改用对比色让未下载部分的完整底轨可见。
-                val progressTrackColor =
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
-                when (task.status) {
-                    DownloadTaskStatus.RUNNING -> {
-                        if (hasKnownTotal) {
-                            LinearProgressIndicator(
-                                progress = progressFraction.toFloat(),
-                                modifier = Modifier.fillMaxWidth(),
-                                trackColor = progressTrackColor,
-                            )
-                        } else {
-                            LinearProgressIndicator(
-                                modifier = Modifier.fillMaxWidth(),
-                                trackColor = progressTrackColor,
-                            )
-                        }
-                    }
-                    DownloadTaskStatus.PAUSED -> {
-                        LinearProgressIndicator(
-                            progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
-                            modifier = Modifier.fillMaxWidth(),
-                            trackColor = progressTrackColor,
-                        )
-                    }
-                    DownloadTaskStatus.QUEUED,
-                    DownloadTaskStatus.SAVING,
-                    DownloadTaskStatus.RETRYING,
-                    DownloadTaskStatus.CANCELLING -> {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth(),
-                            trackColor = progressTrackColor,
-                        )
-                    }
-                    DownloadTaskStatus.FAILED -> {
-                        LinearProgressIndicator(
-                            progress = if (hasKnownTotal) progressFraction.toFloat() else 0f,
-                            modifier = Modifier.fillMaxWidth(),
-                            color = MaterialTheme.colorScheme.error,
-                            trackColor = progressTrackColor,
-                        )
-                    }
-                    DownloadTaskStatus.COMPLETED -> {
-                        LinearProgressIndicator(
-                            progress = 1f,
-                            modifier = Modifier.fillMaxWidth(),
-                            trackColor = progressTrackColor,
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                ) {
-                    when {
-                        (isResuming || task.status == DownloadTaskStatus.QUEUED) &&
-                            task.status != DownloadTaskStatus.SAVING &&
-                            task.status != DownloadTaskStatus.CANCELLING &&
-                            task.status != DownloadTaskStatus.COMPLETED -> {
-                            TextButton(
-                                onClick = {},
-                                enabled = false,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(stringResource(R.string.download_task_resuming))
-                            }
-                        }
-                        task.status == DownloadTaskStatus.RUNNING ||
-                            task.status == DownloadTaskStatus.RETRYING -> {
-                            TextButton(
-                                onClick = onPause,
-                                enabled = !isOperating,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                Text(stringResource(R.string.download_task_pause))
-                            }
-                        }
-                        task.status == DownloadTaskStatus.PAUSED ||
-                            task.status == DownloadTaskStatus.FAILED -> {
-                            TextButton(
-                                onClick = onResume,
-                                enabled = !isOperating,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                Text(stringResource(R.string.download_task_resume))
-                            }
-                        }
-                        task.status == DownloadTaskStatus.SAVING -> {
-                            TextButton(
-                                onClick = {},
-                                enabled = false,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(stringResource(R.string.download_task_saving))
-                            }
-                        }
-                        task.status == DownloadTaskStatus.CANCELLING -> {
-                            if (!task.error.isNullOrBlank()) {
-                                TextButton(
-                                    onClick = onRetryCleanup,
-                                    enabled = !isOperating,
-                                    modifier = Modifier.heightIn(min = 48.dp),
-                                ) {
-                                    Text(stringResource(R.string.download_task_cleanup_retry))
-                                }
-                            } else {
-                                TextButton(
-                                    onClick = {},
-                                    enabled = false,
-                                    modifier = Modifier.heightIn(min = 48.dp),
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(stringResource(R.string.download_task_cancelling))
-                                }
-                            }
-                        }
-                        task.status == DownloadTaskStatus.COMPLETED -> {
-                            TextButton(
-                                onClick = onDelete,
-                                enabled = !isOperating,
-                                modifier = Modifier.heightIn(min = 48.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.download_task_delete),
-                                    color =
-                                        if (!isOperating) MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                                )
-                            }
-                            if (task.taskType == DownloadTaskType.APP_UPDATE) {
-                                TextButton(
-                                    onClick = onInstall,
-                                    enabled = !isOperating,
-                                    modifier = Modifier.heightIn(min = 48.dp),
-                                ) {
-                                    Text(stringResource(R.string.download_task_install))
-                                }
-                            }
-                        }
-                    }
-
-                    if (
-                        task.status != DownloadTaskStatus.CANCELLING &&
-                            task.status != DownloadTaskStatus.COMPLETED
-                    ) {
-                        TextButton(
-                            onClick = onCancel,
-                            enabled = !isOperating,
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        ) {
-                            Text(
-                                text = stringResource(R.string.download_task_cancel),
-                                color =
-                                    if (!isOperating) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (isVideoTask && task.resourceId.isNotBlank()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { router.navigate("video/${Uri.encode(task.resourceId)}") },
-                content = cardContent,
-            )
-        } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                content = cardContent,
-            )
         }
     }
 }
