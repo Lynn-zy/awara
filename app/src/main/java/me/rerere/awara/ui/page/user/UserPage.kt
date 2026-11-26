@@ -1,200 +1,150 @@
 package me.rerere.awara.ui.page.user
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.rememberScrollableState
-import androidx.compose.foundation.gestures.scrollable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Message
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState as collectFlowAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import kotlin.math.roundToInt
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.collectLatest
-import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
 import me.rerere.awara.R
-import me.rerere.awara.data.dto.FriendStatus
-import me.rerere.awara.data.dto.ProfileDto
-import me.rerere.awara.data.entity.Media
-import me.rerere.awara.data.entity.toHeaderUrl
 import me.rerere.awara.data.source.stringResource as apiStringResource
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
-import me.rerere.awara.ui.component.common.BackButton
-import me.rerere.awara.ui.component.common.BetterTabBar
-import me.rerere.awara.ui.component.common.Button
-import me.rerere.awara.ui.component.common.ButtonType
 import me.rerere.awara.ui.component.common.ErrorStatus
-import me.rerere.awara.ui.component.common.Spin
-import me.rerere.awara.ui.component.common.rememberPagerTabController
-import me.rerere.awara.ui.component.ext.DynamicStaggeredGridCells
 import me.rerere.awara.ui.component.ext.excludeBottom
-import me.rerere.awara.ui.component.iwara.Avatar
-import me.rerere.awara.ui.component.iwara.MediaCard
-import me.rerere.awara.ui.component.iwara.PagedFeedState
-import me.rerere.awara.ui.component.iwara.PagedStaggeredGridPage
-import me.rerere.awara.ui.component.iwara.RichText
-import me.rerere.awara.ui.component.iwara.UserStatus
-import me.rerere.awara.ui.component.iwara.comment.CommentList
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
-import me.rerere.awara.util.openUrl
 import org.koin.androidx.compose.koinViewModel
 
+/**
+ * 用户主页路由入口，协调资料展示、拉黑与私信交互、分页内容展示及 ViewModel 事件反馈。
+ *
+ * @param vm 用户主页 ViewModel，默认由 Koin 注入
+ */
 @Composable
 fun UserPage(vm: UserVM = koinViewModel()) {
     val profileState = vm.state.profile
     val blockedUsers by vm.blockedUsers.collectFlowAsState()
-    val context = LocalContext.current
-    val message = LocalMessageProvider.current
-    val navController = LocalRouterProvider.current
     val userStoreState = LocalUserStore.current.collectAsState()
 
-    // 展开状态采用 rememberSaveable，在屏幕旋转与重组时保持展开状态
     var expand by rememberSaveable { mutableStateOf(false) }
+    val conversationDialogState = rememberUserConversationDialogState()
 
-    // 发起私信弹窗状态及标题、内容草稿
-    var showConversationDialog by rememberSaveable { mutableStateOf(false) }
-    var titleDraft by rememberSaveable { mutableStateOf("") }
-    var bodyDraft by rememberSaveable { mutableStateOf("") }
-
-    // 校验发起私信条件：登录且资料已加载，且不能向自己或注销账号发起会话
     val currentUser = userStoreState.user
     val targetUser = profileState?.user
-    val isSelf = currentUser != null && targetUser != null && currentUser.id == targetUser.id
-    val canStartConversation =
-        currentUser != null && targetUser != null && !isSelf && targetUser.deletedAt == null
-
-    if (showConversationDialog) {
-        val dialogUserId = currentUser?.id
-        AlertDialog(
-            onDismissRequest = {
-                // 创建中禁止通过蒙层关闭弹窗
-                if (!vm.state.conversationCreating) {
-                    showConversationDialog = false
-                }
-            },
-            title = { Text(stringResource(R.string.conversation_new)) },
-            text = {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    OutlinedTextField(
-                        value = titleDraft,
-                        onValueChange = { titleDraft = it },
-                        label = { Text(stringResource(R.string.conversation_title)) },
-                        singleLine = true,
-                        enabled = !vm.state.conversationCreating,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = bodyDraft,
-                        onValueChange = { bodyDraft = it },
-                        label = { Text(stringResource(R.string.conversation_body)) },
-                        maxLines = 5,
-                        enabled = !vm.state.conversationCreating,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (vm.state.conversationCreating) return@TextButton
-                        if (titleDraft.isBlank()) {
-                            message.error {
-                                Text(stringResource(R.string.conversation_title_empty))
-                            }
-                            return@TextButton
-                        }
-                        if (bodyDraft.isBlank()) {
-                            message.error {
-                                Text(stringResource(R.string.conversation_body_empty))
-                            }
-                            return@TextButton
-                        }
-                        if (dialogUserId == null) return@TextButton
-                        vm.createConversation(
-                            title = titleDraft.trim(),
-                            body = bodyDraft.trim(),
-                        )
-                    },
-                    enabled = !vm.state.conversationCreating && dialogUserId != null,
-                ) {
-                    if (vm.state.conversationCreating) {
-                        Spin(show = true) {
-                            Text(stringResource(R.string.conversation_start))
-                        }
-                    } else {
-                        Text(stringResource(R.string.conversation_start))
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showConversationDialog = false },
-                    enabled = !vm.state.conversationCreating,
-                ) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
+    val interactionState =
+        resolveUserInteractionUiState(
+            currentUser = currentUser,
+            targetUser = targetUser,
+            blockedUsers = blockedUsers,
+            unfollowFailed = vm.state.unfollowFailed,
         )
+
+    UserPageEventEffect(
+        vm = vm,
+        onConversationCreated = { conversationDialogState.resetOnCreated() },
+    )
+
+    UserConversationDialog(
+        state = conversationDialogState,
+        creating = vm.state.conversationCreating,
+        senderUserId = currentUser?.id,
+        onSubmit = { title, body -> vm.createConversation(title = title, body = body) },
+    )
+
+    val profileDisplayName =
+        resolveUserDisplayName(targetUser) ?: stringResource(R.string.user_unknown)
+
+    Scaffold(
+        topBar = {
+            UserTopAppBar(
+                displayName = profileDisplayName,
+                targetUser = targetUser,
+                interactionState = interactionState,
+                blockActionLoading = vm.state.blockLoading || vm.state.followLoading,
+                onBlock = vm::blockUser,
+                onUnblock = vm::unblockUser,
+                onOpenConversation = { conversationDialogState.open() },
+            )
+        }
+    ) { padding ->
+        if (profileState == null) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding.excludeBottom()),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (vm.state.loading) {
+                    CircularProgressIndicator()
+                } else {
+                    ErrorStatus(
+                        message =
+                            vm.state.profileError?.asString() ?: stringResource(R.string.retry),
+                        onRetry = { vm.loadUser() },
+                    )
+                }
+            }
+        } else {
+            UserHeaderPagerLayout(
+                modifier = Modifier.fillMaxSize().padding(padding.excludeBottom()),
+                header = {
+                    UserHeaderContent(
+                        profileState = profileState,
+                        interactionState = interactionState,
+                        friendStatus = vm.state.friendStatus,
+                        friendLoading = vm.state.friendLoading,
+                        followLoading = vm.state.followLoading,
+                        expand = expand,
+                        onChangeExpand = { expand = it },
+                        onFollow = { vm.followOrUnfollow() },
+                        onFriend = { vm.addOrRemoveFriend() },
+                    )
+                },
+                pager = {
+                    UserProfileTabsPager(
+                        videos = vm.state.videos,
+                        images = vm.state.images,
+                        commentState =
+                            resolveCommentDisplayState(
+                                commentState = vm.state.commentState,
+                                commentPosting = vm.state.commentPosting,
+                            ),
+                        onVideoPageChange = { vm.changeVideoPage(it) },
+                        onVideoRetry = { vm.loadVideoList(force = true) },
+                        onImagePageChange = { vm.changeImagePage(it) },
+                        onImageRetry = { vm.loadImageList(force = true) },
+                        onCommentPageChange = { vm.jumpCommentPage(it) },
+                        onCommentBack = { vm.popComment() },
+                        onCommentPush = { vm.pushComment(it) },
+                        onCommentPost = { vm.postComment(it) },
+                        onCommentEdit = { id, content -> vm.editComment(id, content) },
+                        onCommentDelete = { id -> vm.deleteComment(id) },
+                    )
+                },
+            )
+        }
     }
+}
+
+@Composable
+private fun UserPageEventEffect(
+    vm: UserVM,
+    onConversationCreated: () -> Unit,
+) {
+    val message = LocalMessageProvider.current
+    val navController = LocalRouterProvider.current
+    val currentOnConversationCreated by rememberUpdatedState(onConversationCreated)
 
     // 监听 ViewModel 异步事件反馈
     LaunchedEffect(vm) {
@@ -251,16 +201,14 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                         Text(
                             stringResource(
                                 R.string.comment_failed,
-                                event.throwable.message ?: event.throwable.javaClass.simpleName,
+                                event.throwable.fallbackDisplayMessage(),
                             )
                         )
                     }
                 }
                 is UserVM.UserVMEvent.ConversationCreated -> {
                     // 创建成功：关闭弹窗、清空草稿、导航至消息页面并弹出提示
-                    showConversationDialog = false
-                    titleDraft = ""
-                    bodyDraft = ""
+                    currentOnConversationCreated()
                     navController.navigate("conversation/${event.conversationId}/messages")
                     message.success { Text(stringResource(R.string.conversation_create_success)) }
                 }
@@ -281,7 +229,7 @@ fun UserPage(vm: UserVM = koinViewModel()) {
                         Text(
                             stringResource(
                                 R.string.conversation_create_failed,
-                                event.throwable.message ?: event.throwable.javaClass.simpleName,
+                                event.throwable.fallbackDisplayMessage(),
                             )
                         )
                     }
@@ -295,467 +243,6 @@ fun UserPage(vm: UserVM = koinViewModel()) {
             }
         }
     }
-
-    val conversationActions: @Composable RowScope.() -> Unit = {
-        // 拉黑入口仅在有效的其他用户主页出现，作品列表保持原样。
-        if (targetUser != null && !isSelf && targetUser.deletedAt == null) {
-            UserBlockAction(
-                userId = targetUser.id,
-                displayName = targetUser.name ?: targetUser.username ?: targetUser.id,
-                blocked = blockedUsers.any { it.user.id == targetUser.id },
-                loading = vm.state.blockLoading || vm.state.followLoading,
-                retryUnfollow = vm.state.unfollowFailed && currentUser != null,
-                onBlock = vm::blockUser,
-                onUnblock = vm::unblockUser,
-            )
-        }
-        IconButton(
-            onClick = { showConversationDialog = true },
-            enabled = canStartConversation,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Message,
-                contentDescription = stringResource(R.string.conversation_new),
-            )
-        }
-    }
-
-    val profileDisplayName =
-        profileState?.user?.name?.takeIf { it.isNotBlank() }
-            ?: profileState?.user?.username?.takeIf { it.isNotBlank() }
-            ?: stringResource(R.string.user_unknown)
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(text = profileDisplayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                },
-                navigationIcon = { BackButton() },
-                actions = conversationActions,
-            )
-        }
-    ) { padding ->
-        if (profileState == null) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(padding.excludeBottom()),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (vm.state.loading) {
-                    CircularProgressIndicator()
-                } else {
-                    ErrorStatus(
-                        message =
-                            vm.state.profileError?.asString() ?: stringResource(R.string.retry),
-                        onRetry = { vm.loadUser() },
-                    )
-                }
-            }
-        } else {
-            UserHeaderPagerLayout(
-                modifier = Modifier.fillMaxSize().padding(padding.excludeBottom()),
-                header = {
-                    UserHeaderContent(
-                        vm = vm,
-                        profileState = profileState,
-                        expand = expand,
-                        onChangeExpand = { expand = it },
-                        onFollow = { vm.followOrUnfollow() },
-                        onFriend = { vm.addOrRemoveFriend() },
-                    )
-                },
-                pager = {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // 用户主页包含视频、图片、留言3个分页，页数由 PagerState 统一提供
-                        val pagerState = rememberPagerState { 3 }
-                        val tabController = rememberPagerTabController(pagerState)
-                        BetterTabBar(selectedTabIndex = tabController.selectedPage) {
-                            Tab(
-                                selected = tabController.selectedPage == 0,
-                                onClick = { tabController.selectPage(0) },
-                                text = { Text(stringResource(R.string.video)) },
-                            )
-                            Tab(
-                                selected = tabController.selectedPage == 1,
-                                onClick = { tabController.selectPage(1) },
-                                text = { Text(stringResource(R.string.image)) },
-                            )
-                            Tab(
-                                selected = tabController.selectedPage == 2,
-                                onClick = { tabController.selectPage(2) },
-                                text = { Text(stringResource(R.string.comments)) },
-                            )
-                        }
-
-                        // Compose Foundation 1.5.0: 使用无 pageCount 的 HorizontalPager 重载
-                        HorizontalPager(
-                            state = pagerState,
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                        ) { page ->
-                            when (page) {
-                                0 ->
-                                    UserMediaTabPage(
-                                        feed = vm.state.videos,
-                                        onPageChange = { vm.changeVideoPage(it) },
-                                        onRetry = { vm.loadVideoList(force = true) },
-                                    )
-                                1 ->
-                                    UserMediaTabPage(
-                                        feed = vm.state.images,
-                                        onPageChange = { vm.changeImagePage(it) },
-                                        onRetry = { vm.loadImageList(force = true) },
-                                    )
-                                2 -> {
-                                    CommentList(
-                                        modifier = Modifier.fillMaxSize(),
-                                        state =
-                                            vm.state.commentState.copy(
-                                                loading =
-                                                    vm.state.commentState.loading ||
-                                                        vm.state.commentPosting
-                                            ),
-                                        contentPadding =
-                                            WindowInsets.navigationBars.asPaddingValues(),
-                                        onPageChange = { vm.jumpCommentPage(it) },
-                                        onBack = { vm.popComment() },
-                                        onPush = { vm.pushComment(it) },
-                                        onPostReply = { vm.postComment(it) },
-                                        onEditComment = { id, content ->
-                                            vm.editComment(id, content)
-                                        },
-                                        onDeleteComment = { id -> vm.deleteComment(id) },
-                                        canPostReply = true,
-                                        isLocalFallback = false,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                },
-            )
-        }
-    }
 }
 
-internal object UserHeaderPagerMath {
-    fun clampOffset(offsetPx: Float, headerHeightPx: Float): Float {
-        if (headerHeightPx <= 0f) return 0f
-        return offsetPx.coerceIn(-headerHeightPx, 0f)
-    }
-
-    fun calculateHeaderVisibleHeight(headerHeightPx: Float, offsetPx: Float): Float {
-        if (headerHeightPx <= 0f) return 0f
-        val clampedOffset = clampOffset(offsetPx, headerHeightPx)
-        return (headerHeightPx + clampedOffset).coerceIn(0f, headerHeightPx)
-    }
-
-    fun calculatePagerHeight(totalHeightPx: Float, headerVisibleHeightPx: Float): Float {
-        if (totalHeightPx <= 0f) return 0f
-        val safeVisibleHeader = headerVisibleHeightPx.coerceIn(0f, totalHeightPx)
-        return (totalHeightPx - safeVisibleHeader).coerceIn(0f, totalHeightPx)
-    }
-
-    fun consumePreScroll(
-        delta: Float,
-        currentOffsetPx: Float,
-        headerHeightPx: Float,
-    ): Pair<Float, Float> {
-        if (delta >= 0f || headerHeightPx <= 0f) {
-            return Pair(0f, clampOffset(currentOffsetPx, headerHeightPx))
-        }
-        val clampedCurrent = clampOffset(currentOffsetPx, headerHeightPx)
-        val newOffset = (clampedCurrent + delta).coerceIn(-headerHeightPx, 0f)
-        val consumed = newOffset - clampedCurrent
-        return Pair(consumed, newOffset)
-    }
-
-    fun consumePostScroll(
-        delta: Float,
-        currentOffsetPx: Float,
-        headerHeightPx: Float,
-    ): Pair<Float, Float> {
-        if (delta <= 0f || headerHeightPx <= 0f) {
-            return Pair(0f, clampOffset(currentOffsetPx, headerHeightPx))
-        }
-        val clampedCurrent = clampOffset(currentOffsetPx, headerHeightPx)
-        val newOffset = (clampedCurrent + delta).coerceIn(-headerHeightPx, 0f)
-        val consumed = newOffset - clampedCurrent
-        return Pair(consumed, newOffset)
-    }
-}
-
-@Composable
-internal fun UserHeaderPagerLayout(
-    modifier: Modifier = Modifier,
-    header: @Composable () -> Unit,
-    pager: @Composable () -> Unit,
-) {
-    val density = LocalDensity.current
-    var headerHeightPx by remember { mutableStateOf(0f) }
-    var headerOffsetPx by remember { mutableStateOf(0f) }
-
-    // 头部高度改变（展开/折叠/旋转）时立即重定位偏移，防止负高度或留白
-    LaunchedEffect(headerHeightPx) {
-        headerOffsetPx = UserHeaderPagerMath.clampOffset(headerOffsetPx, headerHeightPx)
-    }
-
-    val nestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                val (consumed, newOffset) =
-                    UserHeaderPagerMath.consumePreScroll(
-                        delta = available.y,
-                        currentOffsetPx = headerOffsetPx,
-                        headerHeightPx = headerHeightPx,
-                    )
-                headerOffsetPx = newOffset
-                return Offset(0f, consumed)
-            }
-
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                val (consumedY, newOffset) =
-                    UserHeaderPagerMath.consumePostScroll(
-                        delta = available.y,
-                        currentOffsetPx = headerOffsetPx,
-                        headerHeightPx = headerHeightPx,
-                    )
-                headerOffsetPx = newOffset
-                return Offset(0f, consumedY)
-            }
-        }
-    }
-
-    BoxWithConstraints(modifier = modifier.clipToBounds().nestedScroll(nestedScrollConnection)) {
-        val totalHeightPx = constraints.maxHeight.toFloat()
-
-        val effectiveOffsetPx = UserHeaderPagerMath.clampOffset(headerOffsetPx, headerHeightPx)
-        val headerVisibleHeightPx =
-            UserHeaderPagerMath.calculateHeaderVisibleHeight(headerHeightPx, effectiveOffsetPx)
-
-        val pagerHeightPx =
-            UserHeaderPagerMath.calculatePagerHeight(totalHeightPx, headerVisibleHeightPx)
-        val pagerHeightDp = with(density) { pagerHeightPx.toDp() }
-
-        // 头部垂直无界测量以获取真实全高
-        Box(
-            modifier =
-                Modifier.fillMaxWidth()
-                    .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    .onSizeChanged { headerHeightPx = it.height.toFloat() }
-                    .offset { IntOffset(0, effectiveOffsetPx.roundToInt()) }
-                    .scrollable(
-                        state =
-                            rememberScrollableState { delta ->
-                                val (consumed, newOffset) =
-                                    if (delta < 0f) {
-                                        UserHeaderPagerMath.consumePreScroll(
-                                            delta,
-                                            headerOffsetPx,
-                                            headerHeightPx,
-                                        )
-                                    } else {
-                                        UserHeaderPagerMath.consumePostScroll(
-                                            delta,
-                                            headerOffsetPx,
-                                            headerHeightPx,
-                                        )
-                                    }
-                                headerOffsetPx = newOffset
-                                consumed
-                            },
-                        orientation = Orientation.Vertical,
-                    )
-        ) {
-            header()
-        }
-
-        // 下方Tab与Pager区域高度跟随视口减去可见头部高度，避免底部页码溢出
-        Box(
-            modifier =
-                Modifier.fillMaxWidth().height(pagerHeightDp).offset {
-                    IntOffset(0, headerVisibleHeightPx.roundToInt())
-                }
-        ) {
-            pager()
-        }
-    }
-}
-
-@Composable
-private fun UserHeaderContent(
-    vm: UserVM,
-    profileState: ProfileDto?,
-    expand: Boolean,
-    onChangeExpand: (Boolean) -> Unit,
-    onFollow: () -> Unit,
-    onFriend: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        if (expand) {
-            // 展开简介时在可滚动头部内展示头图，随头部内容一同滚走
-            AsyncImage(
-                model = profileState?.header.toHeaderUrl(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxWidth().height(150.dp),
-                contentScale = ContentScale.Crop,
-            )
-        }
-        UserCard(
-            vm = vm,
-            profileState = profileState,
-            expand = expand,
-            onChangeExpand = onChangeExpand,
-            onFollow = onFollow,
-            onFriend = onFriend,
-        )
-    }
-}
-
-@Composable
-private fun UserCard(
-    vm: UserVM,
-    profileState: ProfileDto?,
-    expand: Boolean,
-    onChangeExpand: (Boolean) -> Unit,
-    onFollow: () -> Unit,
-    onFriend: () -> Unit,
-) {
-    val context = LocalContext.current
-    val blockedUsers by vm.blockedUsers.collectFlowAsState()
-    val blocked = blockedUsers.any { it.user.id == profileState?.user?.id }
-    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Avatar(user = profileState?.user, modifier = Modifier.size(48.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    val displayName =
-                        profileState?.user?.name?.takeIf { it.isNotBlank() }
-                            ?: profileState?.user?.username?.takeIf { it.isNotBlank() }
-                            ?: stringResource(R.string.user_unknown)
-                    Text(
-                        text = displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-
-                    profileState?.user?.let { UserStatus(user = it) }
-                }
-
-                if (!profileState?.user?.username.isNullOrBlank()) {
-                    Text(
-                        text = "@" + profileState?.user?.username.orEmpty(),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-
-        // 好友与关注按钮独立成行并居右排布，避免长昵称压缩头像与用户信息
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(
-                onClick = { onFriend() },
-                type =
-                    when (vm.state.friendStatus) {
-                        FriendStatus.NONE -> ButtonType.Default
-                        FriendStatus.PENDING -> ButtonType.Outlined
-                        FriendStatus.FRIENDS -> ButtonType.Outlined
-                    },
-                loading = vm.state.friendLoading,
-            ) {
-                Text(
-                    text =
-                        when (vm.state.friendStatus) {
-                            FriendStatus.NONE -> stringResource(R.string.friends)
-                            FriendStatus.PENDING -> stringResource(R.string.friends_pending)
-                            FriendStatus.FRIENDS -> stringResource(R.string.friends_friends)
-                        }
-                )
-            }
-
-            // 已拉黑且取关成功后不再展示无效的关注按钮；解除拉黑即可恢复。
-            if (!blocked || profileState?.user?.following == true) {
-                Button(
-                    onClick = { onFollow() },
-                    type =
-                        if (profileState?.user?.following == true) ButtonType.Outlined
-                        else ButtonType.Default,
-                    loading = vm.state.followLoading,
-                ) {
-                    Text(
-                        text =
-                            if (profileState?.user?.following == true) {
-                                stringResource(R.string.user_followed)
-                            } else {
-                                stringResource(R.string.user_follow)
-                            }
-                    )
-                }
-            }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            // 用户简介使用SelectionContainer包裹，支持系统长按复制
-            SelectionContainer(modifier = Modifier.weight(1f)) {
-                RichText(
-                    text = profileState?.body ?: "",
-                    onLinkClick = { url -> context.openUrl(url) },
-                    maxLines = if (expand) Int.MAX_VALUE else 1,
-                    modifier = Modifier.fillMaxWidth().animateContentSize(),
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            IconButton(onClick = { onChangeExpand(!expand) }, modifier = Modifier.size(48.dp)) {
-                Icon(
-                    imageVector =
-                        if (expand) Icons.Filled.KeyboardArrowUp
-                        else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null,
-                )
-            }
-        }
-    }
-}
-
-/** 用户主页作品标签页共享网格（保持本机黑名单豁免，展示完整作者作品）。 */
-@Composable
-private fun <T : Media> UserMediaTabPage(
-    feed: PagedFeedState<T>,
-    onPageChange: (Int) -> Deferred<RefreshResult>?,
-    onRetry: () -> Unit,
-) {
-    PagedStaggeredGridPage(
-        feed = feed,
-        displayItems = feed.items,
-        displayUiState = feed.uiState,
-        itemKey = { it.id },
-        onPageChange = onPageChange,
-        onErrorRetry = onRetry,
-        onRefresh = null,
-        columns = DynamicStaggeredGridCells(150.dp, 2, 4),
-        paginationPadding = WindowInsets.navigationBars.asPaddingValues(),
-    ) { media ->
-        MediaCard(media = media)
-    }
-}
+private fun Throwable.fallbackDisplayMessage(): String = message ?: javaClass.simpleName
