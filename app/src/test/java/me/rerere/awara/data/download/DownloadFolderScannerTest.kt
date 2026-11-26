@@ -400,4 +400,50 @@ class DownloadFolderScannerTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun selectBestScannedCandidatesFiltersEmptyFilesAndPrefersHigherQualityThenLargerSize() {
+        val selected =
+            selectBestScannedCandidates(
+                listOf(
+                    // 空文件应忽略
+                    ScannedFileCandidate(
+                        uriString = "content://saf/empty",
+                        displayName = "Iwara - Empty [abc123XYZ] [Source].mp4",
+                        sizeBytes = 0L,
+                        lastModifiedMillis = 1000L,
+                    ),
+                    // 同画质 540：体积较小者先出现，应被体积更大者替换
+                    ScannedFileCandidate(
+                        uriString = "content://saf/540-small",
+                        displayName = "Iwara - Sample [same540ID] [540].mp4",
+                        sizeBytes = 1000L,
+                        lastModifiedMillis = 2000L,
+                    ),
+                    ScannedFileCandidate(
+                        uriString = "content://saf/540-large",
+                        displayName = "Iwara - Sample [same540ID] [540] (1).mp4",
+                        sizeBytes = 2000L,
+                        lastModifiedMillis = 3000L,
+                    ),
+                    // 不同画质：即使 360 体积更大，也应优先选择 Source
+                    ScannedFileCandidate(
+                        uriString = "content://saf/360-big",
+                        displayName = "Iwara - Quality [qualRankID] [360].mp4",
+                        sizeBytes = 9000L,
+                        lastModifiedMillis = 4000L,
+                    ),
+                    ScannedFileCandidate(
+                        uriString = "content://saf/src-small",
+                        displayName = "Iwara - Quality [qualRankID] [Source].mp4",
+                        sizeBytes = 3000L,
+                        lastModifiedMillis = 5000L,
+                    ),
+                )
+            )
+
+        assertEquals(setOf("same540ID", "qualRankID"), selected.keys)
+        assertEquals("content://saf/540-large", selected.getValue("same540ID").second.uriString)
+        assertEquals("content://saf/src-small", selected.getValue("qualRankID").second.uriString)
+    }
 }
