@@ -3,7 +3,6 @@ package me.rerere.awara.data.download
 import java.io.IOException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import me.rerere.awara.data.cdn.CdnPolicy
 import me.rerere.awara.data.cdn.parseContentRange
 import me.rerere.awara.data.cdn.validateMediaResponseHeaders
 import me.rerere.awara.data.cdn.withCancellableCall
@@ -110,12 +109,11 @@ internal class RangeProbe(
                         return@withCancellableCall RangeProbeResult.UnsupportedRange(total)
                     }
 
-                    val etag = response.header("ETag")?.trim()
-                    if (!CdnPolicy.isStrongValidator(etag)) {
-                        return@withCancellableCall RangeProbeResult.NoStrongETag(total)
-                    }
+                    val strongETag =
+                        extractStrongValidator(response)
+                            ?: return@withCancellableCall RangeProbeResult.NoStrongETag(total)
 
-                    RangeProbeResult.Success(total = total, strongETag = etag!!)
+                    RangeProbeResult.Success(total = total, strongETag = strongETag)
                 }
             }
         }

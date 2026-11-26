@@ -194,7 +194,6 @@ class DownloadManager(
                     else -> Unit
                 }
 
-                // CAS 更新为 PAUSED
                 val updated =
                     database
                         .downloadTaskDao()
@@ -434,7 +433,6 @@ class DownloadManager(
                     database.downloadTaskDao().updateStatus(taskId, DownloadTaskStatus.CANCELLING)
                     revokeExecutionAuthorization(taskId)
                     cancelActiveCall(taskId)
-                    connectionRegistry.resetTask(taskId)
                     DownloadNotifications.cancelTaskNotification(context, taskId)
                     if (existingTask.taskType == DownloadTaskType.APP_UPDATE) {
                         DownloadNotifications.cancelSuccessNotification(

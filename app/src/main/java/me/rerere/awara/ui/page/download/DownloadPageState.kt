@@ -140,11 +140,7 @@ internal class DownloadPageUiController(
         get() = selectedIds.isNotEmpty()
 
     fun toggleSearch() {
-        searchOpen = !searchOpen
-        if (!searchOpen) {
-            searchQuery = ""
-            searchCategory = SearchCategory.TITLE
-        }
+        if (searchOpen) closeSearch() else searchOpen = true
     }
 
     fun closeSearch() {

@@ -183,7 +183,7 @@ internal fun DownloadManagerTopBar(
                             menuExpanded = false
                             onRequestCancelAll()
                         },
-                        enabled = canMutateBatch && counts.cancellableCount > 0,
+                        enabled = canMutateBatch,
                     )
                 }
             }

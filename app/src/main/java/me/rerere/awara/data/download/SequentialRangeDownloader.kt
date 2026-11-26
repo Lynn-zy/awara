@@ -74,7 +74,7 @@ internal fun planSequentialRequest(
                 rangeValidator = rangeValidator,
                 hasStrongValidator = hasStrongValidator,
             )
-        hasStrongValidator && isFullCompletedProbe -> {
+        isFullCompletedProbe -> {
             val start = maxOf(0L, currentOffset - overlapSizeBytes)
             SequentialRequestPlan(
                 effectiveOffset = currentOffset,
@@ -280,7 +280,7 @@ internal class SequentialRangeDownloader(
             targetFile = targetFile,
             append = false,
             currentOffset = 0L,
-            expectedBytes = if (len > 0L) len else -1L,
+            expectedBytes = totalBytes,
             totalBytes = totalBytes,
             onBytesDownloaded = onBytesDownloaded,
             onProgress = onProgress,
@@ -355,7 +355,7 @@ internal class SequentialRangeDownloader(
             verifyOverlap(
                 input = bodyStream,
                 targetFile = targetFile,
-                rangeStart = start!!,
+                rangeStart = expectedStart,
                 overlapLength = plan.overlapLength,
             )
         }
@@ -392,7 +392,6 @@ internal class SequentialRangeDownloader(
         rangeStart: Long,
         overlapLength: Long,
     ) {
-        if (overlapLength <= 0L) return
         var verified = 0L
         RandomAccessFile(targetFile, "r").use { raf ->
             raf.seek(rangeStart)

@@ -1,6 +1,7 @@
 package me.rerere.awara.worker
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -43,39 +44,28 @@ internal class DownloadWorkerFailureHandler(
                 return@withContext
             }
             DownloadNotifications.cancelTaskNotification(appContext, taskId)
-            when (taskAfterCancel.status) {
-                DownloadTaskStatus.PAUSED -> Unit
-                DownloadTaskStatus.CANCELLING -> Unit
-                DownloadTaskStatus.QUEUED,
-                DownloadTaskStatus.RETRYING,
-                DownloadTaskStatus.FAILED,
-                DownloadTaskStatus.COMPLETED -> Unit
-                DownloadTaskStatus.RUNNING,
-                DownloadTaskStatus.SAVING -> {
-                    // 系统取消，仅在仍为当前代且处于运行/保存时转入 PAUSED
-                    val err =
-                        if (!cleanSuccess && state.destinationUri != null) {
-                            "目标文件清理失败; 任务被系统中断"
-                        } else {
-                            "任务被系统中断"
-                        }
-                    val retainedDest =
-                        if (!cleanSuccess && state.destinationUri != null) {
-                            state.destinationUri.toString()
-                        } else {
-                            ""
-                        }
-                    appDatabase
-                        .downloadTaskDao()
-                        .updateWorkerTerminalState(
-                            taskId = taskId,
-                            workId = workId,
-                            newStatus = DownloadTaskStatus.PAUSED,
-                            destinationUri = retainedDest,
-                            error = err,
-                        )
-                }
+            if (
+                taskAfterCancel.status != DownloadTaskStatus.RUNNING &&
+                    taskAfterCancel.status != DownloadTaskStatus.SAVING
+            ) {
+                return@withContext
             }
+            // 系统取消，仅在仍为当前代且处于运行/保存时转入 PAUSED
+            val (err, retainedDest) =
+                resolveCleanupFailureOutcome(
+                    cleanSuccess = cleanSuccess,
+                    destinationUri = state.destinationUri,
+                    baseError = "任务被系统中断",
+                )
+            appDatabase
+                .downloadTaskDao()
+                .updateWorkerTerminalState(
+                    taskId = taskId,
+                    workId = workId,
+                    newStatus = DownloadTaskStatus.PAUSED,
+                    destinationUri = retainedDest,
+                    error = err,
+                )
         }
     }
 
@@ -103,18 +93,12 @@ internal class DownloadWorkerFailureHandler(
                 return@withContext
             }
 
-            val err =
-                if (!cleanSuccess && state.destinationUri != null) {
-                    "目标文件清理失败; $sanitizedMsg"
-                } else {
-                    sanitizedMsg
-                }
-            val retainedDest =
-                if (!cleanSuccess && state.destinationUri != null) {
-                    state.destinationUri.toString()
-                } else {
-                    ""
-                }
+            val (err, retainedDest) =
+                resolveCleanupFailureOutcome(
+                    cleanSuccess = cleanSuccess,
+                    destinationUri = state.destinationUri,
+                    baseError = sanitizedMsg,
+                )
 
             val retryHandled =
                 if (transferInProgress && downloadManager.isAutomaticRetryEnabled()) {
@@ -209,6 +193,17 @@ internal class DownloadWorkerFailureHandler(
         }
         return true
     }
+
+    private fun resolveCleanupFailureOutcome(
+        cleanSuccess: Boolean,
+        destinationUri: Uri?,
+        baseError: String,
+    ): Pair<String, String> =
+        if (!cleanSuccess && destinationUri != null) {
+            "目标文件清理失败; $baseError" to destinationUri.toString()
+        } else {
+            baseError to ""
+        }
 
     private suspend fun markTerminalFailure(
         taskAfterError: DownloadTask,

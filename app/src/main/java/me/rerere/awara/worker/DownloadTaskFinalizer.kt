@@ -274,7 +274,6 @@ internal class DownloadTaskFinalizer(
         var oldUriToClean: String? = null
         var committed = false
         withContext(NonCancellable) {
-            var saved = false
             // 事务中二次确认状态仍为 SAVING 且 workId 一致才入库，避免取消竞态
             appDatabase.withTransaction {
                 val inTxTask = appDatabase.downloadTaskDao().getTask(taskId)
@@ -310,10 +309,9 @@ internal class DownloadTaskFinalizer(
                             )
                         )
                     appDatabase.downloadTaskDao().delete(taskId)
-                    saved = true
+                    committed = true
                 }
             }
-            committed = saved
             if (committed) {
                 deletePartsSafely(parsedTaskId, "待回收下载分块失败 taskId=$taskId")
                 // 事务成功提交后安全清理旧物理 URI
@@ -342,7 +340,6 @@ internal class DownloadTaskFinalizer(
         var committed = false
         // 应用更新包不写入已下载视频列表，保留为 COMPLETED 任务卡片供用户手动安装或删除
         withContext(NonCancellable) {
-            var saved = false
             appDatabase.withTransaction {
                 val marked =
                     appDatabase
@@ -364,10 +361,9 @@ internal class DownloadTaskFinalizer(
                     for (oldTask in supersededCompleted) {
                         appDatabase.downloadTaskDao().delete(oldTask.taskId)
                     }
-                    saved = true
+                    committed = true
                 }
             }
-            committed = saved
             if (committed) {
                 for (oldTask in supersededCompleted) {
                     DownloadNotifications.cancelSuccessNotification(appContext, oldTask.resourceId)
@@ -381,8 +377,6 @@ internal class DownloadTaskFinalizer(
     private fun deletePartsSafely(parsedTaskId: DownloadTaskId, warningMessage: String) {
         try {
             downloadManager.parts.delete(parsedTaskId)
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Exception) {
             Log.w(FINALIZER_TAG, warningMessage, e)
         }
@@ -401,8 +395,6 @@ internal class DownloadTaskFinalizer(
         } finally {
             try {
                 metadata.release()
-            } catch (e: CancellationException) {
-                throw e
             } catch (e: Exception) {
                 Log.w(FINALIZER_TAG, "probeValidVideoDurationMs: 释放 MediaMetadataRetriever 失败", e)
             }

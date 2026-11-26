@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -131,7 +132,7 @@ internal class DownloadWorkerPreflight(
         }
 
         if (task.quality.isBlank()) {
-            failMissingQuality(task, workId)
+            failTask(task, workId, R.string.download_quality_missing)
             return TransferPreparation.Stop
         }
 
@@ -184,24 +185,14 @@ internal class DownloadWorkerPreflight(
         val task = appDatabase.downloadTaskDao().getTask(taskId) ?: return
         if (task.workId != workId) return
         DownloadNotifications.cancelProgressNotification(appContext, taskId)
-        appDatabase
-            .downloadTaskDao()
-            .compareAndSetStatus(taskId, workId, task.status, DownloadTaskStatus.FAILED)
-        appDatabase
-            .downloadTaskDao()
-            .updateError(
-                taskId,
-                appContext.getString(R.string.please_grant_notification_permission),
-            )
-        DownloadNotifications.showFailureNotification(
-            context = appContext,
-            taskId = taskId,
-            title = task.title,
-            taskType = task.taskType,
-        )
+        failTask(task, workId, R.string.please_grant_notification_permission)
     }
 
-    private suspend fun failMissingQuality(task: DownloadTask, workId: String) {
+    private suspend fun failTask(
+        task: DownloadTask,
+        workId: String,
+        @StringRes errorResId: Int,
+    ) {
         val changed =
             appDatabase
                 .downloadTaskDao()
@@ -212,9 +203,7 @@ internal class DownloadWorkerPreflight(
                     DownloadTaskStatus.FAILED,
                 )
         if (changed > 0) {
-            appDatabase
-                .downloadTaskDao()
-                .updateError(task.taskId, appContext.getString(R.string.download_quality_missing))
+            appDatabase.downloadTaskDao().updateError(task.taskId, appContext.getString(errorResId))
             DownloadNotifications.showFailureNotification(
                 context = appContext,
                 taskId = task.taskId,

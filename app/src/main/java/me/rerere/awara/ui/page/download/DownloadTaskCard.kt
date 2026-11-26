@@ -131,7 +131,7 @@ internal fun resolveDownloadTaskPrimaryAction(
     isResuming: Boolean,
 ): DownloadTaskPrimaryAction {
     if (
-        (isResuming || status == DownloadTaskStatus.QUEUED) &&
+        isResuming &&
             status != DownloadTaskStatus.SAVING &&
             status != DownloadTaskStatus.CANCELLING &&
             status != DownloadTaskStatus.COMPLETED

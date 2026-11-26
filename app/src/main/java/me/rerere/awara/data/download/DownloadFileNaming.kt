@@ -1,16 +1,12 @@
 package me.rerere.awara.data.download
 
-// 官网标准下载文件名前缀
 internal const val IWARA_DOWNLOAD_FILE_PREFIX = "Iwara - "
 // 视频标题最大字符数限制（防止部分文件系统或 UI 显示过长）
 private const val MAX_TITLE_CHARS = 60
 // 视频标题最大 UTF-8 字节数限制（Ext4/FAT32 单文件名通常上限 255 字节，为前缀、ID 与画质留出安全余量）
 private const val MAX_TITLE_UTF8_BYTES = 120
-// 资源 ID 最大字符数限制
 private const val MAX_RESOURCE_ID_CHARS = 32
-// 画质标签最大字符数限制
 private const val MAX_QUALITY_CHARS = 16
-// 文件名中的非法字符集（覆盖常见操作系统保留字符与路径分隔符）
 private val INVALID_FILENAME_CHARS = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
 
 /**
