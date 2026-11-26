@@ -54,10 +54,11 @@ internal fun findHttpAuthFailureCode(error: Throwable?): Int? {
     var current: Throwable? = error
     var depth = 0
     while (current != null && depth < 16) {
-        if (current is HttpDataSource.InvalidResponseCodeException) {
-            if (current.responseCode in HTTP_AUTH_FAILURE_CODES) {
-                return current.responseCode
-            }
+        if (
+            current is HttpDataSource.InvalidResponseCodeException &&
+                current.responseCode in HTTP_AUTH_FAILURE_CODES
+        ) {
+            return current.responseCode
         }
         current = current.cause
         depth++
@@ -72,12 +73,10 @@ internal fun resolveTargetPlayerItem(
     preferredQuality: String,
 ): PlayerState.PlayerItem? {
     if (items.isEmpty()) return null
-    return if (!targetQuality.isNullOrBlank()) {
-        items.firstOrNull { matchVideoQuality(it.quality, targetQuality) }
-            ?: selectTargetPlayerItem(items, preferredQuality)
-    } else {
-        selectTargetPlayerItem(items, preferredQuality)
+    if (!targetQuality.isNullOrBlank()) {
+        items.firstOrNull { matchVideoQuality(it.quality, targetQuality) }?.let { return it }
     }
+    return selectTargetPlayerItem(items, preferredQuality)
 }
 
 /** 判断新收到的列表更新是否与当前活跃且无错误的媒体流完全等价，避免重复重载中断播放。 */

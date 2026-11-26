@@ -40,13 +40,8 @@ import org.koin.core.context.GlobalContext
 private const val PIPELINE_TAG = "PlayerState"
 private const val BUFFER_SAMPLE_INTERVAL_MS = 500L
 
-/**
- * 创建统一配置的主 ExoPlayer 实例：启用系统硬件 `MediaCodec` 并允许同族解码器回退，
- * 开启系统 `AudioTrack` 原生倍速参数以避免软件变速排空缓冲造成的切速卡顿，
- * 同时锁定高刷屏幕帧率策略（设备不支持 High 10 等格式时由 [PlayerState] 按需切换至 `libmpv`）。
- */
 @OptIn(UnstableApi::class)
-internal fun createAwaraExoPlayer(
+private fun createAwaraExoPlayer(
     context: Context,
     mediaSourceFactory: MediaSource.Factory? = null,
     loadControl: LoadControl? = null,
@@ -184,7 +179,7 @@ internal fun createPlayerPipelineRuntime(
             null
         }
     val cdnController =
-        if (enableOnlineStreaming && !useCustomBuilder && settings.multiCdnEnabled && httpFactory != null) {
+        if (httpFactory != null && !useCustomBuilder && settings.multiCdnEnabled) {
             val sharedClient = GlobalContext.getOrNull()?.getOrNull<OkHttpClient>()
             // 优先复用 Koin 单例 OkHttpClient 连接池，清除应用层拦截器以保持流媒体传输纯净。
             val client =
@@ -211,17 +206,8 @@ internal fun createPlayerPipelineRuntime(
         }
     // 仅包装播放 HTTP 上游；本地文件、磁盘缓存命中和缩略图继续使用原有路径。
     val readAheadFactory =
-        if (enableOnlineStreaming && httpFactory != null) {
-            PlaybackReadAheadDataSource.Factory(cdnController ?: httpFactory)
-        } else {
-            null
-        }
-    val onlineDataSourceFactory =
-        if (enableOnlineStreaming && readAheadFactory != null) {
-            PlayerCache.get(context, readAheadFactory)
-        } else {
-            null
-        }
+        httpFactory?.let { PlaybackReadAheadDataSource.Factory(cdnController ?: it) }
+    val onlineDataSourceFactory = readAheadFactory?.let { PlayerCache.get(context, it) }
     val localDataSourceFactory = DefaultDataSource.Factory(context)
     val localProxy =
         if (!useCustomBuilder) {
@@ -252,17 +238,7 @@ internal fun syncInitialPlayerStateSnapshot(state: PlayerState) {
         state.markPlaybackStarted()
     }
     state.isLoading = active.isLoading
-    state.state =
-        when (active.playbackState) {
-            Player.STATE_IDLE,
-            Player.STATE_BUFFERING,
-            Player.STATE_READY,
-            Player.STATE_ENDED -> mapMediaPlayerState(active.playbackState)
-            else ->
-                PlayerState.State.IDLE.also {
-                    Log.w(PIPELINE_TAG, "onPlaybackStateChanged: unknown state ${active.playbackState}")
-                }
-        }
+    state.state = mapMediaPlayerState(active.playbackState)
     state.videoSize = PlayerState.VideoSize.from(active.videoSize)
     state.duration = active.duration
 }

@@ -60,14 +60,13 @@ internal fun PlayerTopControlBar(
     connections: CdnConnectionSnapshot?,
     navigationIcon: (@Composable () -> Unit)?,
     actions: @Composable RowScope.() -> Unit,
-    onRotateScreen: (() -> Unit)?,
     onCycleScaleMode: () -> Unit,
     onLoopMenuExpandedChange: (Boolean) -> Unit,
     onSetAbLoopPointA: () -> Unit,
     onToggleAbLoopPointB: () -> Unit,
     onClearAbLoop: () -> Unit,
     onCycleEndBehavior: () -> Unit,
-    onRotateClick: () -> Unit,
+    onRotateClick: (() -> Unit)?,
 ) {
     if (topVisible) {
         Row(
@@ -102,7 +101,7 @@ internal fun PlayerTopControlBar(
                     modifier = Modifier.testTag("player_scale_mode_button"),
                 )
 
-                if (onRotateScreen != null) {
+                if (onRotateClick != null) {
                     PlayerControlIconButton(
                         icon = Icons.Outlined.ScreenRotation,
                         contentDescription = stringResource(R.string.player_rotate_screen),
@@ -141,29 +140,29 @@ internal fun PlayerTopControlBar(
     } else {
         // 保留预览与提示的布局基准，不让隐藏标题改变手势中画面位置。
         Box(Modifier.height(controlDimensions.slotSize).fillMaxWidth()) {
-            connections?.let {
-                CdnConnectionDebugText(
-                    it,
-                    Modifier.align(Alignment.TopStart)
-                        .background(Color.Black.copy(alpha = 0.7f))
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                        .testTag("player_cdn_debug"),
-                    stacked = true,
-                )
-            }
+            connections?.let { PlayerCdnDebugBadge(it, Modifier.align(Alignment.TopStart)) }
         }
     }
 
     // 标题可见时独占两行，避免覆盖返回键、标题或位于剩余空间内的手势提示。
     if (topVisible && connections != null) {
-        CdnConnectionDebugText(
-            connections,
-            Modifier.background(Color.Black.copy(alpha = 0.7f))
-                .padding(horizontal = 4.dp, vertical = 2.dp)
-                .testTag("player_cdn_debug"),
-            stacked = true,
-        )
+        PlayerCdnDebugBadge(connections)
     }
+}
+
+@Composable
+private fun PlayerCdnDebugBadge(
+    connections: CdnConnectionSnapshot,
+    modifier: Modifier = Modifier,
+) {
+    CdnConnectionDebugText(
+        connections,
+        modifier
+            .background(Color.Black.copy(alpha = 0.7f))
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+            .testTag("player_cdn_debug"),
+        stacked = true,
+    )
 }
 
 /**

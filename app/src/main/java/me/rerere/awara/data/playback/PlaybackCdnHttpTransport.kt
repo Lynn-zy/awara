@@ -116,16 +116,15 @@ internal class PlaybackCdnHttpTransport(
             try {
                 val code = response.code
                 if (code !in 200..299) {
-                    val refreshed =
-                        handleHttpFailureCode(
-                            session = session,
-                            targetHost = targetHost,
-                            dataSpec = dataSpec,
-                            snapshot = snapshot,
-                            response = response,
-                            code = code,
-                        )
-                    if (refreshed) continue
+                    handleHttpFailureCode(
+                        session = session,
+                        targetHost = targetHost,
+                        dataSpec = dataSpec,
+                        snapshot = snapshot,
+                        response = response,
+                        code = code,
+                    )
+                    continue
                 }
 
                 val opened =
@@ -308,7 +307,7 @@ internal class PlaybackCdnHttpTransport(
         snapshot: PlaybackCdnSession.ConnectionSnapshot,
         response: Response,
         code: Int,
-    ): Boolean {
+    ) {
         when (CdnPolicy.failureAction(code)) {
             CdnFailureAction.REFRESH_SIGNATURE -> {
                 val refreshedUrl =
@@ -329,7 +328,7 @@ internal class PlaybackCdnHttpTransport(
                 val newHttpUrl = refreshedUrl?.toHttpUrlOrNull()
                 if (newHttpUrl != null) {
                     session.updateRefreshedUrl(newHttpUrl)
-                    return true
+                    return
                 }
                 throw invalidResponseException(code, response, dataSpec)
             }

@@ -77,7 +77,7 @@ import kotlin.math.sin
 import kotlinx.coroutines.delay
 import me.rerere.awara.R
 
-/** 左右双击快进/快退浮层定稿参数（方案 A · 舒展柔白大椭圆 + M4 触点柔白光环）。 */
+/** 左右双击快进/快退浮层绘制参数。 */
 internal const val DOUBLE_TAP_SEEK_HOLD_MS = 600L
 private const val DOUBLE_TAP_SEEK_FADE_OUT_MS = 180L
 internal const val DOUBLE_TAP_ELLIPSE_WIDTH_RATIO = 0.30f
@@ -167,12 +167,7 @@ internal fun PlayerPlaybackErrorOverlay(
     }
 }
 
-/**
- * 左右双击快进/快退视觉反馈（方案 A 舒展柔白大椭圆 + M4 触点宽羽化柔白光环）：
- * - 椭圆水平铺入 35%、纵向拉伸 1.75x、边缘 16% 羽化、10% 柔白底雾；
- * - 复用 M4 触点光环（峰值 5%、扩散 25%、时长 300ms），每次连击重新绽放；
- * - 展示三连渐进箭头动效、受限后的实际跳转秒数与目标时间坐标（600ms 窗口后淡出）。
- */
+/** 左右双击快进/快退视觉反馈：绘制侧边椭圆底雾、触点扩散光环、三连渐进箭头与目标时间提示。 */
 @Composable
 internal fun PlayerDoubleTapSeekFeedback(
     feedback: DoubleTapSeekFeedback,
@@ -246,7 +241,6 @@ internal fun PlayerDoubleTapSeekFeedback(
 
             clipRect {
                 clipPath(ellipsePath) {
-                    // 1. 舒展柔白大椭圆底雾（边缘 16% 羽化，峰值浓度 10%）
                     val fillAlpha = DOUBLE_TAP_ELLIPSE_FILL_ALPHA * alphaFactor
                     val innerStop = (1f - DOUBLE_TAP_ELLIPSE_EDGE_FEATHER).coerceIn(0.1f, 0.98f)
                     withTransform({
@@ -273,7 +267,6 @@ internal fun PlayerDoubleTapSeekFeedback(
                         )
                     }
 
-                    // 2. 复用 M4 触点宽羽化柔白光环（浓度 5%、范围 25%、时长 300ms）
                     val p = veilProgress.value.coerceIn(0f, 1f)
                     if (p < 1f) {
                         val env = initialPlayVeilEnvelope(p)

@@ -195,24 +195,22 @@ internal class PlayerRecoveryCoordinator(
                     }
                 if (targetEpoch != state.mediaSwitchEpoch) return@launch
                 val resolvedPlayWhenReady = refreshTargetPlayWhenReady
-                if (!refreshedUrl.isNullOrBlank()) {
-                    val nextItem = state.updateRefreshedItemUri(targetItem, refreshedUrl)
-                    state.applyMediaItem(
-                        item = nextItem,
-                        positionMs = resumePositionMs,
-                        targetPlayWhenReady = resolvedPlayWhenReady,
-                        resetToPrimaryEngine = false,
-                    )
-                } else if (fallbackError != null) {
+                if (refreshedUrl.isNullOrBlank() && fallbackError != null) {
                     state.recordPlaybackError(error = fallbackError, isHttpAuthError = true)
-                } else {
-                    state.applyMediaItem(
-                        item = targetItem,
-                        positionMs = resumePositionMs,
-                        targetPlayWhenReady = resolvedPlayWhenReady,
-                        resetToPrimaryEngine = false,
-                    )
+                    return@launch
                 }
+                val nextItem =
+                    if (!refreshedUrl.isNullOrBlank()) {
+                        state.updateRefreshedItemUri(targetItem, refreshedUrl)
+                    } else {
+                        targetItem
+                    }
+                state.applyMediaItem(
+                    item = nextItem,
+                    positionMs = resumePositionMs,
+                    targetPlayWhenReady = resolvedPlayWhenReady,
+                    resetToPrimaryEngine = false,
+                )
             }
     }
 

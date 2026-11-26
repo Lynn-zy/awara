@@ -149,13 +149,15 @@ internal fun PlayerControlChromeLayer(
                         connections = connections,
                         navigationIcon = navigationIcon,
                         actions = actions,
-                        onRotateScreen = onRotateScreen,
                         onCycleScaleMode = { session.cycleScaleMode(state) },
-                        onRotateClick = {
-                            session.markInteraction()
-                            session.loopMenuExpanded = false
-                            onRotateScreen?.invoke()
-                        },
+                        onRotateClick =
+                            onRotateScreen?.let { rotateScreen ->
+                                {
+                                    session.markInteraction()
+                                    session.loopMenuExpanded = false
+                                    rotateScreen()
+                                }
+                            },
                         onLoopMenuExpandedChange = { session.setLoopMenuExpanded(it, state) },
                         onSetAbLoopPointA = { session.applyAbLoopPointA(state) },
                         onToggleAbLoopPointB = { session.toggleAbLoopPointB(state) },
@@ -236,7 +238,6 @@ internal fun PlayerControlChromeLayer(
             }
         }
 
-        // 左右双击快进/快退：方案 A 舒展柔白大椭圆 + M4 触点宽羽化光环 + 三连箭头与时间坐标。
         session.doubleTapSeekFeedback?.let { feedback ->
             PlayerDoubleTapSeekFeedback(feedback = feedback, modifier = Modifier.fillMaxSize())
         }
@@ -338,7 +339,6 @@ internal fun BoxScope.PlayerFloatingOverlays(
         )
     }
 
-    // 首次单击播放器区域起播时的 M4 轻微柔白羽化光环蒙层反馈
     if (session.tapVeilActive) {
         Canvas(modifier = Modifier.fillMaxSize().testTag("player_initial_play_veil")) {
             drawInitialPlayTapVeil(
@@ -355,7 +355,6 @@ internal fun BoxScope.PlayerFloatingOverlays(
             Modifier
         }
 
-    // 重新播放之前看过的视频自动定位后，在左下角短暂展示「已定位到 xx:xx」提示。
     val resumedNotice = state.resumedPositionNotice
     AnimatedVisibility(
         visible = resumedNotice != null,
@@ -378,7 +377,6 @@ internal fun BoxScope.PlayerFloatingOverlays(
         resumedNotice?.let { notice -> PlayerResumedPositionNotice(notice = notice) }
     }
 
-    // 初始缓冲已完成且首帧就绪时，在右下角展示方案 B 白色半透明圆润矩形播放按钮。
     AnimatedVisibility(
         visible =
             initialInteraction.showPlayPrompt &&

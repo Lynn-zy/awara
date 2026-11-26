@@ -85,8 +85,7 @@ internal data class PlayerControlDimensions(
     val menuItemMinWidth: Dp,
 )
 
-/** 半屏紧凑规格（同时作为未接入控制栏上下文时的默认尺寸）。 */
-internal val HalfscreenPlayerControlDimensions =
+private val HalfscreenPlayerControlDimensions =
     PlayerControlDimensions(
         slotSize = 38.dp,
         backIconSize = 20.dp,
@@ -104,8 +103,7 @@ internal val HalfscreenPlayerControlDimensions =
         menuItemMinWidth = 76.dp,
     )
 
-/** 全屏等比放大规格（按钮槽与图标约 1.2x 放大，文字与选择面板同步调大至 16sp，进度条加粗至 3dp）。 */
-internal val FullscreenPlayerControlDimensions =
+private val FullscreenPlayerControlDimensions =
     PlayerControlDimensions(
         slotSize = 46.dp,
         backIconSize = 24.dp,
@@ -139,13 +137,13 @@ internal val PLAYER_SPEED_FEEDBACK_TOP_PADDING_FULLSCREEN = 18.dp
 
 /** 播放器画质与倍速选择面板公共容器外观（始终采用 M3 简约深色表面）。 */
 internal val PLAYER_MENU_VERTICAL_PADDING = 4.dp
-internal val PLAYER_MENU_HORIZONTAL_PADDING = 10.dp
+private val PLAYER_MENU_HORIZONTAL_PADDING = 10.dp
 private val PLAYER_MENU_MAX_WIDTH = 240.dp
 private val PLAYER_MENU_CHECK_GAP = 10.dp
 private val PLAYER_MENU_CORNER_RADIUS = 8.dp
 private val PLAYER_MENU_SURFACE_COLOR = Color(0xFF252830)
 private val PLAYER_MENU_CONTENT_COLOR = Color(0xFFEBEDF2)
-internal val PLAYER_MENU_SELECTED_COLOR = Color(0xFF8AB4F8)
+private val PLAYER_MENU_SELECTED_COLOR = Color(0xFF8AB4F8)
 
 /**
  * 播放器控制栏统一图标按钮，依据当前控制栏规格适配热区槽位与光学图标尺寸。

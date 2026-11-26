@@ -26,7 +26,7 @@ import kotlin.math.pow
 import kotlin.math.sign
 import kotlin.math.sin
 
-/** 首次单击起播蒙层动效固定参数（M4 · 柔白 · 浓度 5% · 时长 300ms · 范围 30% · 渐起 5%）。 */
+/** 首次单击起播蒙层动效参数。 */
 internal const val INITIAL_PLAY_VEIL_DURATION_MS = 300
 private const val INITIAL_PLAY_VEIL_PEAK_ALPHA = 0.05f
 private const val INITIAL_PLAY_VEIL_SPREAD = 0.30f
@@ -52,9 +52,7 @@ internal fun initialPlayVeilEnvelope(
     }
 }
 
-/**
- * 在播放器画布上绘制 M4 单击起播轻微蒙层反馈（触点宽羽化柔白光环 + 极淡全画幅底雾）。
- */
+/** 在播放器画布上绘制单击起播的柔白光环与底雾反馈。 */
 internal fun DrawScope.drawInitialPlayTapVeil(
     progress: Float,
     tapCenter: Offset,
@@ -76,10 +74,8 @@ internal fun DrawScope.drawInitialPlayTapVeil(
             y = tapCenter.y.coerceIn(0f, size.height),
         )
 
-    // 1. 极淡全屏柔白底雾
     drawRect(color = Color.White.copy(alpha = (peakAlpha * 0.22f).coerceIn(0f, 1f)))
 
-    // 2. 触点向外舒展的宽羽化无硬边柔白光环
     drawRect(
         brush =
             Brush.radialGradient(
@@ -92,12 +88,7 @@ internal fun DrawScope.drawInitialPlayTapVeil(
     )
 }
 
-/**
- * 构建锚定四角、四边微鼓弧度为 40% 的超椭圆连续曲率圆润横置矩形路径（方案 B 轮廓）。
- *
- * 参数对齐原型定稿：`bulge = 40%` 对应超椭圆指数 `4.36`，四边带克制圆润弧度且无任何转角折痕。
- */
-internal fun buildYoutubeStylePillPath(
+private fun buildYoutubeStylePillPath(
     centerX: Float,
     centerY: Float,
     cornerAnchorX: Float,
@@ -129,7 +120,6 @@ internal fun buildYoutubeStylePillPath(
     }
 }
 
-/** 构建二次贝塞尔圆角等腰播放三角形路径，与 HTML 原型几何完全一致。 */
 private fun buildRoundedPlayTrianglePath(
     centerX: Float,
     centerY: Float,
@@ -172,10 +162,8 @@ private fun buildRoundedPlayTrianglePath(
 }
 
 /**
- * 初始缓冲停止且首帧就绪后，悬浮在播放器右下角的朴素白色半透明播放按钮（方案 B 定稿参数）：
- * - 四边微鼓弧度 = `40%`，外投影 = `0%`，主体不透明度 = `40%`，微凸边缘 = `0%`；
- * - 内部居中绘制柔和深灰半透明（`rgba(22, 25, 31, 0.74)`）圆角播放三角；
- * - 触摸事件直接透传至父级 `player_seek_surface`，支持单击画面任意位置起播。
+ * 初始缓冲停止且首帧就绪后悬浮在播放器右下角的半透明待播按钮；
+ * 触摸事件直接透传至父级 `player_seek_surface`，支持单击画面任意位置起播。
  */
 @Composable
 internal fun PlayerInitialPlayBadge(
@@ -201,7 +189,6 @@ internal fun PlayerInitialPlayBadge(
     }
 }
 
-/** 在 [DrawScope] 内绘制右下角圆润播放按钮底板、柔光描边与中心圆角播放三角。 */
 private fun DrawScope.drawInitialPlayBadge() {
     val cx = size.width * 0.5f
     val cy = size.height * 0.5f
@@ -222,7 +209,6 @@ private fun DrawScope.drawInitialPlayBadge() {
             bulgeFraction = 0.40f,
         )
 
-    // 1. 40% 不透明度的朴素白色半透明圆润矩形主体（外投影=0%，微凸边缘=0%）
     drawPath(
         path = pillPath,
         brush =
@@ -235,7 +221,6 @@ private fun DrawScope.drawInitialPlayBadge() {
             ),
     )
 
-    // 2. 极轻柔边缘收敛描边（对应 bevel=0% 时的微弱抗锯齿过渡边）
     drawPath(
         path = pillPath,
         brush =
@@ -249,7 +234,6 @@ private fun DrawScope.drawInitialPlayBadge() {
         style = Stroke(width = 1.dp.toPx()),
     )
 
-    // 3. 柔和深灰半透明圆角播放三角（rgba(22, 25, 31, 0.74)）
     val trianglePath =
         buildRoundedPlayTrianglePath(
             centerX = cx,
