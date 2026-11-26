@@ -1,317 +1,66 @@
 package me.rerere.awara.ui.page.download
 
-import android.content.ActivityNotFoundException
-import android.content.ClipData
-import android.content.Intent
-import android.content.pm.ActivityInfo
-import android.content.res.Configuration
 import android.net.Uri
-import android.util.Log
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.ArrowDownward
-import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.PersonAdd
-import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Sort
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Divider
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.semantics.toggleableState
-import androidx.compose.ui.state.ToggleableState
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.util.UnstableApi
-import coil.compose.AsyncImage
-import com.airbnb.lottie.compose.LottieAnimation
-import com.airbnb.lottie.compose.LottieCompositionSpec
-import com.airbnb.lottie.compose.LottieConstants
-import com.airbnb.lottie.compose.animateLottieCompositionAsState
-import com.airbnb.lottie.compose.rememberLottieComposition
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import me.rerere.awara.R
-import me.rerere.awara.data.SearchCategory
 import me.rerere.awara.data.download.DownloadFolderScanner
 import me.rerere.awara.data.download.DownloadStorage
-import me.rerere.awara.data.download.MetadataScanProgress
 import me.rerere.awara.data.entity.DownloadItem
-import me.rerere.awara.data.entity.canLinkAuthor
 import me.rerere.awara.ui.LocalMessageProvider
 import me.rerere.awara.ui.LocalRouterProvider
-import me.rerere.awara.ui.component.common.BackButton
-import me.rerere.awara.ui.component.common.LocalSearchInput
-import me.rerere.awara.ui.component.common.UiState
-import me.rerere.awara.ui.component.common.UiStateBox
-import me.rerere.awara.ui.component.player.Player
-import me.rerere.awara.ui.component.player.PlayerBackIconButton
-import me.rerere.awara.ui.component.player.PlayerFullscreenIconButton
-import me.rerere.awara.ui.component.player.PlayerScaffold
-import me.rerere.awara.ui.component.player.PlayerState
-import me.rerere.awara.ui.component.player.rememberPlayerState
-import me.rerere.awara.ui.component.player.resolveFullscreenOrientation
-import me.rerere.awara.ui.component.player.resolveToggledFullscreenOrientation
-import me.rerere.awara.ui.component.player.videoQualityDisplayName
-import me.rerere.awara.ui.hooks.rememberRequestedScreenOrientation
-import me.rerere.awara.ui.page.setting.DownloadPlayerMode
-import me.rerere.awara.ui.page.setting.SettingKeys
-import me.rerere.awara.util.formatDurationMs
-import me.rerere.awara.util.prettyFileSize
-import me.rerere.compose_setting.preference.rememberBooleanPreference
-import me.rerere.compose_setting.preference.rememberStringPreference
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
-// ExperimentalFoundationApi 使用 Kotlin 原生 OptIn，Media3 UnstableApi 使用 AndroidX 全限定注解
-@OptIn(ExperimentalFoundationApi::class)
-@androidx.annotation.OptIn(UnstableApi::class)
+/**
+ * 已下载视频管理与本地播放页，协调分组/筛选/多选状态、通知定位跳转、内外部播放与批量操作弹窗。
+ *
+ * @param vm 已下载列表 ViewModel
+ * @param focusResourceId 从下载完成通知跳转进入时需聚焦定位的视频资源 ID
+ * @param onFocusHandled 定位跳转流程完成后的回调，用于清除路由一次性聚焦参数
+ */
 @Composable
 fun DownloadPage(
     vm: DownloadVM = koinViewModel(),
     focusResourceId: String? = null,
     onFocusHandled: () -> Unit = {},
 ) {
-    val downloadedItems = vm.state.items
     val downloadStorage: DownloadStorage = koinInject()
     val downloadFolderScanner: DownloadFolderScanner = koinInject()
     val metadataProgress by downloadFolderScanner.metadataProgress.collectAsState()
-    val context = LocalContext.current
     val message = LocalMessageProvider.current
-    val scope = rememberCoroutineScope()
     val router = LocalRouterProvider.current
-    // 独立作者根目录和内层视频列表的状态，避免共用同一个 LazyListState 导致 attach 错误
-    val rootListState = rememberLazyListState()
-    val videoListState = rememberLazyListState()
 
-    val internalPlayer by
-        rememberStringPreference(
-            key = SettingKeys.DOWNLOAD_PLAYER,
-            default = DownloadPlayerMode.INTERNAL.key,
+    val (pageState, projection) =
+        rememberDownloadPageState(
+            downloadedItems = vm.state.items,
+            uiState = vm.state.uiState,
+            focusResourceId = focusResourceId,
         )
-    var sortKey by
-        rememberStringPreference(
-            key = PREFERENCE_KEY_DOWNLOAD_SORT,
-            default = DownloadSortMode.TIME.key,
-        )
-    var sortAscending by
-        rememberBooleanPreference(
-            key = PREFERENCE_KEY_DOWNLOAD_SORT_ASCENDING,
-            default = DownloadSortMode.fromKey(sortKey).defaultAscending,
-        )
-    var groupByAuthors by
-        rememberBooleanPreference(key = PREFERENCE_KEY_DOWNLOAD_GROUP_AUTHORS, default = false)
-
-    // 选中作者ID：null 表示在根目录，"" 表示未知作者分组
-    var selectedAuthorId by rememberSaveable { mutableStateOf<String?>(null) }
-    // 多选集合：记录当前选中的下载记录 ID
-    var selectedIds by rememberSaveable { mutableStateOf(emptySet<Int>()) }
-    val isSelectionMode = selectedIds.isNotEmpty()
-
-    LaunchedEffect(groupByAuthors) {
-        if (!groupByAuthors) {
-            selectedAuthorId = null
-        }
-    }
-
-    var showSortMenu by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var itemsPendingAuthorLink by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
-    var pendingWritePermissionForPicker by
-        remember { mutableStateOf<DownloadVM.PendingDeleteWritePermission?>(null) }
-
-    // 删除旧版只读扫描导入的 SAF 视频时，补授对应目录读写权限并自动重试剩余删除项
-    val deleteWritePermissionLauncher =
-        rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocumentTree()) {
-            grantedUri: Uri? ->
-            val activePending = pendingWritePermissionForPicker
-            pendingWritePermissionForPicker = null
-            if (grantedUri == null || activePending == null) {
-                return@rememberLauncherForActivityResult
-            }
-            if (!downloadStorage.matchesSafTreeWriteTarget(grantedUri, activePending.target)) {
-                message.warning {
-                    Text(
-                        context.getString(
-                            R.string.download_delete_permission_wrong_folder,
-                            activePending.target.displayLabel,
-                        )
-                    )
-                }
-                return@rememberLauncherForActivityResult
-            }
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) {
-                        downloadStorage.persistTreeReadWritePermission(grantedUri)
-                    }
-                    vm.delete(activePending.items) { successIds, _ ->
-                        selectedIds = selectedIds - successIds
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    val reason =
-                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                    message.error {
-                        Text(context.getString(R.string.download_delete_failed, reason))
-                    }
-                }
-            }
-        }
-    var searchOpen by rememberSaveable { mutableStateOf(false) }
-    var searchQuery by rememberSaveable { mutableStateOf("") }
-    var searchCategory by rememberSaveable { mutableStateOf(SearchCategory.TITLE) }
-    var previousSearchCategory by rememberSaveable { mutableStateOf(searchCategory) }
-
-    val filteredItems =
-        remember(downloadedItems, searchQuery, searchCategory) {
-            filterDownloadedItems(downloadedItems, searchQuery, searchCategory)
-        }
-    val sortedItems =
-        remember(filteredItems, sortKey, sortAscending) {
-            sortDownloadedItems(filteredItems, sortKey, sortAscending)
-        }
-    val authorGroups =
-        remember(filteredItems, sortKey, sortAscending, groupByAuthors) {
-            if (groupByAuthors) {
-                groupDownloadedItemsByAuthor(filteredItems, sortKey, sortAscending)
-            } else {
-                emptyList()
-            }
-        }
-    // 汇总全量已下载视频中的已知作者分组，供平铺模式或分组模式下的“关联作者”弹窗直接选择
-    val allKnownAuthorGroups =
-        remember(downloadedItems, sortKey, sortAscending) {
-            groupDownloadedItemsByAuthor(downloadedItems, sortKey, sortAscending).filterNot {
-                it.isUnknownAuthor
-            }
-        }
-    val selectedGroup =
-        remember(authorGroups, selectedAuthorId) {
-            authorGroups.firstOrNull { it.authorId == selectedAuthorId }
-        }
-    // 仅在“按作者分类 -> 未知作者分组”内部允许长按多选批量关联作者
-    val isInsideUnknownAuthorGroup = groupByAuthors && selectedAuthorId == ""
-
-    // 搜索类别变化时，若在作者分类根目录则将作者根列表回顶，否则将视频列表回顶
-    LaunchedEffect(searchCategory) {
-        if (searchCategory == previousSearchCategory) return@LaunchedEffect
-        previousSearchCategory = searchCategory
-        if (focusResourceId != null) return@LaunchedEffect
-        if (groupByAuthors && selectedAuthorId == null) {
-            rootListState.scrollToItem(0)
-        } else {
-            videoListState.scrollToItem(0)
-        }
-    }
-
-    // 当前视图可见的视频列表
-    val visibleItems =
-        remember(groupByAuthors, selectedAuthorId, sortedItems, selectedGroup) {
-            if (groupByAuthors) {
-                if (selectedAuthorId != null) {
-                    selectedGroup?.items.orEmpty()
-                } else {
-                    emptyList()
-                }
-            } else {
-                sortedItems
-            }
-        }
-    val visibleVideoIds = remember(visibleItems) { visibleItems.map { it.id }.toSet() }
-    val selectedVisibleIds =
-        remember(selectedIds, visibleVideoIds) { selectedIds.intersect(visibleVideoIds) }
-    val allVisibleSelected =
-        visibleVideoIds.isNotEmpty() && visibleVideoIds.all { it in selectedIds }
-    val isDeleting = vm.state.deletingIds.isNotEmpty()
 
     val highlightedId =
         rememberDownloadFocus(
             resourceId = focusResourceId,
-            groupByAuthors = groupByAuthors,
-            visibleItems = visibleItems,
-            listState = videoListState,
+            groupByAuthors = pageState.groupByAuthors,
+            visibleItems = projection.visibleItems,
+            listState = pageState.videoListState,
             resolveTarget = vm::resolveFocusTarget,
             onPrepare = { target ->
-                searchOpen = false
-                searchQuery = ""
-                searchCategory = SearchCategory.TITLE
-                selectedIds = emptySet()
-                selectedAuthorId = if (groupByAuthors) target.authorId else null
+                pageState.closeSearch()
+                pageState.clearSelection()
+                pageState.selectedAuthorId = if (pageState.groupByAuthors) target.authorId else null
             },
             onMissing = {
                 message.warning { Text(stringResource(R.string.download_focus_missing)) }
@@ -320,1198 +69,135 @@ fun DownloadPage(
             onHandled = onFocusHandled,
         )
 
-    LaunchedEffect(
-        visibleVideoIds,
-        vm.state.uiState,
-        selectedAuthorId,
-        selectedGroup,
-        focusResourceId,
-    ) {
-        if (vm.state.uiState == UiState.Success || vm.state.uiState == UiState.Empty) {
-            selectedIds = selectedIds.intersect(visibleVideoIds)
-            // 定位期间不重置作者目录，等待新查询对应的 Room 列表更新。
-            if (
-                focusResourceId == null &&
-                    groupByAuthors &&
-                    selectedAuthorId != null &&
-                    selectedGroup == null
-            ) {
-                selectedAuthorId = null
-            }
-        }
-    }
-
-    LaunchedEffect(vm.state.deleteError) {
-        val reason = vm.state.deleteError ?: return@LaunchedEffect
-        message.error { Text(stringResource(R.string.download_delete_failed, reason)) }
-        vm.clearDeleteError()
-    }
-
-    vm.state.pendingDeleteWritePermission?.let { pendingPermission ->
-        AlertDialog(
-            onDismissRequest = { vm.clearPendingDeleteWritePermission() },
-            title = { Text(text = stringResource(R.string.download_delete_permission_title)) },
-            text = {
-                Text(
-                    text =
-                        stringResource(
-                            R.string.download_delete_permission_message,
-                            pendingPermission.target.displayLabel,
-                        )
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingWritePermissionForPicker = pendingPermission
-                        vm.clearPendingDeleteWritePermission()
-                        runCatching {
-                                deleteWritePermissionLauncher.launch(
-                                    pendingPermission.target.initialPickerUri
-                                )
-                            }
-                            .onFailure { e ->
-                                pendingWritePermissionForPicker = null
-                                val reason =
-                                    e.localizedMessage?.takeIf { it.isNotBlank() }
-                                        ?: e.javaClass.simpleName
-                                message.error {
-                                    Text(context.getString(R.string.download_delete_failed, reason))
-                                }
-                            }
-                    }
-                ) {
-                    Text(text = stringResource(R.string.download_delete_permission_grant))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { vm.clearPendingDeleteWritePermission() }) {
-                    Text(text = stringResource(R.string.cancel))
-                }
-            },
+    val playbackController =
+        rememberDownloadPlaybackController(
+            downloadStorage = downloadStorage,
+            visibleItems = projection.visibleItems,
         )
-    }
-
-    if (showBatchDeleteConfirm) {
-        val selectedItemsToDelete = visibleItems.filter { it.id in selectedVisibleIds }
-        AlertDialog(
-            onDismissRequest = { if (!isDeleting) showBatchDeleteConfirm = false },
-            title = { Text(text = stringResource(R.string.download_delete_selected_title)) },
-            text = {
-                Text(
-                    text =
-                        stringResource(
-                            R.string.download_delete_selected_message,
-                            selectedItemsToDelete.size,
-                        )
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showBatchDeleteConfirm = false
-                        vm.delete(selectedItemsToDelete) { successIds, _ ->
-                            selectedIds = selectedIds - successIds
-                        }
-                    },
-                    enabled = !isDeleting,
-                ) {
-                    Text(
-                        text = stringResource(R.string.download_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                    TextButton(
-                        onClick = { showBatchDeleteConfirm = false },
-                        enabled = !isDeleting,
-                    ) {
-                        Text(stringResource(R.string.cancel))
-                    }
-                },
-            )
+    val canSwitchAdjacentVideo =
+        remember(projection.visibleItems, playbackController.currentPlayingItemId) {
+            resolveAdjacentDownloadItem(
+                projection.visibleItems,
+                playbackController.currentPlayingItemId,
+                1,
+            ) != null
         }
-
-    if (itemsPendingAuthorLink.isNotEmpty()) {
-        val targetSnapshot = itemsPendingAuthorLink
-        val singleItem = targetSnapshot.singleOrNull()
-        LinkAuthorDialog(
-            targetCount = targetSnapshot.size,
-            isRelink = singleItem != null && singleItem.authorId.isNotBlank() && singleItem.manualAuthor,
-            existingAuthors = allKnownAuthorGroups,
-            linking = vm.state.linkingAuthor,
-            initialAuthorId = singleItem?.authorId.orEmpty(),
-            onDismiss = {
-                if (!vm.state.linkingAuthor) {
-                    itemsPendingAuthorLink = emptyList()
-                }
-            },
-            onSelectExistingGroup = { group ->
-                vm.linkItemsToExistingGroup(
-                    items = targetSnapshot,
-                    group = group,
-                    onSuccess = {
-                        itemsPendingAuthorLink = emptyList()
-                        selectedIds = emptySet()
-                        val text =
-                            context.getString(
-                                R.string.download_link_author_success,
-                                group.authorName.ifBlank { group.authorId },
-                            )
-                        message.success { Text(text) }
-                    },
-                    onError = { reason ->
-                        val text = context.getString(R.string.download_link_author_failed, reason)
-                        message.error { Text(text) }
-                    },
-                )
-            },
-            onSubmitAuthorHandle = { rawHandle ->
-                vm.linkItemsByAuthorHandle(
-                    items = targetSnapshot,
-                    rawHandle = rawHandle,
-                    existingAuthors = allKnownAuthorGroups,
-                    onSuccess = { resolved, _ ->
-                        itemsPendingAuthorLink = emptyList()
-                        selectedIds = emptySet()
-                        val text =
-                            if (resolved.resolvedOnline) {
-                                context.getString(
-                                    R.string.download_link_author_success,
-                                    resolved.authorName,
-                                )
-                            } else {
-                                context.getString(
-                                    R.string.download_link_author_offline_success,
-                                    resolved.authorName,
-                                )
-                            }
-                        message.success { Text(text) }
-                    },
-                    onError = { reason ->
-                        val text = context.getString(R.string.download_link_author_failed, reason)
-                        message.error { Text(text) }
-                    },
-                )
-            },
-        )
-    }
-    var currentPlayingItemId by remember { mutableStateOf<Int?>(null) }
-    var playbackRequestSeq by remember { mutableStateOf(0) }
-    var pendingAutoNextSeq by remember { mutableStateOf(0) }
-    val state =
-        rememberPlayerState(
-            enableOnlineStreaming = false,
-            allowPlayNext = true,
-            onAutoPlayNext = { pendingAutoNextSeq++ },
-        )
-    var requestOrientation by rememberRequestedScreenOrientation()
-    val configuration = LocalConfiguration.current
-    val sensorRotationEnabled by
-        rememberBooleanPreference(key = SettingKeys.PLAYER_SENSOR_ROTATION, default = true)
-    var fullscreen by remember { mutableStateOf(false) }
-    var playbackLaunchSeq by remember { mutableStateOf(0) }
-    var autoOrientedLaunchSeq by remember { mutableStateOf(-1) }
-    fun enterFullScreen() {
-        Log.i("DownloadPage", "enterFullScreen: ${state.videoSize.width}")
-        // 进入全屏时统一收起顶部与底部所有控件
-        state.controllerState.hide()
-        fullscreen = true
-        requestOrientation =
-            resolveFullscreenOrientation(
-                landscape = state.videoSize.width > state.videoSize.height,
-                sensorRotationEnabled = sensorRotationEnabled,
-            )
-    }
-
-    LaunchedEffect(fullscreen, playbackLaunchSeq, state.videoSize) {
-        if (
-            fullscreen &&
-                autoOrientedLaunchSeq != playbackLaunchSeq &&
-                state.videoSize != PlayerState.VideoSize.UNKNOWN
-        ) {
-            autoOrientedLaunchSeq = playbackLaunchSeq
-            enterFullScreen()
-        }
-    }
-
-    fun exitFullScreen() {
-        requestOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        fullscreen = false
-        currentPlayingItemId = null
-        playbackRequestSeq++
-        state.pause()
-        // 清空上一视频上下文与尺寸，确保再次进入同视频或同分辨率视频时仍能触发屏幕方向同步。
-        state.updatePlayerItems(emptyList())
-    }
-
-    fun rotateFullScreen() {
-        val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        requestOrientation =
-            resolveToggledFullscreenOrientation(
-                isCurrentlyLandscape = isLandscape,
-                sensorRotationEnabled = sensorRotationEnabled,
-            )
-    }
-
-    BackHandler(fullscreen) { exitFullScreen() }
 
     // 多选模式下按返回键优先退出选择，不退出作者目录或页面，也不破坏搜索
-    BackHandler(!fullscreen && isSelectionMode) { selectedIds = emptySet() }
+    BackHandler(!playbackController.fullscreen && pageState.isSelectionMode) {
+        pageState.clearSelection()
+    }
 
     // 搜索打开且非多选时按返回键先关闭搜索并恢复默认分类
-    BackHandler(!fullscreen && !isSelectionMode && searchOpen) {
-        searchOpen = false
-        searchQuery = ""
-        searchCategory = SearchCategory.TITLE
+    BackHandler(!playbackController.fullscreen && !pageState.isSelectionMode && pageState.searchOpen) {
+        pageState.closeSearch()
     }
 
-    BackHandler(!fullscreen && !isSelectionMode && !searchOpen && selectedAuthorId != null) {
-        selectedAuthorId = null
-    }
-
-    /** 统一解析视频 URI 并核验本地文件存在性，避免内置/外置播放器播放前重复校验。 */
-    fun launchWithValidatedVideoUri(
-        item: DownloadItem,
-        onReady: suspend (Uri) -> Unit,
+    BackHandler(
+        !playbackController.fullscreen &&
+            !pageState.isSelectionMode &&
+            !pageState.searchOpen &&
+            pageState.selectedAuthorId != null
     ) {
-        val rawUri = item.uri.trim()
-        val contentUri =
-            rawUri.takeIf { it.isNotEmpty() }?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        if (contentUri == null) {
-            message.error { Text(stringResource(R.string.download_file_missing)) }
-            return
-        }
-        scope.launch {
-            val exists =
-                try {
-                    withContext(Dispatchers.IO) { downloadStorage.exists(contentUri) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    val reason =
-                        e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                    message.error { Text(stringResource(R.string.download_play_failed, reason)) }
-                    return@launch
-                }
-
-            if (!exists) {
-                message.error { Text(stringResource(R.string.download_file_missing)) }
-                return@launch
-            }
-            withContext(Dispatchers.Main.immediate) { onReady(contentUri) }
-        }
+        pageState.exitAuthorFolder()
     }
 
-    fun playExternal(item: DownloadItem) {
-        launchWithValidatedVideoUri(item) { contentUri ->
-            try {
-                val mimeType =
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.getType(contentUri)?.takeIf {
-                            it.startsWith("video/")
-                        } ?: "video/*"
-                    }
-                val intent =
-                    Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(contentUri, mimeType)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        clipData = ClipData.newRawUri(null, contentUri)
-                    }
-                context.startActivity(intent)
-            } catch (_: ActivityNotFoundException) {
-                message.error { Text(stringResource(R.string.download_no_player)) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                val reason =
-                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                message.error {
-                    Text(stringResource(R.string.download_open_external_failed, reason))
-                }
-            }
-        }
-    }
-
-    fun playDownloadedItem(item: DownloadItem) {
-        if (DownloadPlayerMode.fromKey(internalPlayer) == DownloadPlayerMode.EXTERNAL) {
-            playExternal(item)
-            return
-        }
-        val requestSeq = ++playbackRequestSeq
-        launchWithValidatedVideoUri(item) { contentUri ->
-            if (requestSeq != playbackRequestSeq) return@launchWithValidatedVideoUri
-            try {
-                val displayTitle = item.title.ifBlank { item.resourceId }
-                val playerItem =
-                    PlayerState.PlayerItem(
-                        quality = item.quality.ifBlank { "local" },
-                        mediaItem =
-                            MediaItem.Builder()
-                                .setMediaId(item.resourceId.ifBlank { contentUri.toString() })
-                                .setUri(contentUri)
-                                .setMediaMetadata(
-                                    MediaMetadata.Builder().setTitle(displayTitle).build()
-                                )
-                                .build(),
-                    )
-                currentPlayingItemId = item.id
-                // 先复位旧媒体与尺寸（自动保存上一视频进度），再应用新条目并按设置恢复上次播放位置。
-                state.updatePlayerItems(emptyList())
-                state.updatePlayerItems(
-                    items = listOf(playerItem),
-                    preservePositionMs = null,
-                    targetPlayWhenReady = true,
-                )
-                state.markPlaybackStarted()
-                playbackLaunchSeq++
-                fullscreen = true
-            } catch (e: Exception) {
-                val reason =
-                    e.localizedMessage?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                message.error { Text(stringResource(R.string.download_play_failed, reason)) }
-            }
-        }
-    }
-
-    fun switchAdjacentDownload(step: Int) {
-        val nextItem = resolveAdjacentDownloadItem(visibleItems, currentPlayingItemId, step) ?: return
-        playDownloadedItem(nextItem)
-    }
-
-    LaunchedEffect(pendingAutoNextSeq) {
-        if (pendingAutoNextSeq > 0 && fullscreen) {
-            switchAdjacentDownload(1)
-        }
-    }
-
-    val canSwitchAdjacentVideo =
-        remember(visibleItems, currentPlayingItemId) {
-            resolveAdjacentDownloadItem(visibleItems, currentPlayingItemId, 1) != null
-        }
-
-    PlayerScaffold(
-        fullscreen = fullscreen,
-        player = {
-            Player(
-                state = state,
-                fullscreen = fullscreen,
-                modifier = Modifier.fillMaxSize(),
-                navigationIcon = {
-                    PlayerBackIconButton(
-                        onClick = {
-                            if (fullscreen) exitFullScreen() else router.popBackStack()
-                        }
-                    )
-                },
-                onRotateScreen = { rotateFullScreen() },
-                onPreviousVideo = { switchAdjacentDownload(-1) },
-                onNextVideo = { switchAdjacentDownload(1) },
-                canSwitchAdjacentVideo = canSwitchAdjacentVideo,
-                controllerTrail = {
-                    PlayerFullscreenIconButton(
-                        fullscreen = fullscreen,
-                        onClick = { if (!fullscreen) enterFullScreen() else exitFullScreen() },
-                    )
-                },
-            )
+    DownloadPageDialogs(
+        vm = vm,
+        downloadStorage = downloadStorage,
+        visibleItems = projection.visibleItems,
+        selectedVisibleIds = projection.selectedVisibleIds,
+        allKnownAuthorGroups = projection.allKnownAuthorGroups,
+        showBatchDeleteConfirm = showBatchDeleteConfirm,
+        itemsPendingAuthorLink = itemsPendingAuthorLink,
+        onDismissBatchDelete = { showBatchDeleteConfirm = false },
+        onDismissAuthorLink = { itemsPendingAuthorLink = emptyList() },
+        onDeleteSuccess = { successIds -> pageState.removeDeletedIds(successIds) },
+        onAuthorLinked = {
+            itemsPendingAuthorLink = emptyList()
+            pageState.clearSelection()
         },
+    )
+
+    DownloadPlayerScaffold(
+        controller = playbackController,
+        canSwitchAdjacentVideo = canSwitchAdjacentVideo,
+        onNavigateBack = { router.popBackStack() },
     ) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = {
-                        if (isSelectionMode) {
-                            Text(
-                                text =
-                                    stringResource(
-                                        R.string.download_selection_count,
-                                        selectedVisibleIds.size,
-                                    ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                DownloadPageTopBar(
+                    isSelectionMode = pageState.isSelectionMode,
+                    isInsideUnknownAuthorGroup = projection.isInsideUnknownAuthorGroup,
+                    selectedAuthorId = pageState.selectedAuthorId,
+                    selectedAuthorName = projection.selectedGroup?.authorName,
+                    selectedVisibleCount = projection.selectedVisibleIds.size,
+                    allVisibleSelected = projection.allVisibleSelected,
+                    triState =
+                        resolveSelectionTriState(
+                            projection.visibleVideoIds,
+                            projection.selectedVisibleIds,
+                        ),
+                    searchOpen = pageState.searchOpen,
+                    sortKey = pageState.sortKey,
+                    sortAscending = pageState.sortAscending,
+                    groupByAuthors = pageState.groupByAuthors,
+                    isDeleting = vm.state.deletingIds.isNotEmpty(),
+                    isLinkingAuthor = vm.state.linkingAuthor,
+                    onToggleSelectAll = {
+                        pageState.toggleSelectAllVisible(projection.visibleVideoIds)
+                    },
+                    onExitAuthorFolder = pageState::exitAuthorFolder,
+                    onBatchLinkAuthor = {
+                        val targets =
+                            resolveLinkableAuthorTargets(
+                                projection.visibleItems,
+                                projection.selectedVisibleIds,
                             )
-                        } else {
-                            val titleText =
-                                if (selectedAuthorId != null) {
-                                    selectedGroup?.authorName?.ifBlank { null }
-                                        ?: stringResource(R.string.download_unknown_author)
-                                } else {
-                                    stringResource(R.string.download_completed)
-                                }
-                            Text(text = titleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (targets.isNotEmpty()) {
+                            itemsPendingAuthorLink = targets
                         }
                     },
-                    navigationIcon = {
-                        if (isSelectionMode) {
-                            val selectAllDesc =
-                                stringResource(
-                                    if (allVisibleSelected) R.string.download_clear_selection
-                                    else R.string.download_select_all
-                                )
-                            TriStateCheckbox(
-                                state =
-                                    when {
-                                        allVisibleSelected -> ToggleableState.On
-                                        selectedVisibleIds.isNotEmpty() ->
-                                            ToggleableState.Indeterminate
-                                        else -> ToggleableState.Off
-                                    },
-                                enabled = !isDeleting,
-                                onClick = {
-                                    selectedIds =
-                                        if (!allVisibleSelected) {
-                                            selectedIds + visibleVideoIds
-                                        } else {
-                                            selectedIds - visibleVideoIds
-                                        }
-                                },
-                                modifier = Modifier.semantics { contentDescription = selectAllDesc },
-                            )
-                        } else if (selectedAuthorId != null) {
-                            IconButton(onClick = { selectedAuthorId = null }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ArrowBack,
-                                    contentDescription = stringResource(R.string.download_back),
-                                )
-                            }
-                        } else {
-                            BackButton()
-                        }
-                    },
-                    actions = {
-                        if (isSelectionMode) {
-                            if (isInsideUnknownAuthorGroup) {
-                                IconButton(
-                                    onClick = {
-                                        val targets =
-                                            visibleItems.filter {
-                                                it.id in selectedVisibleIds && it.canLinkAuthor
-                                            }
-                                        if (targets.isNotEmpty()) {
-                                            itemsPendingAuthorLink = targets
-                                        }
-                                    },
-                                    enabled =
-                                        selectedVisibleIds.isNotEmpty() &&
-                                            !isDeleting &&
-                                            !vm.state.linkingAuthor,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.PersonAdd,
-                                        contentDescription =
-                                            stringResource(R.string.download_link_author),
-                                    )
-                                }
-                            }
-                            IconButton(
-                                onClick = { showBatchDeleteConfirm = true },
-                                enabled = selectedVisibleIds.isNotEmpty() && !isDeleting,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription =
-                                        stringResource(R.string.download_delete_selected),
-                                    tint =
-                                        if (selectedVisibleIds.isNotEmpty() && !isDeleting)
-                                            MaterialTheme.colorScheme.error
-                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                                )
-                            }
-                        } else {
-                            IconButton(
-                                onClick = {
-                                    searchOpen = !searchOpen
-                                    if (!searchOpen) {
-                                        searchQuery = ""
-                                        searchCategory = SearchCategory.TITLE
-                                    }
-                                }
-                            ) {
-                                Icon(
-                                    imageVector =
-                                        if (searchOpen) Icons.Outlined.Close
-                                        else Icons.Outlined.Search,
-                                    contentDescription = stringResource(R.string.search),
-                                )
-                            }
-                            Box {
-                                IconButton(onClick = { showSortMenu = !showSortMenu }) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Sort,
-                                        contentDescription = stringResource(R.string.download_sort),
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = showSortMenu,
-                                    onDismissRequest = { showSortMenu = false },
-                                ) {
-                                    val currentSortMode = DownloadSortMode.fromKey(sortKey)
-                                    DownloadSortMode.values().forEach { mode ->
-                                        val isSelected = currentSortMode == mode
-                                        val modeLabel =
-                                            when (mode) {
-                                                DownloadSortMode.TIME ->
-                                                    stringResource(R.string.download_sort_time)
-                                                DownloadSortMode.NAME ->
-                                                    stringResource(R.string.download_sort_name)
-                                                DownloadSortMode.SIZE ->
-                                                    stringResource(R.string.download_sort_size)
-                                            }
-                                        DropdownMenuItem(
-                                            text = { Text(modeLabel) },
-                                            trailingIcon = {
-                                                if (isSelected) {
-                                                    val directionText =
-                                                        stringResource(
-                                                            if (sortAscending)
-                                                                R.string.download_sort_ascending
-                                                            else R.string.download_sort_descending
-                                                        )
-                                                    Row(
-                                                        verticalAlignment =
-                                                            Alignment.CenterVertically,
-                                                        horizontalArrangement =
-                                                            Arrangement.spacedBy(4.dp),
-                                                    ) {
-                                                        Text(
-                                                            text = directionText,
-                                                            style =
-                                                                MaterialTheme.typography
-                                                                    .labelMedium,
-                                                            color =
-                                                                MaterialTheme.colorScheme.primary,
-                                                        )
-                                                        Icon(
-                                                            imageVector =
-                                                                if (sortAscending)
-                                                                    Icons.Outlined.ArrowUpward
-                                                                else Icons.Outlined.ArrowDownward,
-                                                            contentDescription = directionText,
-                                                            tint = MaterialTheme.colorScheme.primary,
-                                                        )
-                                                    }
-                                                }
-                                            },
-                                            onClick = {
-                                                selectedIds = emptySet()
-                                                if (isSelected) {
-                                                    sortAscending = !sortAscending
-                                                } else {
-                                                    sortKey = mode.key
-                                                    sortAscending = mode.defaultAscending
-                                                }
-                                            },
-                                        )
-                                    }
-                                    Divider()
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(stringResource(R.string.download_group_authors))
-                                        },
-                                        trailingIcon = {
-                                            Checkbox(
-                                                checked = groupByAuthors,
-                                                onCheckedChange = null,
-                                            )
-                                        },
-                                        onClick = {
-                                            groupByAuthors = !groupByAuthors
-                                            selectedAuthorId = null
-                                            selectedIds = emptySet()
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    },
+                    onRequestBatchDelete = { showBatchDeleteConfirm = true },
+                    onToggleSearch = pageState::toggleSearch,
+                    onSelectSortMode = pageState::selectSortMode,
+                    onToggleGroupByAuthors = pageState::toggleGroupByAuthors,
                 )
             }
         ) { innerPadding ->
-            Column(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
-                // 后台扫描补全视频元数据时，在页面顶部展示横向加载进度条与灰色计数提示
-                metadataProgress?.let { progress ->
-                    MetadataScanProgressBar(
-                        progress = progress,
-                        modifier =
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    )
-                }
-
-                // 搜索框独立一行，放置在 topbar 下方，避免在 topbar title 内过窄；不在多选模式展示以防破坏选择
-                if (searchOpen && !isSelectionMode) {
-                    LocalSearchInput(
-                        query = searchQuery,
-                        onQueryChange = { searchQuery = it },
-                        category = searchCategory,
-                        onCategoryChange = { searchCategory = it },
-                        modifier =
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        titleHint = stringResource(R.string.download_search_hint),
-                    )
-                }
-
-                UiStateBox(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    state = vm.state.uiState,
-                    emptyStatus = {
-                        val composition by
-                            rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.coffee))
-                        val progress by
-                            animateLottieCompositionAsState(
-                                composition = composition,
-                                iterations = LottieConstants.IterateForever,
-                            )
-                        Column(
-                            modifier = Modifier.align(Alignment.Center),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            LottieAnimation(
-                                composition = composition,
-                                progress = { progress },
-                                modifier = Modifier.size(200.dp),
-                                contentScale = ContentScale.Crop,
-                            )
-                            Text(
-                                text =
-                                    if (selectedAuthorId != null) {
-                                        stringResource(R.string.download_folder_empty)
-                                    } else {
-                                        stringResource(R.string.download_empty)
-                                    },
-                                style = MaterialTheme.typography.titleLarge,
-                            )
-                        }
-                    },
-                    onErrorRetry = vm::loadDownloadedItems,
-                ) {
-                    // 明确无结果空状态：当搜索词不为空且过滤后没有结果时展示
-                    if (searchQuery.isNotBlank() && filteredItems.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Search,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(56.dp),
-                                    tint =
-                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(
-                                            alpha = 0.5f
-                                        ),
-                                )
-                                Text(
-                                    text = stringResource(R.string.list_search_empty),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    } else if (groupByAuthors && selectedAuthorId == null) {
-                        LazyColumn(
-                            state = rootListState,
-                            contentPadding = PaddingValues(vertical = 8.dp),
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            items(
-                                items = authorGroups,
-                                key = { group -> "author_folder_${group.groupKey}" },
-                                contentType = { "author_folder" },
-                            ) { group ->
-                                AuthorFolderRow(
-                                    group = group,
-                                    onClick = {
-                                        selectedAuthorId = group.authorId
-                                        selectedIds = emptySet()
-                                    },
-                                    onAuthorClick = {
-                                        if (group.authorId.isNotBlank()) {
-                                            router.navigate("user/${Uri.encode(group.authorId)}")
-                                        }
-                                    },
-                                )
-                            }
-                        }
-                    } else {
-                        if (visibleItems.isEmpty()) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.download_folder_empty),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        } else {
-                            LazyColumn(
-                                state = videoListState,
-                                contentPadding = PaddingValues(vertical = 8.dp),
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                items(
-                                    items = visibleItems,
-                                    key = { item -> item.id },
-                                    contentType = { "download_item" },
-                                ) { item ->
-                                    DownloadItemRow(
-                                        item = item,
-                                        isSelectionMode = isSelectionMode,
-                                        isSelected = item.id in selectedIds,
-                                        isDeleting = item.id in vm.state.deletingIds,
-                                        isHighlighted = item.id == highlightedId,
-                                        onToggleSelect = {
-                                            selectedIds =
-                                                if (item.id in selectedIds) {
-                                                    selectedIds - item.id
-                                                } else {
-                                                    selectedIds + item.id
-                                                }
-                                        },
-                                        onDelete = { vm.delete(listOf(item)) },
-                                        onClick = { playDownloadedItem(item) },
-                                        onPlayExternal = { playExternal(item) },
-                                        onOpenDetails = {
-                                            router.navigate("video/${Uri.encode(item.resourceId)}")
-                                        },
-                                        onLinkAuthor =
-                                            if (item.canLinkAuthor) {
-                                                { itemsPendingAuthorLink = listOf(item) }
-                                            } else {
-                                                null
-                                            },
-                                        onThumbnailLoadError = { vm.healBrokenThumbnail(item) },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AuthorFolderRow(
-    group: DownloadAuthorGroup,
-    onClick: () -> Unit,
-    onAuthorClick: () -> Unit = {},
-) {
-    val displayName = group.authorName.ifBlank { stringResource(R.string.download_unknown_author) }
-    val statsText =
-        stringResource(
-            R.string.download_author_folder_stats,
-            group.count,
-            prettyFileSize(group.totalBytes),
-            formatDownloadDate(group.latestDownloadTime),
-        )
-
-    Row(
-        modifier =
-            Modifier.fillMaxWidth()
-                .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 头像统一使用包含圆形裁剪和独立涟漪的修饰符，避免无头像占位时点击冒泡
-        val avatarModifier =
-            Modifier.size(48.dp)
-                .clip(CircleShape)
-                .clickable(enabled = !group.isUnknownAuthor, onClick = onAuthorClick)
-
-        if (group.avatar.isNotBlank()) {
-            AsyncImage(
-                model = group.avatar,
-                placeholder = painterResource(R.drawable.default_background),
-                error = painterResource(R.drawable.default_background),
-                contentDescription = null,
-                modifier = avatarModifier,
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = avatarModifier.background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Person,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(28.dp),
-                )
-            }
-        }
-
-        Column(
-            modifier = Modifier.weight(1f).padding(start = 16.dp, end = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = statsText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            DownloadPageContent(
+                modifier = Modifier.padding(innerPadding),
+                uiState = vm.state.uiState,
+                metadataProgress = metadataProgress,
+                searchOpen = pageState.searchOpen,
+                isSelectionMode = pageState.isSelectionMode,
+                searchQuery = pageState.searchQuery,
+                searchCategory = pageState.searchCategory,
+                groupByAuthors = pageState.groupByAuthors,
+                selectedAuthorId = pageState.selectedAuthorId,
+                filteredItems = projection.filteredItems,
+                authorGroups = projection.authorGroups,
+                visibleItems = projection.visibleItems,
+                rootListState = pageState.rootListState,
+                videoListState = pageState.videoListState,
+                selectedIds = pageState.selectedIds,
+                deletingIds = vm.state.deletingIds,
+                highlightedId = highlightedId,
+                onSearchQueryChange = { pageState.searchQuery = it },
+                onSearchCategoryChange = { pageState.searchCategory = it },
+                onRetryLoad = vm::loadDownloadedItems,
+                onOpenAuthorFolder = pageState::openAuthorFolder,
+                onOpenAuthorProfile = { authorId -> router.navigate("user/${Uri.encode(authorId)}") },
+                onToggleSelectItem = pageState::toggleItemSelection,
+                onDeleteItem = { item -> vm.delete(listOf(item)) },
+                onPlayItem = playbackController::playDownloadedItem,
+                onPlayExternal = playbackController::playExternal,
+                onOpenItemDetails = { item ->
+                    router.navigate("video/${Uri.encode(item.resourceId)}")
+                },
+                onLinkAuthor = { item -> itemsPendingAuthorLink = listOf(item) },
+                onThumbnailLoadError = vm::healBrokenThumbnail,
             )
         }
-
-        IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-            Icon(
-                imageVector = Icons.Outlined.KeyboardArrowRight,
-                contentDescription = stringResource(R.string.download_author_folder_open),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun DownloadItemRow(
-    item: DownloadItem,
-    isSelectionMode: Boolean,
-    isSelected: Boolean,
-    isDeleting: Boolean,
-    onToggleSelect: () -> Unit,
-    onDelete: () -> Unit,
-    onClick: () -> Unit,
-    onPlayExternal: () -> Unit,
-    onOpenDetails: () -> Unit,
-    onLinkAuthor: (() -> Unit)? = null,
-    onThumbnailLoadError: () -> Unit = {},
-    isHighlighted: Boolean = false,
-) {
-    val displayTitle = item.title.ifBlank { item.resourceId }
-    var showMenu by remember { mutableStateOf(false) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-
-    if (showDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text(text = stringResource(R.string.download_delete_confirm_title)) },
-            text = {
-                Text(text = stringResource(R.string.download_delete_confirm_message, displayTitle))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteConfirm = false
-                        onDelete()
-                    }
-                ) {
-                    Text(
-                        text = stringResource(R.string.download_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val thumbWidth = if (maxWidth >= 600.dp) 112.dp else 96.dp
-        val rowBackground by
-            animateColorAsState(
-                targetValue =
-                    if (isSelected || isHighlighted) MaterialTheme.colorScheme.secondaryContainer
-                    else MaterialTheme.colorScheme.surface,
-                animationSpec = tween(durationMillis = 500),
-            )
-        val selectedStateDesc = stringResource(R.string.download_selected_accessibility)
-
-        Row(
-            modifier =
-                Modifier.fillMaxWidth()
-                    .background(rowBackground)
-                    .alpha(if (isDeleting) 0.38f else 1f)
-                    .combinedClickable(
-                        enabled = !isDeleting,
-                        role = if (isSelectionMode) Role.Checkbox else null,
-                        onClick = {
-                            if (isSelectionMode) {
-                                onToggleSelect()
-                            } else {
-                                onClick()
-                            }
-                        },
-                        onLongClick = {
-                            if (!isSelectionMode) {
-                                onToggleSelect()
-                            }
-                        },
-                    )
-                    .semantics {
-                        if (isSelectionMode) {
-                            stateDescription = if (isSelected) selectedStateDesc else ""
-                            toggleableState =
-                                if (isSelected) ToggleableState.On else ToggleableState.Off
-                        }
-                    }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (isSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = null,
-                    modifier = Modifier.padding(end = 4.dp),
-                )
-            }
-
-            Box(
-                modifier =
-                    Modifier.width(thumbWidth)
-                        .aspectRatio(220f / 160f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                AsyncImage(
-                    model = item.thumbnail.takeIf { it.isNotBlank() },
-                    placeholder = painterResource(R.drawable.default_background),
-                    error = painterResource(R.drawable.default_background),
-                    fallback = painterResource(R.drawable.default_background),
-                    onError = {
-                        if (item.thumbnail.isNotBlank()) {
-                            onThumbnailLoadError()
-                        }
-                    },
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-
-                val durationText = formatDurationMs(item.durationMs)
-                if (!durationText.isNullOrEmpty()) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = Color.Black.copy(alpha = 0.65f),
-                        contentColor = Color.White,
-                        modifier = Modifier.padding(2.dp).align(Alignment.BottomEnd),
-                    ) {
-                        Text(
-                            text = durationText,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                        )
-                    }
-                }
-            }
-
-            Column(
-                modifier = Modifier.weight(1f).padding(start = 12.dp, end = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = displayTitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (item.authorAvatar.isNotBlank()) {
-                        me.rerere.awara.ui.component.common.Avatar(
-                            model = item.authorAvatar,
-                            modifier = Modifier.size(20.dp).clip(CircleShape),
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-
-                    Text(
-                        text = item.authorName.trim().ifEmpty { item.authorId },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = prettyFileSize(item.sizeBytes),
-                        modifier =
-                            Modifier.wrapContentWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                    Text(
-                        text = formatDownloadDate(item.time),
-                        modifier =
-                            Modifier.wrapContentWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                    if (item.quality.isNotBlank()) {
-                        Text(
-                            text = videoQualityDisplayName(item.quality),
-                            modifier =
-                                Modifier.wrapContentWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .padding(horizontal = 5.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-
-            if (!isSelectionMode) {
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        enabled = !isDeleting,
-                        modifier = Modifier.size(48.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.MoreVert,
-                            contentDescription = stringResource(R.string.download_more_actions),
-                        )
-                    }
-
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.download_open_details)) },
-                            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
-                            onClick = {
-                                showMenu = false
-                                onOpenDetails()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.download_play_external)) },
-                            leadingIcon = {
-                                Icon(Icons.Outlined.PlayArrow, contentDescription = null)
-                            },
-                            onClick = {
-                                showMenu = false
-                                onPlayExternal()
-                            },
-                        )
-                        if (onLinkAuthor != null) {
-                            val linkLabelRes =
-                                if (item.authorId.isNotBlank() && item.manualAuthor) {
-                                    R.string.download_relink_author
-                                } else {
-                                    R.string.download_link_author
-                                }
-                            DropdownMenuItem(
-                                text = { Text(stringResource(linkLabelRes)) },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.PersonAdd, contentDescription = null)
-                                },
-                                onClick = {
-                                    showMenu = false
-                                    onLinkAuthor()
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = stringResource(R.string.download_delete),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Outlined.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            },
-                            onClick = {
-                                showMenu = false
-                                showDeleteConfirm = true
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 「已下载视频」页顶部元数据补全进度条组件。
- *
- * 横向进度条样式与下载任务卡片保持一致，下方以灰色小字展示 `正在获取视频元数据……（已完成/总数）`。
- *
- * @param progress 当前后台元数据获取进度快照
- * @param modifier 外部修饰符
- */
-@Composable
-internal fun MetadataScanProgressBar(
-    progress: MetadataScanProgress,
-    modifier: Modifier = Modifier,
-) {
-    val progressTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (progress.total > 0 && progress.completed > 0) {
-            val fraction =
-                (progress.completed.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f)
-            LinearProgressIndicator(
-                progress = fraction,
-                modifier = Modifier.fillMaxWidth(),
-                trackColor = progressTrackColor,
-            )
-        } else {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                trackColor = progressTrackColor,
-            )
-        }
-        Text(
-            text =
-                stringResource(
-                    R.string.download_scan_metadata_progress,
-                    progress.completed,
-                    progress.total,
-                ),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
