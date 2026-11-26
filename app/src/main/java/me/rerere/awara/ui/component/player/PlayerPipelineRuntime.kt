@@ -42,6 +42,7 @@ private const val BUFFER_SAMPLE_INTERVAL_MS = 500L
 
 /**
  * 创建统一配置的主 ExoPlayer 实例：启用系统硬件 `MediaCodec` 并允许同族解码器回退，
+ * 开启系统 `AudioTrack` 原生倍速参数以避免软件变速排空缓冲造成的切速卡顿，
  * 同时锁定高刷屏幕帧率策略（设备不支持 High 10 等格式时由 [PlayerState] 按需切换至 `libmpv`）。
  */
 @OptIn(UnstableApi::class)
@@ -50,7 +51,11 @@ internal fun createAwaraExoPlayer(
     mediaSourceFactory: MediaSource.Factory? = null,
     loadControl: LoadControl? = null,
 ): ExoPlayer {
-    val renderersFactory = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+    val renderersFactory =
+        DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            // 使用系统 AudioTrack.setPlaybackParams 实时变速，避免 Sonic 软件重采样排空 500ms 缓冲期间的音画时钟失配卡顿。
+            .setEnableAudioOutputPlaybackParameters(true)
     return ExoPlayer.Builder(context, renderersFactory)
         .apply {
             if (mediaSourceFactory != null) {
