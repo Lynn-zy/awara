@@ -739,4 +739,66 @@ class RangeDownloaderFallbackTest {
         assertEquals(newContent, file.readText())
         assertEquals(2, server.requestCount)
     }
+
+    @Test
+    fun planSequentialRequestCoversOverlapStrongValidatorAndResetBranches() {
+        // 1. 从零开始发送 bytes=0- 且不携带 If-Range
+        val fromStart =
+            planSequentialRequest(
+                currentOffset = 0L,
+                validator = "\"strong\"",
+                expectedTotalBytes = 1000L,
+                retriedFromZero = false,
+            )
+        assertEquals("bytes=0-", fromStart.rangeHeader)
+        assertNull(fromStart.ifRangeValidator)
+        assertEquals(0L, fromStart.overlapLength)
+
+        // 2. 强校验器断点续传直接从 currentOffset 开始并携带 If-Range
+        val strongResume =
+            planSequentialRequest(
+                currentOffset = 500L,
+                validator = "\"strong\"",
+                expectedTotalBytes = 1000L,
+                retriedFromZero = false,
+            )
+        assertEquals("bytes=500-", strongResume.rangeHeader)
+        assertEquals("\"strong\"", strongResume.ifRangeValidator)
+        assertEquals(0L, strongResume.overlapLength)
+
+        // 3. 强校验器且本地已达期望总长时，回退重叠窗口做尾部一致性校验
+        val fullProbe =
+            planSequentialRequest(
+                currentOffset = 100_000L,
+                validator = "\"strong\"",
+                expectedTotalBytes = 100_000L,
+                retriedFromZero = false,
+            )
+        assertEquals("bytes=${100_000L - SEQUENTIAL_OVERLAP_SIZE}-", fullProbe.rangeHeader)
+        assertEquals(SEQUENTIAL_OVERLAP_SIZE, fullProbe.overlapLength)
+        assertEquals("\"strong\"", fullProbe.ifRangeValidator)
+
+        // 4. 弱校验器或无校验器时启用 64 KiB 重叠校验窗口且不发 If-Range
+        val weakResume =
+            planSequentialRequest(
+                currentOffset = 100L,
+                validator = "W/\"weak\"",
+                expectedTotalBytes = 1000L,
+                retriedFromZero = false,
+            )
+        assertEquals("bytes=0-", weakResume.rangeHeader)
+        assertEquals(100L, weakResume.overlapLength)
+        assertNull(weakResume.ifRangeValidator)
+
+        // 5. 416 或校验器失效后强制从零全量重试时不带 Range 头
+        val resetRetry =
+            planSequentialRequest(
+                currentOffset = 0L,
+                validator = "\"strong\"",
+                expectedTotalBytes = 1000L,
+                retriedFromZero = true,
+            )
+        assertNull(resetRetry.rangeHeader)
+        assertNull(resetRetry.ifRangeValidator)
+    }
 }
