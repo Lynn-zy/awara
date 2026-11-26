@@ -31,6 +31,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -73,6 +74,7 @@ internal fun ProgressSlider(
     onTouch: () -> Unit,
     onFinished: () -> Unit,
     modifier: Modifier = Modifier,
+    minHeight: Dp = LocalPlayerControlDimensions.current.slotSize,
     abLoopStartFraction: Float? = null,
     abLoopEndFraction: Float? = null,
 ) {
@@ -100,7 +102,7 @@ internal fun ProgressSlider(
     val dimensions = LocalPlayerControlDimensions.current
 
     Box(
-        modifier = modifier.heightIn(min = dimensions.slotSize),
+        modifier = modifier.heightIn(min = minHeight),
         contentAlignment = Alignment.Center,
     ) {
         CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {

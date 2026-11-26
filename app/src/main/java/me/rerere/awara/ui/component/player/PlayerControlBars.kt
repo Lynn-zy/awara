@@ -42,6 +42,9 @@ import me.rerere.awara.R
 import me.rerere.awara.data.diagnostics.CdnConnectionSnapshot
 import me.rerere.awara.ui.component.common.CdnConnectionDebugText
 
+/** 全屏竖屏双行底栏中进度条行高度：压缩原 46dp 槽位留白以紧贴下方按钮行，同时保持大于 20dp 滑块容器的触控高度。 */
+internal val PLAYER_STACKED_SLIDER_ROW_HEIGHT = 24.dp
+
 /**
  * 播放器顶部控制栏，承载返回键、标题、全屏缩放/旋转/A-B 循环、播完模式、外部操作及 CDN 调试信息占位。
  */
@@ -271,6 +274,9 @@ internal fun PlayerBottomControlBar(
             abLoopEndFraction = abLoopEndFraction,
             enabled = sliderEnabled,
             interactionKey = sliderInteractionKey,
+            minHeight =
+                if (useStackedBottomControls) PLAYER_STACKED_SLIDER_ROW_HEIGHT
+                else controlDimensions.slotSize,
             modifier =
                 sliderModifier.onGloballyPositioned { onSliderBoundsChanged(it.boundsInWindow()) },
             onTouch = onSliderTouch,

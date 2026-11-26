@@ -67,7 +67,7 @@ internal fun BoxScope.PlayerControlGradientScrims(
             modifier =
                 Modifier.align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .height(if (useStackedBottomControls) 96.dp else 68.dp)
+                    .height(if (useStackedBottomControls) 84.dp else 68.dp)
                     .background(
                         Brush.verticalGradient(
                             0f to Color.Transparent,
@@ -369,7 +369,8 @@ internal fun BoxScope.PlayerFloatingOverlays(
                     bottom =
                         when {
                             !controller.bottomVisible -> 14.dp
-                            useStackedBottomControls -> controlDimensions.slotSize + 36.dp
+                            useStackedBottomControls ->
+                                controlDimensions.slotSize + PLAYER_STACKED_SLIDER_ROW_HEIGHT + 6.dp
                             else -> controlDimensions.slotSize + 10.dp
                         },
                 ),
