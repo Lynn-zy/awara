@@ -1,71 +1,41 @@
 package me.rerere.awara.ui.component.iwara.comment
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.with
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.ModeComment
-import androidx.compose.material.icons.outlined.Send
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import me.rerere.awara.R
-import me.rerere.awara.data.entity.Comment
 import me.rerere.awara.data.dto.CommentCreationDto
-import me.rerere.awara.ui.component.common.Spin
 import me.rerere.awara.ui.component.common.pullrefresh.RefreshResult
-import me.rerere.awara.ui.component.common.pullrefresh.SwipeRefresh
-import me.rerere.awara.ui.component.common.pullrefresh.rememberSwipeRefreshState
-import me.rerere.awara.ui.component.iwara.PaginationBar
-import me.rerere.awara.ui.hooks.PageScrollEffect
 import me.rerere.awara.ui.stores.LocalUserStore
 import me.rerere.awara.ui.stores.collectAsState
 
+/**
+ * 通用评论列表组件，支持多级嵌套回复栈、分页跳转、发表/编辑/删除及可选下拉刷新。
+ *
+ * 保持完整评论展示（不受本机列表黑名单过滤影响），并在离线回退态禁用一切写操作。
+ *
+ * @param modifier 容器修饰符
+ * @param state 评论栈与加载状态
+ * @param contentPadding 底部栏额外内边距（通常用于避让系统导航栏）
+ * @param onPageChange 页码切换回调
+ * @param onBack 退出当前二级回复层回调
+ * @param onPush 进入指定评论二级回复层回调
+ * @param onPostReply 发表评论或回复挂起回调
+ * @param onEditComment 编辑评论挂起回调
+ * @param onDeleteComment 删除评论挂起回调
+ * @param canPostReply 宿主页面是否允许发评
+ * @param isLocalFallback 是否处于离线回退展示模式
+ * @param currentUserId 当前登录用户 ID，用于作者本人写权限判定与“我”徽标展示
+ * @param videoAuthorId 视频作者真实 ID，用于标识“作者”徽标
+ * @param canExpandPlayer 竖屏播放器是否尚处于可展开让渡手势阶段
+ * @param onRefresh 下拉刷新挂起回调，为 `null` 时不启用下拉刷新
+ */
 @Composable
 fun CommentList(
     modifier: Modifier = Modifier,
@@ -85,433 +55,76 @@ fun CommentList(
     onRefresh: (suspend () -> RefreshResult)? = null,
 ) {
     val currentComment = state.stack.last()
-    val parent = currentComment.parent
     val listStateHolder = rememberSaveableStateHolder()
-
     val canReply = CommentActionPolicy.canReply(canPostReply, currentUserId, isLocalFallback)
-    val editFailedMessage = stringResource(R.string.comment_edit_failed)
-    val deleteFailedMessage = stringResource(R.string.comment_delete_failed)
-    val postFailedMessage = stringResource(R.string.comment_post_failed)
-    val scope = rememberCoroutineScope()
-
-    var repling by rememberSaveable { mutableStateOf(false) }
-    var replyTargetId by rememberSaveable { mutableStateOf<String?>(null) }
-    var replyTargetName by rememberSaveable { mutableStateOf("") }
     val unknownUserName = stringResource(R.string.user_unknown)
-    fun selectReplyTarget(comment: Comment?) {
-        replyTargetId = comment?.id
-        replyTargetName =
-            comment?.user?.name?.takeIf { it.isNotBlank() }
-                ?: comment?.user?.username?.takeIf { it.isNotBlank() }
-                ?: unknownUserName
-    }
-    var replyBody by rememberSaveable { mutableStateOf("") }
-    var replySubmitting by remember { mutableStateOf(false) }
-    var replyError by remember { mutableStateOf<String?>(null) }
 
-    // 编辑弹窗状态
-    var editingCommentId by rememberSaveable { mutableStateOf<String?>(null) }
-    val editingComment = currentComment.comments.firstOrNull { it.id == editingCommentId }
-    var editBody by rememberSaveable { mutableStateOf("") }
-    var editSubmitting by remember { mutableStateOf(false) }
-    var editError by remember { mutableStateOf<String?>(null) }
+    val replyState = rememberCommentReplyState()
+    val editState = rememberCommentEditState()
+    val deleteState = rememberCommentDeleteState()
 
-    // 删除确认弹窗状态
-    var deletingComment by remember { mutableStateOf<Comment?>(null) }
-    var deleteSubmitting by remember { mutableStateOf(false) }
-    var deleteError by remember { mutableStateOf<String?>(null) }
-
-    BackHandler(state.stack.size > 1) {
+    val handleBack: () -> Unit = {
         onBack()
-        selectReplyTarget(null)
-        repling = false
+        replyState.resetTargetOnBack(unknownUserName)
     }
 
-    // 编辑弹窗：预填原多行正文，提交期间 loading 且禁重复，失败保留草稿
-    if (editingComment != null) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!editSubmitting) {
-                    editingCommentId = null
-                    editBody = ""
-                    editError = null
-                }
-            },
-            title = { Text(stringResource(R.string.comment_action_edit)) },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedTextField(
-                        value = editBody,
-                        onValueChange = { editBody = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !editSubmitting,
-                        minLines = 3,
-                        maxLines = 8,
-                        placeholder = { Text(stringResource(R.string.comment_body_hint)) },
-                    )
-                    if (editError != null) {
-                        Text(
-                            text = editError.orEmpty(),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !editSubmitting && editBody.isNotBlank(),
-                    onClick = {
-                        if (editSubmitting) return@TextButton
-                        val target = editingComment ?: return@TextButton
-                        editSubmitting = true
-                        editError = null
-                        scope.launch {
-                            try {
-                                val success = onEditComment(target.id, editBody)
-                                if (success) {
-                                    editingCommentId = null
-                                    editBody = ""
-                                } else {
-                                    editError = editFailedMessage
-                                }
-                            } finally {
-                                editSubmitting = false
-                            }
-                        }
-                    },
-                ) {
-                    if (editSubmitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Text(stringResource(R.string.comment_save))
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !editSubmitting,
-                    onClick = {
-                        editingCommentId = null
-                        editBody = ""
-                        editError = null
-                    },
-                ) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
+    BackHandler(state.stack.size > 1, onBack = handleBack)
 
-    // 删除确认弹窗：删除需确认，提交期间 loading 且禁重复，失败可重试
-    if (deletingComment != null) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!deleteSubmitting) {
-                    deletingComment = null
-                    deleteError = null
-                }
-            },
-            title = { Text(stringResource(R.string.comment_action_delete)) },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(stringResource(R.string.comment_delete_confirm))
-                    if (deleteError != null) {
-                        Text(
-                            text = deleteError.orEmpty(),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !deleteSubmitting,
-                    onClick = {
-                        if (deleteSubmitting) return@TextButton
-                        val target = deletingComment ?: return@TextButton
-                        deleteSubmitting = true
-                        deleteError = null
-                        scope.launch {
-                            try {
-                                val success = onDeleteComment(target.id)
-                                if (success) {
-                                    deletingComment = null
-                                } else {
-                                    deleteError = deleteFailedMessage
-                                }
-                            } finally {
-                                deleteSubmitting = false
-                            }
-                        }
-                    },
-                ) {
-                    if (deleteSubmitting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Text(
-                            stringResource(R.string.comment_action_delete),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !deleteSubmitting,
-                    onClick = {
-                        deletingComment = null
-                        deleteError = null
-                    },
-                ) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
+    CommentEditDialog(
+        state = editState,
+        comments = currentComment.comments,
+        onEditComment = onEditComment,
+    )
+
+    CommentDeleteDialog(
+        state = deleteState,
+        onDeleteComment = onDeleteComment,
+    )
 
     Column(modifier = modifier) {
-        AnimatedVisibility(visible = state.stack.size > 1) {
-            Surface(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    IconButton(
-                        onClick = {
-                            onBack()
-                            selectReplyTarget(null)
-                            repling = false
-                        }
-                    ) {
-                        Icon(Icons.Outlined.ArrowBack, null)
-                    }
+        CommentThreadHeader(
+            visible = state.stack.size > 1,
+            onBack = handleBack,
+        )
 
-                    Text(stringResource(R.string.comment_detail_title))
-                }
-            }
-        }
-
-        // 保存各楼层的列表及已展示页码，返回父层不重新创建初始滚动位置。
-        listStateHolder.SaveableStateProvider(parent ?: "root") {
-            val listState = rememberLazyListState()
-            PageScrollEffect(currentComment.loadedPage) { listState.scrollToItem(0) }
-            val listContent: @Composable () -> Unit = {
-                Spin(show = state.loading, modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(8.dp),
-                    ) {
-                        items(currentComment.comments, key = { it.id }) { comment ->
-                            // 评论内容接入SelectionContainer支持系统长按复制
-                            SelectionContainer {
-                                CommentCard(
-                                    comment = comment,
-                                    onLoadReplies = {
-                                        onPush(it.id)
-                                        selectReplyTarget(it)
-                                        repling = false
-                                    },
-                                    onReply = {
-                                        if (canReply) {
-                                            repling = true
-                                            selectReplyTarget(it)
-                                            replyError = null
-                                        }
-                                    },
-                                    onEdit = {
-                                        editingCommentId = it.id
-                                        editBody = it.body
-                                        editSubmitting = false
-                                        editError = null
-                                    },
-                                    onDelete = {
-                                        deletingComment = it
-                                        deleteSubmitting = false
-                                        deleteError = null
-                                    },
-                                    isLocalFallback = isLocalFallback,
-                                    canReply = canReply,
-                                    currentUserId = currentUserId,
-                                    videoAuthorId = videoAuthorId,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            if (onRefresh != null) {
-                // 竖屏播放器尚未完全展开时让出顶部下拉手势，优先平滑恢复播放器高度，拉满后再响应评论下拉刷新
-                SwipeRefresh(
-                    state = rememberSwipeRefreshState(false),
-                    onRefresh = onRefresh,
-                    swipeEnabled =
-                        !state.loading &&
-                            !replySubmitting &&
-                            !editSubmitting &&
-                            !deleteSubmitting &&
-                            !canExpandPlayer,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    content = listContent,
-                )
-            } else {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) { listContent() }
-            }
-        }
-
-        AnimatedContent(
-            targetState = repling,
-            label = "ReplyBar",
-            transitionSpec = {
-                if (targetState) {
-                    slideInHorizontally(initialOffsetX = { -it }) with
-                        slideOutHorizontally(targetOffsetX = { -it })
-                } else {
-                    slideInHorizontally(initialOffsetX = { it }) with
-                        slideOutHorizontally(targetOffsetX = { it })
+        CommentThreadList(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            currentComment = currentComment,
+            loading = state.loading,
+            listStateHolder = listStateHolder,
+            canReply = canReply,
+            isLocalFallback = isLocalFallback,
+            currentUserId = currentUserId,
+            videoAuthorId = videoAuthorId,
+            swipeEnabled =
+                isCommentSwipeRefreshEnabled(
+                    stateLoading = state.loading,
+                    replySubmitting = replyState.submitting,
+                    editSubmitting = editState.submitting,
+                    deleteSubmitting = deleteState.submitting,
+                    canExpandPlayer = canExpandPlayer,
+                ),
+            onRefresh = onRefresh,
+            onLoadReplies = { comment ->
+                onPush(comment.id)
+                replyState.prepareTargetOnPush(comment, unknownUserName)
+            },
+            onReply = { comment ->
+                if (canReply) {
+                    replyState.startReplyToComment(comment, unknownUserName)
                 }
             },
-        ) {
-            if (it) {
-                Surface(modifier = Modifier.imePadding().fillMaxWidth(), tonalElevation = 4.dp) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(contentPadding).padding(6.dp).fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        IconButton(
-                            enabled = !replySubmitting,
-                            onClick = {
-                                repling = false
-                                replyError = null
-                            },
-                        ) {
-                            Icon(Icons.Outlined.Close, stringResource(R.string.cancel))
-                        }
+            onEdit = { comment -> editState.open(comment) },
+            onDelete = { comment -> deleteState.open(comment) },
+        )
 
-                        val sendAction: () -> Unit = {
-                            if (canReply && !replySubmitting && replyBody.isNotBlank()) {
-                                replySubmitting = true
-                                replyError = null
-                                scope.launch {
-                                    try {
-                                        val success =
-                                            onPostReply(
-                                                CommentCreationDto(
-                                                    body = replyBody,
-                                                    parentId = replyTargetId ?: parent,
-                                                )
-                                            )
-                                        if (success) {
-                                            replyBody = ""
-                                            repling = false
-                                            selectReplyTarget(null)
-                                        } else {
-                                            replyError = postFailedMessage
-                                        }
-                                    } finally {
-                                        replySubmitting = false
-                                    }
-                                }
-                            }
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            TextField(
-                                value = replyBody,
-                                enabled = canReply && !replySubmitting,
-                                onValueChange = { replyBody = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                placeholder = {
-                                    Text(
-                                        text =
-                                            if (replyTargetId == null) {
-                                                stringResource(R.string.comment_reply)
-                                            } else {
-                                                stringResource(
-                                                    R.string.comment_reply_to,
-                                                    replyTargetName,
-                                                )
-                                            }
-                                    )
-                                },
-                                colors =
-                                    TextFieldDefaults.textFieldColors(
-                                        focusedIndicatorColor = Color.Transparent,
-                                        unfocusedIndicatorColor = Color.Transparent,
-                                    ),
-                                keyboardOptions =
-                                    KeyboardOptions(
-                                        autoCorrect = false,
-                                        imeAction = ImeAction.Send,
-                                    ),
-                                keyboardActions = KeyboardActions(onSend = { sendAction() }),
-                            )
-                            if (replyError != null) {
-                                Text(
-                                    text = replyError.orEmpty(),
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
-                                )
-                            }
-                        }
-
-                        FilledTonalButton(
-                            enabled = canReply && !replySubmitting && replyBody.isNotBlank(),
-                            onClick = sendAction,
-                        ) {
-                            if (replySubmitting) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                            } else {
-                                Icon(Icons.Outlined.Send, stringResource(R.string.comment_send))
-                            }
-                        }
-                    }
-                }
-            } else {
-                PaginationBar(
-                    page = currentComment.page,
-                    limit = currentComment.limit,
-                    total = currentComment.total,
-                    onPageChange = onPageChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = contentPadding,
-                    trailing = {
-                        FilledTonalButton(
-                            enabled = canReply,
-                            onClick = {
-                                repling = true
-                                selectReplyTarget(null)
-                                replyError = null
-                            },
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.ModeComment,
-                                contentDescription = stringResource(R.string.comment_reply),
-                            )
-                        }
-                    },
-                )
-            }
-        }
+        CommentBottomBar(
+            replyState = replyState,
+            currentComment = currentComment,
+            contentPadding = contentPadding,
+            canReply = canReply,
+            onPageChange = onPageChange,
+            onPostReply = onPostReply,
+        )
     }
 }
